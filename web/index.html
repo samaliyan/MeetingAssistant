@@ -1,0 +1,2544 @@
+<!doctype html>
+<html lang="en" data-theme="system" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
+<title>Meeting Assistant</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M6 16h3l3-7 5 14 4-10 2 3h3' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+/* Persian/Arabic font ships inside the program (Google Fonts is often blocked in Iran) */
+@font-face{font-family:"Vazirmatn";src:url(/static/Vazirmatn-Regular.woff2) format("woff2");font-weight:300 500;font-display:swap}
+@font-face{font-family:"Vazirmatn";src:url(/static/Vazirmatn-Bold.woff2) format("woff2");font-weight:600 800;font-display:swap}
+:root{
+  --scale:1; --answer-size:24px;
+  --bg:#f3f4f7; --surface:#ffffff; --surface-2:#f8f9fb; --surface-3:#eef0f4;
+  --border:#e4e7ec; --border-strong:#cfd4dc;
+  --text:#101828; --text-2:#344054; --muted:#667085; --faint:#98a2b3;
+  --accent:#4f46e5; --accent-hover:#4338ca; --accent-soft:#eef0ff; --accent-text:#3730a3;
+  --them:#1d4ed8; --them-soft:#e8efff; --me:#0f766e; --me-soft:#e2f5f2;
+  --fa:#4c2a9a; --fa-soft:#f7f5ff; --fa-border:#c9b8f5;
+  --amber:#b45309; --amber-soft:#fff7e6; --amber-border:#f7d38a; --on-amber:#ffffff;
+  --danger:#d92d20; --danger-soft:#fef3f2; --danger-border:#fcc9c4;
+  --ok:#079455; --ok-soft:#ecfdf3; --warn:#dc6803; --warn-soft:#fffaeb;
+  --shadow-sm:0 1px 2px rgba(16,24,40,.05);
+  --shadow:0 1px 3px rgba(16,24,40,.08),0 1px 2px rgba(16,24,40,.04);
+  --shadow-lg:0 20px 40px -12px rgba(16,24,40,.25);
+  --radius:14px; --radius-sm:10px;
+  --font:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-fa:"Vazirmatn","Segoe UI",Tahoma,sans-serif;
+  --font-tr:var(--font-fa);
+  --mono:"Cascadia Mono",Consolas,"SFMono-Regular",Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c0e13; --surface:#14171e; --surface-2:#191d25; --surface-3:#212632;
+    --border:#262b36; --border-strong:#353c4a;
+    --text:#eceef3; --text-2:#c9ceda; --muted:#a3abbb; --faint:#7d8597;
+    --accent:#6b72f5; --accent-hover:#7c83fb; --accent-soft:rgba(124,131,251,.16); --accent-text:#c3c6ff;
+    --them:#7fb0ff; --them-soft:rgba(96,150,255,.14); --me:#4fd1c0; --me-soft:rgba(45,212,191,.12);
+    --fa:#d7c9ff; --fa-soft:rgba(150,120,255,.16); --fa-border:rgba(150,120,255,.45);
+    --amber:#f7c56b; --amber-soft:rgba(245,176,60,.10); --amber-border:rgba(245,176,60,.35); --on-amber:#1b1406;
+    --danger:#ff7b72; --danger-soft:rgba(255,90,80,.10); --danger-border:rgba(255,90,80,.35);
+    --ok:#4ade80; --ok-soft:rgba(74,222,128,.10); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.10);
+    --shadow:0 1px 3px rgba(0,0,0,.4); --shadow-lg:0 24px 48px -12px rgba(0,0,0,.6);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c0e13; --surface:#14171e; --surface-2:#191d25; --surface-3:#212632;
+  --border:#262b36; --border-strong:#353c4a;
+  --text:#eceef3; --text-2:#c9ceda; --muted:#a3abbb; --faint:#7d8597;
+  --accent:#6b72f5; --accent-hover:#7c83fb; --accent-soft:rgba(124,131,251,.16); --accent-text:#c3c6ff;
+  --them:#7fb0ff; --them-soft:rgba(96,150,255,.14); --me:#4fd1c0; --me-soft:rgba(45,212,191,.12);
+  --fa:#d7c9ff; --fa-soft:rgba(150,120,255,.16); --fa-border:rgba(150,120,255,.45);
+  --amber:#f7c56b; --amber-soft:rgba(245,176,60,.10); --amber-border:rgba(245,176,60,.35); --on-amber:#1b1406;
+  --danger:#ff7b72; --danger-soft:rgba(255,90,80,.10); --danger-border:rgba(255,90,80,.35);
+  --ok:#4ade80; --ok-soft:rgba(74,222,128,.10); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.10);
+  --shadow:0 1px 3px rgba(0,0,0,.4); --shadow-lg:0 24px 48px -12px rgba(0,0,0,.6);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html{font-size:calc(14px * var(--scale))}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+svg.i{width:1.15em;height:1.15em;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+kbd{font-family:var(--mono);font-size:.72rem;padding:1px 5px;border-radius:5px;border:1px solid currentColor;opacity:.8;line-height:1.3}
+[hidden]{display:none!important}
+.fa-text{font-family:var(--font-fa)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+#app{display:flex;flex-direction:column;height:100vh}
+#app > .layout{flex:1 1 auto}
+
+/* ---------- top bar ---------- */
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
+.logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:grid;place-items:center;flex:none;box-shadow:0 2px 6px rgba(79,70,229,.35)}
+.logo svg{width:22px;height:22px;stroke:#fff;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.brand-text{min-width:0}
+.title{font-weight:650;font-size:1.02rem;letter-spacing:-.01em;white-space:nowrap}
+.subtitle{font-size:.8rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
+.subtitle button{background:none;border:0;padding:0;color:var(--accent);font-size:inherit}
+
+.pill{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:999px;background:var(--surface-3);color:var(--text-2);font-size:.85rem;font-weight:600;white-space:nowrap}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.pill.live{background:var(--danger-soft);color:var(--danger)}
+.pill.live .dot{background:var(--danger);animation:pulse 1.4s ease-in-out infinite}
+.pill.busy{background:var(--warn-soft);color:var(--warn)}
+.pill.busy .dot{background:var(--warn)}
+.pill.test{background:var(--accent-soft);color:var(--accent-text)}
+button.pill{border:0}
+.pill.test .dot{background:var(--accent)}
+.timer{font-family:var(--mono);font-weight:500;font-variant-numeric:tabular-nums}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(217,45,32,.45)}50%{box-shadow:0 0 0 5px rgba(217,45,32,0)}}
+
+.meters{display:flex;gap:6px}
+body:not(.capturing) .meters{display:none}
+.pill.problem{background:var(--danger-soft);color:var(--danger)}
+.pill.problem .dot{background:var(--danger)}
+.meter{display:flex;align-items:center;gap:6px;height:32px;padding:0 10px;border-radius:999px;border:1px solid var(--border);color:var(--muted);font-size:.78rem}
+.meter .bar{width:44px;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.meter .bar i{display:block;height:100%;width:100%;transform-origin:left;transform:scaleX(0);background:var(--ok);transition:transform 90ms linear;border-radius:3px}
+.meter.me .bar i{background:var(--me)}
+.meter.them .bar i{background:var(--them)}
+.meter.off{opacity:.45}
+.meter-label{font-weight:600}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 14px;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-weight:600;font-size:.9rem;white-space:nowrap;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}
+.btn:hover{background:var(--surface-2)}
+.btn:disabled{opacity:.55;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 1px 2px rgba(79,70,229,.3)}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.primary kbd{border-color:rgba(255,255,255,.6);color:#fff}
+.btn.stop{background:var(--danger-soft);border-color:var(--danger-border);color:var(--danger)}
+.btn.stop:hover{background:var(--danger);color:#fff}
+.btn.soft{background:var(--accent-soft);border-color:transparent;color:var(--accent-text)}
+.btn.soft:hover{background:var(--accent);color:#fff}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.btn.ghost:hover{background:var(--surface-3)}
+.btn.sm{height:30px;padding:0 10px;font-size:.82rem;border-radius:8px}
+.btn.icon{width:32px;padding:0;height:32px;border-radius:8px}
+.btn.lg{height:44px;padding:0 20px;font-size:1rem;border-radius:12px}
+
+/* ---------- banner ---------- */
+.banner{display:flex;align-items:center;gap:10px;padding:9px 16px;font-size:.88rem;background:var(--danger-soft);color:var(--danger);border-bottom:1px solid var(--danger-border)}
+.banner.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--amber-border)}
+.banner .btn{margin-left:auto}
+
+/* ---------- layout ---------- */
+.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(380px,1.05fr);grid-template-rows:minmax(0,1fr);gap:14px;padding:14px;min-height:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;min-height:0;position:relative}
+.card-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);min-height:52px}
+.card-head h2{margin:0;font-size:.95rem;font-weight:650;display:flex;align-items:center;gap:8px;white-space:nowrap;min-width:0}
+.card-head h2 #feedTitle{overflow:hidden;text-overflow:ellipsis}
+.card-head .spacer{flex:1}
+.legend{display:flex;gap:12px;font-size:.78rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:8px;height:8px;border-radius:50%}
+
+/* ---------- transcript ---------- */
+.feed-scroll{flex:1;overflow-y:auto;padding:6px 8px 16px;scroll-behavior:auto;min-height:0}
+#list{display:flex;flex-direction:column}
+.entry{display:grid;grid-template-columns:36px minmax(0,1fr);gap:12px;padding:12px 10px;border-radius:12px;animation:rise .18s ease-out}
+.entry + .entry{position:relative}
+.entry + .entry::before{content:"";position:absolute;left:10px;right:10px;top:0;height:1px;background:var(--border)}
+.entry:hover{background:var(--surface-2)}
+@keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.avatar{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:.78rem;font-weight:700;letter-spacing:.02em}
+.entry.them .avatar{background:var(--them-soft);color:var(--them)}
+.entry.me .avatar{background:var(--me-soft);color:var(--me)}
+.meta{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);min-height:22px}
+.who{font-weight:650;font-size:.86rem}
+.entry.them .who{color:var(--them)}
+.entry.me .who{color:var(--me)}
+.time{font-variant-numeric:tabular-nums}
+.tag{font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--muted);letter-spacing:.04em}
+.meta .act{margin-left:auto;opacity:0;transition:opacity .15s}
+.entry.latest .meta .act,.entry.latest .meta .edit{opacity:.6}
+.entry.latest.answered .meta .act{opacity:0}
+.entry.latest.answered:hover .meta .act{opacity:1}
+.entry:hover .meta .act,.meta .act:focus-visible{opacity:1}
+.orig{margin:4px 0 0;font-size:1.07rem;line-height:1.6;color:var(--text);overflow-wrap:anywhere}
+.fa{margin:6px 0 0;padding:7px 12px;border-radius:10px;background:var(--fa-soft);border:1px solid transparent;border-inline-start:3px solid var(--fa-border);color:var(--text);font-family:var(--font-tr);font-size:1.2rem;line-height:1.85;text-align:start;overflow-wrap:anywhere}
+.fa.pending{color:var(--muted);background:transparent;border-style:dashed;font-family:var(--font);font-size:.82rem;text-align:left;direction:ltr;display:flex;align-items:center;gap:8px;line-height:1.4}
+.fa.err{color:var(--danger);background:var(--danger-soft);border-color:var(--danger-border);font-family:var(--font);font-size:.82rem;text-align:left;direction:ltr;line-height:1.4}
+.caret::after{content:"";display:inline-block;width:2px;height:1em;margin-inline-start:3px;vertical-align:-.12em;background:var(--accent);opacity:.85;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+.ans-row{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap}
+.ans-row:empty{display:none}
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:999px;font-size:.8rem;font-weight:600;border:1px solid var(--amber-border);background:var(--amber-soft);color:var(--amber)}
+button.chip:hover{filter:brightness(.97)}
+.chip.active{background:var(--surface);border-color:var(--amber);color:var(--amber);box-shadow:0 0 0 2px var(--amber-soft)}
+.chip.muted{border-color:var(--border);background:var(--surface-2);color:var(--muted)}
+.chip.err{border-color:var(--danger-border);background:var(--danger-soft);color:var(--danger)}
+
+.spinner{width:12px;height:12px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* pending (someone is speaking / being transcribed) */
+.entry.pending .state{font-style:normal;color:var(--muted)}
+.wave{display:flex;align-items:center;gap:3px;height:26px;margin-top:4px}
+.wave i{width:4px;height:8px;border-radius:2px;background:currentColor;opacity:.55;animation:wave 1s ease-in-out infinite}
+.entry.them .wave{color:var(--them)} .entry.me .wave{color:var(--me)}
+.wave i:nth-child(2){animation-delay:.12s}.wave i:nth-child(3){animation-delay:.24s}.wave i:nth-child(4){animation-delay:.36s}.wave i:nth-child(5){animation-delay:.48s}
+@keyframes wave{0%,100%{height:6px}50%{height:22px}}
+.skel{display:none;flex-direction:column;gap:7px;margin-top:8px}
+.skel i{display:block;height:11px;border-radius:6px;background:linear-gradient(90deg,var(--surface-3) 0%,var(--surface-2) 50%,var(--surface-3) 100%);background-size:200% 100%;animation:shimmer 1.1s linear infinite}
+.skel i:nth-child(2){width:62%}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.entry.pending.transcribing .wave{display:none}
+.entry.pending.transcribing .skel{display:flex}
+
+.jump{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);box-shadow:var(--shadow-lg)}
+
+/* empty / waiting states */
+.empty{display:flex;align-items:center;justify-content:center;min-height:100%;padding:24px}
+.empty-card{max-width:520px;width:100%;text-align:center}
+.empty-icon{width:56px;height:56px;margin:0 auto 14px;border-radius:16px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center}
+.empty-icon svg{width:28px;height:28px}
+.empty h3{margin:0 0 6px;font-size:1.25rem;letter-spacing:-.01em}
+.empty p{margin:0 auto 18px;color:var(--muted);line-height:1.6;max-width:440px}
+.checklist{list-style:none;margin:0 0 20px;padding:0;border:1px solid var(--border);border-radius:12px;text-align:left;overflow:hidden}
+.checklist li{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface)}
+.checklist li + li{border-top:1px solid var(--border)}
+.ck-icon{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--surface-3);color:var(--muted);flex:none}
+.ck-icon.done{background:var(--ok-soft);color:var(--ok)}
+.ck-body{flex:1;min-width:0}
+.ck-title{font-weight:600;font-size:.9rem}
+.ck-sub{font-size:.8rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ck-icon.todo{background:var(--warn-soft);color:var(--warn)}
+.checklist li.tip{background:var(--surface-2)}
+.checklist li.tip .ck-title{font-weight:500;color:var(--text-2)}
+.empty-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.listening .wave{justify-content:center;height:40px;color:var(--accent)}
+.listening .wave i{width:5px}
+
+/* ---------- answer panel ---------- */
+.answer-card .card-head h2 svg{color:var(--amber)}
+.thinking{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;color:var(--amber);background:var(--amber-soft);border:1px solid var(--amber-border);padding:2px 9px;border-radius:999px}
+.answer-body{flex:1;overflow-y:auto;padding:16px 18px;min-height:0}
+.answer-body.more{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent)}
+.q-block{padding:12px 14px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);margin-bottom:16px}
+.q-label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;display:flex;gap:6px}
+.q-orig{margin:0;font-size:.98rem;line-height:1.55;color:var(--text-2)}
+.q-fa{margin:6px 0 0;font-family:var(--font-tr);color:var(--text);font-size:1.15rem;line-height:1.85;text-align:start}
+.a-text{font-size:var(--answer-size);line-height:1.5;font-weight:500;letter-spacing:-.005em;color:var(--text);overflow-wrap:anywhere;margin:0;white-space:pre-wrap}
+.a-fa{margin-top:18px;padding-top:14px;border-top:1px dashed var(--border-strong)}
+.a-fa-label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.a-fa p{margin:0;font-family:var(--font-tr);font-size:calc(var(--answer-size) * .8);line-height:1.85;color:var(--text-2);text-align:start}
+.answer-empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);gap:8px;padding:20px}
+.answer-empty svg{width:34px;height:34px;color:var(--faint)}
+.answer-empty b{color:var(--text-2);font-size:.95rem}
+.answer-empty.listening .wave{display:flex;color:var(--them);height:26px}
+.a-skel{display:flex;flex-direction:column;gap:10px;width:min(360px,80%);margin-top:8px}
+.a-skel i{display:block;height:14px;border-radius:7px;background:linear-gradient(90deg,var(--surface-3),var(--surface-2),var(--surface-3));background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+.a-skel i:nth-child(2){width:85%} .a-skel i:nth-child(3){width:60%}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.a-text.fresh{animation:fresh .9s ease-out}
+@keyframes fresh{from{background:var(--amber-soft);box-shadow:0 0 0 8px var(--amber-soft)}to{background:transparent;box-shadow:0 0 0 8px transparent}}
+.answer-empty span{font-size:.85rem;max-width:300px;line-height:1.55}
+.answer-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+.answer-foot .hint{font-size:.78rem;color:var(--muted)}
+.size-ctl{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.size-ctl button{border:0;background:transparent;height:30px;width:32px;font-weight:700;color:var(--text-2);font-size:.8rem}
+.size-ctl button:hover{background:var(--surface-3)}
+.size-ctl button + button{border-left:1px solid var(--border)}
+
+/* ---------- status bar ---------- */
+.statusbar{flex:none;display:flex;align-items:center;gap:18px;padding:0 16px;height:34px;background:var(--surface);border-top:1px solid var(--border);font-size:.78rem;color:var(--muted);white-space:nowrap;overflow:hidden}
+.sb{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden}
+#sbDelay{flex-shrink:6} #sbUsage{flex-shrink:3} #sbMode{flex-shrink:0}
+#sbSave,#sbSave > span{display:inline-flex;align-items:center;gap:6px}
+#sbSave{gap:14px}
+.sb b{font-weight:600;color:var(--text-2);margin:0 1px}
+.sb .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.sb .dot.ok{background:var(--ok)} .sb .dot.bad{background:var(--danger)}
+.sb b{color:var(--text-2);font-weight:600}
+.sb.warn{color:var(--warn)} .sb.warn b{color:var(--warn)}
+.sb-right{margin-left:auto}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);font-size:inherit;font-weight:600}
+.linkbtn:hover{text-decoration:underline}
+.ellipsis{overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- toasts ---------- */
+.toasts{position:fixed;bottom:46px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60;width:min(400px,calc(100vw - 32px))}
+body.capturing .toasts{right:auto;left:16px}
+.toast{display:flex;gap:10px;align-items:flex-start;padding:11px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-lg);font-size:.86rem;line-height:1.45;animation:rise .2s ease-out}
+.toast .msg{flex:1}
+.toast.error{border-color:var(--danger-border)} .toast.error > svg{color:var(--danger)}
+.toast.warn{border-color:var(--amber-border)} .toast.warn > svg{color:var(--warn)}
+.toast.ok > svg{color:var(--ok)}
+.toast .x{border:0;background:none;color:var(--muted);padding:0;line-height:0}
+
+/* ---------- setup drawer ---------- */
+.scrim{position:fixed;inset:0;background:rgba(15,18,28,.38);z-index:40;opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100vw);background:var(--surface);z-index:50;box-shadow:var(--shadow-lg);display:flex;flex-direction:column;transform:translateX(102%);transition:transform .24s cubic-bezier(.2,.8,.2,1)}
+.drawer.open{transform:none}
+.drawer-head{display:flex;align-items:center;gap:10px;padding:16px 18px 0}
+.drawer-head h2{margin:0;font-size:1.15rem;flex:1}
+.saved{font-size:.78rem;color:var(--muted);display:inline-flex;gap:5px;align-items:center}
+.saved.show{color:var(--ok)}
+.tabs{display:flex;gap:2px;padding:12px 14px 0;border-bottom:1px solid var(--border);overflow-x:auto}
+.tab{border:0;background:none;padding:9px 12px;font-weight:600;font-size:.88rem;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab .warn-dot{width:7px;height:7px;border-radius:50%;background:var(--danger)}
+.drawer-body{flex:1;overflow-y:auto;padding:18px 20px 28px}
+.pane{display:none;flex-direction:column;gap:20px}
+.pane.active{display:flex}
+.field{display:flex;flex-direction:column;gap:7px}
+.field > label,.field .label{font-weight:650;font-size:.9rem}
+.help{font-size:.8rem;color:var(--muted);line-height:1.5}
+.input,.select,textarea.input{width:100%;border:1px solid var(--border-strong);background:var(--surface);border-radius:10px;padding:9px 12px;font-size:.92rem;line-height:1.45;transition:border-color .15s,box-shadow .15s}
+textarea.input{resize:vertical;min-height:76px}
+.input:focus,.select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.input-row{display:flex;gap:8px}
+.input-row .input{flex:1}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.pchip{border:1px solid var(--border-strong);background:var(--surface);border-radius:999px;padding:4px 11px;font-size:.8rem;color:var(--text-2)}
+.pchip:hover{border-color:var(--accent);color:var(--accent)}
+.seg{display:inline-flex;padding:3px;background:var(--surface-3);border-radius:11px;gap:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;padding:7px 14px;border-radius:8px;font-weight:600;font-size:.86rem;color:var(--muted)}
+.langs{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lchip{display:inline-flex;align-items:center;gap:4px;padding:5px 6px 5px 11px;border-radius:999px;background:var(--surface-3);font-weight:600;font-size:.86rem}
+.lchip button{border:0;background:transparent;color:var(--muted);width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:1rem;line-height:1}
+.lchip button:hover{background:var(--surface);color:var(--text)}
+.langs select.input{width:auto;min-width:170px;padding:6px 10px}
+.br-card{width:min(680px,100%);height:min(620px,calc(100vh - 32px))}
+.br-bar{display:flex;gap:6px;align-items:center;padding:10px 16px 6px}
+.br-bar .input{flex:1;min-width:0;padding:7px 10px;font-family:var(--mono);font-size:.82rem}
+.br-places{display:flex;flex-wrap:wrap;gap:6px;padding:4px 16px 10px;border-bottom:1px solid var(--border)}
+.br-places button{border:1px solid var(--border);background:var(--surface-2);border-radius:999px;padding:4px 11px;font-size:.8rem;font-weight:600;color:var(--text-2)}
+.br-places button:hover{background:var(--surface-3);color:var(--text)}
+.br-list{flex:1;overflow:auto;padding:6px 8px}
+.br-row{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;text-align:left;padding:8px 10px;border-radius:9px;font-size:.88rem;color:var(--text)}
+.br-row:hover,.br-row:focus-visible{background:var(--surface-2)}
+.br-row .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.br-row .m{color:var(--muted);font-size:.78rem;white-space:nowrap}
+.br-row.model .n{font-weight:700}
+.br-row .tag{font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:999px;background:var(--ok-soft);color:var(--ok)}
+.br-empty{padding:26px;text-align:center;color:var(--muted);font-size:.86rem}
+.br-hint{font-size:.82rem}
+.ver{color:var(--muted);font-size:.74rem;font-weight:500;font-variant-numeric:tabular-nums}
+h2 .ver{margin-inline-start:6px}
+.seg button.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.opt-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.opt{border:1px solid var(--border-strong);background:var(--surface);border-radius:12px;padding:12px;text-align:left;display:flex;flex-direction:column;gap:4px}
+.opt b{font-size:.92rem;display:flex;gap:6px;align-items:center}
+.opt span{font-size:.8rem;color:var(--muted);line-height:1.45}
+.opt.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.toggle{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
+.toggle input{position:absolute;opacity:0;pointer-events:none}
+.switch{width:38px;height:22px;border-radius:999px;background:var(--border-strong);position:relative;flex:none;transition:background .15s;margin-top:1px}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+.toggle input:checked + .switch{background:var(--accent)}
+.toggle input:checked + .switch::after{transform:translateX(16px)}
+.toggle input:focus-visible + .switch{outline:2px solid var(--accent);outline-offset:2px}
+.toggle .tt{display:flex;flex-direction:column;gap:2px}
+.toggle .tt b{font-size:.9rem;font-weight:600}
+.toggle .tt span{font-size:.8rem;color:var(--muted);line-height:1.45;font-weight:400}
+.field > label.toggle{font-weight:400;font-size:inherit}
+.callout{display:flex;gap:10px;padding:12px 14px;border-radius:12px;background:var(--accent-soft);color:var(--accent-text);font-size:.85rem;line-height:1.55}
+.callout.warn{background:var(--warn-soft);color:var(--warn)}
+.callout ol{margin:4px 0 0;padding-left:18px}
+.result{padding:10px 12px;border-radius:10px;font-size:.85rem;line-height:1.5;display:flex;gap:8px;align-items:flex-start}
+.result.ok{background:var(--ok-soft);color:var(--ok)}
+.result.bad{background:var(--danger-soft);color:var(--danger)}
+.range-row{display:flex;align-items:center;gap:12px;font-size:.8rem;color:var(--muted)}
+.range-row input{flex:1;accent-color:var(--accent)}
+.big-meters{display:grid;gap:10px;padding:12px;border:1px solid var(--border);border-radius:12px}
+.bm{display:grid;grid-template-columns:110px 1fr;align-items:center;gap:10px;font-size:.82rem;color:var(--text-2)}
+.bm .bar{height:10px;border-radius:5px;background:var(--surface-3);overflow:hidden}
+.bm .bar i{display:block;height:100%;transform-origin:left;transform:scaleX(0);transition:transform 90ms linear}
+.bm.me .bar i{background:var(--me)} .bm.them .bar i{background:var(--them)}
+.bm small{grid-column:2;color:var(--muted);font-size:.75rem;margin-top:-6px}
+.drawer-foot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--border)}
+.drawer-foot .help{flex:1}
+.link{color:var(--accent);font-weight:600;text-decoration:none}
+.link:hover{text-decoration:underline}
+.keyhint{font-size:.8rem;color:var(--ok);display:flex;gap:6px;align-items:center}
+
+/* services */
+.svc-card{border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--surface)}
+.svc-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.svc-head b{font-size:.95rem}
+.svc-head .help{flex-basis:100%}
+.badge{font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--surface-3);color:var(--muted)}
+.badge.ok{background:var(--ok-soft);color:var(--ok)}
+.badge.ir{background:var(--accent-soft);color:var(--accent-text)}
+.svc-list{display:flex;flex-direction:column;gap:10px}
+.svc-list:empty{display:none}
+.svc-card .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.more .mini,.svc-card .mini{font-size:.78rem;font-weight:600;color:var(--text-2);margin-bottom:4px;display:block}
+.svc-card .name{font-weight:650;flex:1;min-width:120px;padding:6px 10px}
+.svc-card .res{font-size:.8rem;align-self:center}
+.svc-card .res.ok{color:var(--ok)} .svc-card .res.bad{color:var(--danger)}
+.muted-label{font-weight:500;color:var(--muted);font-size:.82rem}
+.assign{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.arow{display:grid;grid-template-columns:120px minmax(0,1fr) minmax(0,1.2fr);gap:8px;align-items:center}
+.alabel{font-weight:600;font-size:.86rem}
+.test-results{display:flex;flex-direction:column;gap:6px}
+.test-results:empty{display:none}
+.trow{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;font-size:.84rem;line-height:1.5}
+.trow.ok{background:var(--ok-soft)} .trow.bad{background:var(--danger-soft)}
+.trow > svg{margin-top:2px}
+.trow.ok > svg{color:var(--ok)} .trow.bad > svg{color:var(--danger)}
+.trow b{display:block}
+.trow .sub{color:var(--text-2);overflow-wrap:anywhere}
+@media (max-width:760px){.arow{grid-template-columns:1fr}.svc-card .grid2{grid-template-columns:1fr}}
+
+/* live / preview */
+.badge-live{display:inline-flex;align-items:center;gap:5px;font-size:.66rem;font-weight:800;letter-spacing:.06em;padding:2px 7px;border-radius:999px;background:var(--danger);color:#fff}
+.badge-live::before{content:"";width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1.4s ease-in-out infinite}
+.badge-prev{font-size:.66rem;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:999px;background:var(--accent-soft);color:var(--accent-text)}
+.live-text{margin:4px 0 0;font-size:1.07rem;line-height:1.6;color:var(--text-2);overflow-wrap:anywhere}
+.live-text:empty,.live-fa:empty{display:none}
+.live-text .tail{opacity:.5}
+.live-tag{font-size:.66rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:1px 7px;border-radius:999px;background:var(--danger-soft);color:var(--danger);display:inline-flex;align-items:center;gap:5px}
+.live-tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1.4s ease-in-out infinite}
+.badge-prev,.badge-live,.badge-local{white-space:nowrap}
+.live-fa{margin:6px 0 0;padding:7px 12px;border-radius:10px;background:var(--fa-soft);border-inline-start:3px dashed var(--fa-border);color:var(--text-2);font-family:var(--font-tr);font-size:1.15rem;line-height:1.85;text-align:start}
+.entry.pending.has-text .wave,.entry.pending.has-text .skel{display:none!important}
+.mode-note{display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);font-size:.84rem;line-height:1.45}
+.mode-note:empty{display:none}
+
+.rate-box{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--border);border-radius:12px}
+.rate-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.rate-row .alabel small{display:block;font-weight:400;color:var(--muted);font-size:.75rem}
+.caps{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border)}
+.caps:empty{display:none}
+.cap{display:flex;gap:8px;align-items:flex-start;font-size:.84rem;line-height:1.45}
+.cap > svg{margin-top:2px;flex:none}
+.cap.ok > svg{color:var(--ok)} .cap.no > svg{color:var(--danger)}
+.cap .m{color:var(--muted);font-size:.78rem}
+.verdict{font-weight:650;font-size:.86rem;padding-top:6px;border-top:1px dashed var(--border-strong);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.verdict .btn{margin-left:auto}
+.usage-tip{white-space:pre-line}
+.badge-local{font-size:.66rem;font-weight:800;letter-spacing:.05em;padding:2px 7px;border-radius:999px;background:var(--ok);color:#fff}
+.local-status{display:flex;gap:8px;align-items:center;font-size:.84rem;line-height:1.45;padding:8px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border)}
+.local-status > svg{flex:none}
+.local-status.ok > svg{color:var(--ok)} .local-status.bad > svg{color:var(--danger)} .local-status.bad{border-color:var(--danger)}
+.dlbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.8rem;color:var(--text-2)}
+.dlbar{flex:1;min-width:140px;height:8px;border-radius:99px;background:var(--surface-3);overflow:hidden}
+.dlbar > i{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;transition:width .3s}
+.use-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:6px;border-top:1px dashed var(--border-strong);font-size:.84rem;font-weight:650}
+.verdict.good,.verdict.ok{color:var(--ok)} .verdict.slow{color:var(--warn,#b7791f)} .verdict.bad{color:var(--danger)}
+.heard{font-style:italic}
+
+/* log */
+.log-pane{flex:1;min-height:0}
+.log-actions{flex-wrap:wrap;gap:6px}
+.danger-text{color:var(--danger)!important}
+.logbox{margin:0;flex:1;min-height:320px;max-height:calc(100vh - 380px);overflow:auto;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface-2);font-family:var(--mono);font-size:.76rem;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-2)}
+.logbox .l{display:block}
+.logbox .t{color:var(--faint);margin-right:8px}
+.logbox .error{color:var(--danger)} .logbox .warn{color:var(--warn)} .logbox .debug{color:var(--faint)} .logbox .diag{color:var(--text)}
+.logbox.problems .l:not(.error):not(.warn){display:none}
+.toast .details{background:none;border:0;padding:0;color:var(--accent);font-weight:600;font-size:inherit;margin-top:4px;display:block}
+
+/* ---------- services (setup) ---------- */
+.overview{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--surface)}
+.ov-foot{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--border);background:var(--surface-2);flex-wrap:wrap}
+.ov-results{padding:0 14px 12px;background:var(--surface-2)}
+.amodel{font-size:.8rem;color:var(--muted);padding:0 4px}
+.ov-head{display:flex;align-items:center;gap:10px;padding:12px 14px;font-weight:650;font-size:.92rem}
+.ov-head.ok{background:var(--ok-soft);color:var(--ok)} .ov-head.bad{background:var(--warn-soft);color:var(--warn)}
+.ov-head .sub{font-weight:400;font-size:.8rem;color:var(--text-2);margin-left:auto}
+.ov-row{display:grid;grid-template-columns:22px 118px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--border);font-size:.85rem}
+.ov-row .t{font-weight:600}
+.ov-row .s{color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ov-row .s small{color:var(--muted)}
+.ov-row > svg{width:18px;height:18px}
+.ov-row.ok > svg{color:var(--ok)} .ov-row.bad > svg{color:var(--warn)}
+.step{display:flex;flex-direction:column;gap:12px;padding-top:4px}
+.step-head{display:flex;gap:12px;align-items:flex-start}
+.step-head h3{margin:1px 0 3px;font-size:1rem;letter-spacing:-.01em}
+.step-head p{margin:0;font-size:.82rem;color:var(--muted);line-height:1.5}
+.step-num{flex:none;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:.85rem}
+.svc-card{border:1px solid var(--border);border-radius:14px;background:var(--surface);overflow:hidden;padding:0;gap:0}
+.svc-card.open{box-shadow:var(--shadow-sm);border-color:var(--border-strong)}
+.svc-top{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;user-select:none}
+.svc-top:hover{background:var(--surface-2)}
+.svc-avatar{flex:none;width:34px;height:34px;border-radius:10px;background:var(--av,#6366f1);color:#fff;display:grid;place-items:center;font-weight:800;font-size:.95rem}
+.svc-title{flex:1;min-width:0}
+.svc-name{font-weight:650;font-size:.95rem;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.svc-sub{font-size:.78rem;color:var(--muted);margin-top:2px;line-height:1.4}
+.svc-sub b{color:var(--text-2);font-weight:600}
+.svc-body{display:none;flex-direction:column;gap:12px;padding:4px 14px 14px;border-top:1px solid var(--border)}
+.svc-card.open .svc-body{display:flex;padding-top:14px}
+.chev{flex:none;width:9px;height:9px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);margin:0 4px 4px;transition:transform .15s}
+.svc-card.open .chev,details[open] > summary .chev{transform:rotate(225deg);margin-bottom:-4px}
+.tag{font-size:.66rem;font-weight:700;padding:2px 7px;border-radius:999px;background:var(--surface-3);color:var(--muted);letter-spacing:.02em}
+.tag.free{background:var(--ok-soft);color:var(--ok)} .tag.ir{background:var(--accent-soft);color:var(--accent-text)}
+.tag.paid{background:var(--warn-soft);color:var(--warn)} .tag.live{background:var(--danger-soft);color:var(--danger)}
+.schip{flex:none;font-size:.74rem;font-weight:650;padding:4px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;background:var(--surface-3);color:var(--muted)}
+.schip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.schip.ok{background:var(--ok-soft);color:var(--ok)} .schip.part{background:var(--accent-soft);color:var(--accent-text)}
+.schip.bad{background:var(--danger-soft);color:var(--danger)} .schip.warn{background:var(--warn-soft);color:var(--warn)}
+.schip:empty{display:none}
+.svc-can{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.svc-can .can{font-size:.74rem;font-weight:600;padding:3px 9px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-2)}
+.svc-can .help{flex-basis:100%}
+.svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.svc-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.svc-foot .rm{margin-left:auto;color:var(--danger)}
+.add-row{display:flex;gap:8px;padding:10px;border:1px dashed var(--border-strong);border-radius:14px}
+.add-row .select{flex:1}
+.astat{display:grid;place-items:center}
+.astat svg{width:18px;height:18px}
+.astat.ok{color:var(--ok)} .astat.bad{color:var(--warn)}
+.arow{grid-template-columns:20px 110px minmax(0,1fr) minmax(0,1.1fr)!important}
+.opt-title{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+details.more{border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+details.more > summary{list-style:none;display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer}
+details.more > summary::-webkit-details-marker{display:none}
+details.more > summary:hover{background:var(--surface-2);border-radius:14px}
+details.more[open] > summary{border-bottom:1px solid var(--border);border-radius:14px 14px 0 0}
+.opt-ic{flex:none;width:34px;height:34px;border-radius:10px;background:var(--surface-3);color:var(--text-2);display:grid;place-items:center}
+.opt-ic.ok{background:var(--ok-soft);color:var(--ok)}
+.opt-ic svg{width:18px;height:18px}
+.opt-text{flex:1;min-width:0}
+.opt-text b{font-size:.93rem}
+.opt-text p{margin:2px 0 0;font-size:.78rem;color:var(--muted);line-height:1.45}
+.opt-state{margin-left:8px;font-size:.72rem;font-weight:650;color:var(--ok);white-space:nowrap;padding:1px 8px;border-radius:999px;background:var(--ok-soft)}
+.opt-state.off{background:var(--surface-3)}
+.opt-state.off{color:var(--muted)}
+.opt-body{display:flex;flex-direction:column;gap:12px;padding:14px}
+details.more .rate-box{border:0;padding:0}
+.helppop{position:fixed;top:58px;right:120px;z-index:65;width:340px;padding:14px 16px;border-radius:14px;background:var(--surface);border:1px solid var(--border-strong);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;gap:8px;font-size:.85rem}
+.helppop b{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-top:4px}
+.helppop .hrow{display:flex;align-items:center;gap:8px}
+.helppop .hrow > span:last-child{margin-left:6px;color:var(--text-2)}
+.helppop .hic svg{width:16px;height:16px;color:var(--muted)}
+/* selection, edit, explanation */
+.selpop{position:fixed;z-index:70;display:flex;gap:4px;padding:4px;border-radius:12px;background:var(--surface);border:1px solid var(--border-strong);box-shadow:var(--shadow-lg)}
+.selpop .btn{height:30px;font-size:.82rem;padding:0 10px}
+.meta .edit{opacity:0;transition:opacity .15s}
+.entry:hover .meta .edit,.meta .edit:focus-visible{opacity:1}
+.meta .edited{font-size:.7rem;color:var(--faint)}
+.orig[contenteditable="true"],.orig[contenteditable="plaintext-only"]{outline:2px solid var(--accent);outline-offset:3px;border-radius:6px;background:var(--surface)}
+.edit-hint{font-size:.74rem;color:var(--muted);margin-top:4px}
+.explain{margin:6px 0 0;padding:8px 12px;border-radius:10px;border:1px dashed var(--border-strong);font-size:.9rem}
+.explain .q{color:var(--muted);font-size:.8rem;margin-bottom:2px;overflow-wrap:anywhere}
+.explain .x{font-family:var(--font-tr);line-height:1.9;text-align:start;color:var(--text)}
+.explain .x .spinner{display:inline-block}
+/* recording progress */
+.recbar{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:.84rem;background:var(--surface-2)}
+.recbar .rname{font-weight:650;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recbar .dlbar{flex:1;min-width:60px}
+.recbar .rtext{color:var(--muted);white-space:nowrap}
+/* summary window */
+.modal{position:fixed;inset:0;z-index:55;background:rgba(15,18,28,.42);display:grid;place-items:center;padding:16px}
+.modal-card{background:var(--surface);border-radius:16px;box-shadow:var(--shadow-lg);width:min(760px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column}
+.modal-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.modal-head h2{margin:0;font-size:1rem;display:flex;align-items:center;gap:8px}
+.modal-head .spacer{flex:1}
+.modal-body{padding:14px 22px 20px;overflow:auto;font-family:var(--font-tr);line-height:2;font-size:1.02rem;text-align:start}
+.modal-body h3{font-size:1.02rem;margin:14px 0 4px;color:var(--accent-text)}
+.modal-body ul{margin:0;padding:0 20px 0 0}
+.modal-body p{margin:4px 0}
+.modal-note{display:flex;align-items:center;gap:8px;padding:10px 22px;color:var(--muted);font-size:.86rem;border-top:1px solid var(--border)}
+.modal-note:empty{display:none}
+
+/* offline overlay */
+.offline{position:fixed;inset:0;background:rgba(12,14,19,.72);z-index:80;display:grid;place-items:center;color:#fff;text-align:center;padding:24px}
+.offline div{max-width:380px;line-height:1.6}
+.offline b{font-size:1.1rem;display:block;margin-bottom:6px}
+
+/* ---------- narrow windows ---------- */
+@media (max-width:1180px){ .card-head .legend{display:none} }
+body:not(.capturing) .card-head .legend{display:none}
+@media (max-width:1400px){ .card-head .btn.sm .hide-sm{display:none} .card-head .btn.sm{width:32px;padding:0} }
+@media (max-width:1350px){ #sbDelay{display:none} }
+body.capturing #sbDelay,body.capturing #sbUsage{display:none}
+.btn:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:1px}
+@media (max-width:1100px){ #sbUsage{display:none} }
+@media (max-width:900px){ .subtitle{display:none} }
+@media (max-width:1060px){ .card-head .btn.sm .hide-sm{display:none} }
+@media (max-width:980px){
+  .layout{grid-template-columns:1fr;grid-template-rows:minmax(280px,62%) minmax(0,1fr)}
+  .answer-card{order:-1}
+  .subtitle{max-width:30vw}
+}
+@media (max-width:760px){
+  .meter-label,.legend,.hide-sm{display:none}
+  .meter .bar{width:30px}
+  .statusbar{gap:12px}
+  .two,.opt-cards{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .subtitle,.meters{display:none}
+  .topbar{padding:8px 10px;gap:8px}
+  .layout{padding:8px;gap:8px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24"><path d="M3 12h2.5l2.5-6 4 13 3.5-9 2 3H21"/></svg></div>
+      <div class="brand-text">
+        <div class="title">Meeting Assistant</div>
+        <div class="subtitle" id="topicLine"></div>
+      </div>
+    </div>
+    <button class="pill test hide-sm" id="testBadge" hidden title="Test mode is on: answers are suggested for your own lines too. Click to change.">Test mode</button>
+    <div class="pill" id="statusPill" role="status" aria-live="polite"><span class="dot"></span><span id="statusText">Ready</span><span class="timer" id="timer"></span></div>
+    <div class="meters">
+      <div class="meter me off" id="mMe" title="Your microphone"><span data-icon="mic"></span><span class="meter-label">Me</span><span class="bar"><i></i></span></div>
+      <div class="meter them off" id="mThem" title="Computer sound (the other side)"><span data-icon="volume"></span><span class="meter-label">Other side</span><span class="bar"><i></i></span></div>
+    </div>
+    <button class="btn ghost" id="pauseBtn" hidden title="Pause listening: nothing is written or sent until you continue (F8)"><span data-icon="pause"></span><span id="pauseLabel">Pause</span><kbd class="hide-sm">F8</kbd></button>
+    <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
+    <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
+    <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm">Shift+F9</kbd></button>
+    <button class="btn primary" id="startBtn"><span data-icon="play"></span><span id="startLabel">Start</span><kbd class="hide-sm">F9</kbd></button>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <main class="layout">
+    <section class="card">
+      <div class="card-head">
+        <h2><span data-icon="text"></span><span id="feedTitle">Live transcript</span></h2>
+        <span class="spacer"></span>
+        <div class="legend" id="legend"></div>
+        <button class="btn sm ghost" id="recBtn" title="Transcribe and translate a recorded audio or video file"><span data-icon="file"></span><span class="hide-sm">Transcribe a file…</span></button>
+        <button class="btn sm ghost" id="summaryBtn" title="A summary of this meeting in your language"><span data-icon="list"></span><span class="hide-sm">Summary</span></button>
+        <button class="btn icon ghost" id="copyAllBtn" title="Copy the whole transcript" aria-label="Copy the whole transcript"><span data-icon="copy"></span></button>
+      </div>
+      <div class="recbar" id="recBar" hidden><span data-icon="file"></span><span class="rname"></span><div class="dlbar"><i></i></div><span class="rtext"></span><button class="btn sm ghost" id="recCancel">Stop</button></div>
+      <div class="feed-scroll" id="feed">
+        <div class="empty" id="empty"></div>
+        <div id="list"></div>
+      </div>
+      <button class="btn sm primary jump" id="jump" hidden><span data-icon="down"></span>New lines</button>
+    </section>
+
+    <aside class="card answer-card">
+      <div class="card-head">
+        <h2><span data-icon="sparkles"></span>Suggested answer</h2>
+        <span class="thinking" id="thinking" hidden><span class="spinner"></span>Writing…</span>
+        <span class="spacer"></span>
+        <div class="size-ctl" title="Answer text size">
+          <button id="aSmaller" aria-label="Smaller answer text">A−</button>
+          <button id="aBigger" aria-label="Bigger answer text">A+</button>
+        </div>
+        <button class="btn icon ghost" id="copyBtn" title="Copy answer" aria-label="Copy answer"><span data-icon="copy"></span></button>
+      </div>
+      <div class="answer-body" id="answerBody"></div>
+      <div class="answer-foot">
+        <button class="btn soft sm" id="answerNowBtn" title="Suggest an answer to the latest question now"><span data-icon="zap"></span>Answer now<kbd>F2</kbd></button>
+        <span class="hint" id="answerHint"></span>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span class="sb" id="sbNet"><span class="dot"></span><span class="ellipsis">Not connected yet</span></span>
+    <span class="sb hide-sm" id="sbDelay"></span>
+    <span class="sb" id="sbMode" title="How the other side's words are written"></span>
+    <span class="sb" id="sbQuota"></span>
+    <span class="sb" id="sbUsage"></span>
+    <span class="sb sb-right" id="sbSave"></span>
+    <span class="sb ver" id="sbVer" title="Program version"></span>
+  </footer>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Setup" aria-hidden="true" inert>
+  <div class="drawer-head">
+    <h2>Setup <small class="ver" id="setupVer"></small></h2>
+    <span class="saved" id="savedState"></span>
+    <button class="btn icon ghost" id="closeDrawer" aria-label="Close"><span data-icon="x"></span></button>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab" data-tab="meeting">Meeting</button>
+    <button class="tab" data-tab="answers">Answers</button>
+    <button class="tab" data-tab="audio">Audio</button>
+    <button class="tab" data-tab="connection">Services<span class="warn-dot" id="keyDot" hidden></span></button>
+    <button class="tab" data-tab="display">Display</button>
+    <button class="tab" data-tab="log">Log<span class="warn-dot" id="logDot" hidden></span></button>
+  </nav>
+  <div class="drawer-body">
+    <!-- MEETING -->
+    <section class="pane" data-pane="meeting">
+      <div class="field">
+        <label for="fContext">What is this meeting about?</label>
+        <textarea class="input" id="fContext" data-key="context" rows="4" placeholder="Job interview for a Network Engineer position. Topics: Cisco routing & switching, OSPF, BGP, VLANs."></textarea>
+        <div class="chips">
+          <button class="pchip" data-fill="context" data-text="Job interview for a Network Engineer position. Topics: Cisco routing & switching (OSPF, EIGRP, BGP, VLAN, STP).">Cisco</button>
+          <button class="pchip" data-fill="context" data-text="Job interview for a Senior Oracle DBA position. Topics: RMAN backup & recovery, Data Guard, performance tuning, RAC.">Oracle DBA</button>
+          <button class="pchip" data-fill="context" data-text="Job interview for an IT Manager position. Topics: team leadership, infrastructure, security, budgeting.">IT manager</button>
+          <button class="pchip" data-fill="context" data-text="Business meeting with a client.">Client meeting</button>
+        </div>
+        <div class="help">First line: a short topic (it also helps recognition of technical words). Below it you can paste more — the job description, the company, what they are looking for. Answers are tailored to all of it. Facts about yourself go in Setup › Answers › About you.</div>
+      </div>
+      <div class="field">
+        <span class="label">Languages spoken in the meeting</span>
+        <div class="langs" id="langChips"></div>
+        <div class="help">One language: recognition is told it (faster, more accurate). Several: each sentence is recognised as one of them.</div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="fMyLang">My language (translations)</label><select class="input" id="fMyLang" data-key="my_language"></select>
+          <div class="help">Lines, explanations and the summary are shown in this language.</div></div>
+        <div class="field"><label for="fAnsLang">Suggested answers in</label><select class="input" id="fAnsLang" data-key="answer_language"></select>
+          <div class="help">Usually the language of the question.</div></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="fMe">My name on screen</label><input class="input" id="fMe" data-key="me_label" maxlength="24"></div>
+        <div class="field"><label for="fThem">Other side's name</label><input class="input" id="fThem" data-key="them_label" maxlength="24"></div>
+      </div>
+    </section>
+
+    <!-- ANSWERS -->
+    <section class="pane" data-pane="answers">
+      <div class="field">
+        <label for="fStyle">How should suggested answers sound?</label>
+        <textarea class="input" id="fStyle" data-key="answer_style" rows="3" placeholder="Empty = the default style: clear, confident and concise (2-4 sentences); technical questions get correct, specific technical answers."></textarea>
+        <div class="chips">
+          <button class="pchip" data-fill="answer_style" data-text="Short and confident: 2-3 sentences, simple spoken English.">Short &amp; confident</button>
+          <button class="pchip" data-fill="answer_style" data-text="Technical and precise, 3-5 sentences. Mention real commands, protocols and numbers when useful.">Technical</button>
+          <button class="pchip" data-fill="answer_style" data-text="For behavioral questions use the STAR method (Situation, Task, Action, Result) in 4-6 sentences.">STAR method</button>
+          <button class="pchip" data-fill="answer_style" data-text="Friendly and natural, like a relaxed conversation. 2-4 sentences.">Friendly</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="fAbout">About you</label>
+        <textarea class="input" id="fAbout" data-key="about_me" rows="8" placeholder="Name, age, education, current job and years of experience, earlier jobs, main projects with numbers, certifications, tools you know, why you want this job, salary expectation…"></textarea>
+        <div class="help">As much as you like — your CV can go here. Answers use only these facts about you: if something is not here, the answer shows a placeholder like [years] or [your name] instead of inventing it.</div>
+      </div>
+      <div class="field">
+        <span class="label">Answer engine</span>
+        <div class="opt-cards" data-key="answer_mode">
+          <button class="opt" data-val="fast"><b><span data-icon="zap"></span>Fastest</b><span>Answer starts almost instantly. Recommended.</span></button>
+          <button class="opt" data-val="smart"><b><span data-icon="sparkles"></span>Deeper</b><span>Stronger model for hard technical questions. About half a second slower.</span></button>
+        </div>
+      </div>
+      <label class="toggle"><input type="checkbox" data-key="answer_fa"><span class="switch"></span><span class="tt"><b>Show the meaning of each answer in <span class="myl">Persian</span></b><span>Appears under the answer, after it is written.</span></span></label>
+      <label class="toggle"><input type="checkbox" data-key="translate_me"><span class="switch"></span><span class="tt"><b>Translate my own lines too</b><span>A <span class="myl">Persian</span> translation under what you say (the other side's lines are always translated).</span></span></label>
+      <label class="toggle"><input type="checkbox" data-key="answer_me"><span class="switch"></span><span class="tt"><b>Test mode: answer my own questions too</b><span>Turn on to practise alone — ask a question into your microphone. Turn off for real meetings.</span></span></label>
+    </section>
+
+    <!-- AUDIO -->
+    <section class="pane" data-pane="audio">
+      <div class="callout"><span data-icon="headphones"></span><div><b>Use headphones.</b> Otherwise your microphone also hears the other person and the transcript gets duplicates.</div></div>
+      <div class="field">
+        <label for="fMic">Microphone (you)</label>
+        <select class="input select" id="fMic" data-key="mic_device"></select>
+      </div>
+      <div class="field">
+        <label for="fSpk">Speakers / headphones (the other side)</label>
+        <select class="input select" id="fSpk" data-key="speaker_device"></select>
+        <div class="help">The program listens to what this device plays. Device changes apply the next time you press Start. <button class="linkbtn" id="refreshDevices">Refresh list</button></div>
+      </div>
+      <div class="field">
+        <span class="label">Test audio</span>
+        <div class="big-meters">
+          <div class="bm me" id="bmMe"><span>Microphone</span><span class="bar"><i></i></span></div>
+          <div class="bm them" id="bmThem"><span>Computer sound</span><span class="bar"><i></i></span></div>
+        </div>
+        <div class="input-row"><button class="btn sm" id="monitorBtn"><span data-icon="play"></span><span>Test for 30 seconds</span></button><span class="help" id="monitorHelp" style="align-self:center">Speak, and play a video — both bars should move.</span></div>
+      </div>
+      <div class="field">
+        <label for="fSens">Microphone sensitivity</label>
+        <div class="range-row"><span>Less</span><input type="range" id="fSens" min="1" max="10" step="1" data-key="sensitivity"><span>More</span></div>
+        <div class="help">Raise it if quiet speech is missed; lower it if background noise gets transcribed.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" data-key="transcribe_me"><span class="switch"></span><span class="tt"><b>Transcribe my voice</b><span>Your own words are written and saved too.</span></span></label>
+
+    </section>
+
+    <!-- CONNECTION (services) -->
+    <section class="pane" data-pane="connection">
+      <div class="overview"><div id="svcOverview"></div>
+        <div class="ov-foot"><button class="btn sm primary" id="testAll"><span data-icon="zap"></span><span>Test all parts</span></button>
+          <button class="btn sm ghost" id="creditBtn"><span data-icon="gauge"></span><span>Credit &amp; limits</span></button>
+          <span class="help">Test runs each task once for real — do it before an important meeting.</span></div>
+        <div id="testResults" class="test-results ov-results"></div>
+        <div id="creditResults" class="test-results ov-results"></div></div>
+
+      <div class="step">
+        <div class="step-head"><span class="step-num">1</span><div><h3>Your services</h3>
+          <p>At least one is needed. <b>Groq</b> is free and can do everything, but it is not required — any other service can do all of the work, or share it.</p></div></div>
+
+        <div class="svc-card" id="groqCard">
+          <div class="svc-top" tabindex="0" role="button" aria-expanded="true">
+            <span class="svc-avatar" style="--av:#f55036">G</span>
+            <div class="svc-title"><div class="svc-name">Groq <span class="tag free">Free</span></div><div class="svc-sub" id="groqSub"></div></div>
+            <span class="schip" id="groqChip"></span><span class="chev"></span>
+          </div>
+          <div class="svc-body">
+            <div class="callout" id="keyWelcome" hidden><span data-icon="key"></span><div><b>How to get a free Groq key</b>
+              <ol><li>Open <a class="link" href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a></li><li>Click <b>Create API Key</b> and copy it</li><li>Paste it below</li></ol></div></div>
+            <div class="field">
+              <label for="fKey">API key</label>
+              <div class="input-row">
+                <input class="input" id="fKey" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…">
+                <button class="btn icon" id="showKey" title="Show / hide" aria-label="Show key"><span data-icon="eye"></span></button>
+              </div>
+              <div class="keyhint" id="keyHint" hidden></div>
+            </div>
+            <div class="input-row"><button class="btn sm" id="testConn"><span data-icon="zap"></span>Test</button></div>
+            <div class="result" id="connResult" hidden></div>
+            <div class="svc-can"><span class="can">Speech to text</span><span class="can">Translation</span><span class="can">Answers</span><span class="help">Text appears every few seconds while someone speaks (PREVIEW).</span></div>
+          </div>
+        </div>
+
+        <div id="provList" class="svc-list"></div>
+
+        <div class="add-row">
+          <select class="input select" id="addPreset">
+            <option value="" selected disabled>Choose a service to add…</option>
+            <option value="openai">OpenAI — paid · speech, translation, answers</option>
+            <option value="avalai">AvalAI — Iranian, pay in Rial</option>
+            <option value="gapgpt">GapGPT — Iranian, pay in Rial</option>
+            <option value="openrouter">OpenRouter — many models, some free · translation &amp; answers</option>
+            <option value="gemini">Google Gemini — small free allowance · translation &amp; answers</option>
+            <option value="cerebras">Cerebras — very fast · translation &amp; answers</option>
+            <option value="mistral">Mistral — speech, translation, answers</option>
+            <option value="deepgram">Deepgram — LIVE speech to text, word by word ($200 free credit)</option>
+            <option value="custom">Another service (type its address)</option>
+          </select>
+          <button class="btn primary" id="addProv"><span data-icon="plus"></span>Add service</button>
+        </div>
+        <div class="help">Any service that uses the standard OpenAI format works, including Iranian ones paid in Rial. After adding: paste its key, press <b>Test</b> — it then shows what the service can do.</div>
+      </div>
+
+      <div class="step">
+        <div class="step-head"><span class="step-num">2</span><div><h3>Who does what</h3>
+          <p>Choose a service for each task. For Groq the best free model is chosen automatically; for other services the <b>Use it for…</b> button (after Test) fills in the model.</p></div></div>
+        <div class="assign">
+          <div class="arow"><span class="astat" data-stat="stt"></span><span class="alabel">Speech to text</span><select class="input select" data-assign="stt"></select><input class="input" data-model="stt" list="dl-stt" spellcheck="false"><datalist id="dl-stt"></datalist></div>
+          <div class="arow"><span class="astat" data-stat="tr"></span><span class="alabel">Translation</span><select class="input select" data-assign="tr"></select><input class="input" data-model="tr" list="dl-tr" spellcheck="false"><datalist id="dl-tr"></datalist></div>
+          <div class="arow"><span class="astat" data-stat="ans"></span><span class="alabel">Answers</span><select class="input select" data-assign="ans"></select><input class="input" data-model="ans" list="dl-ans" spellcheck="false"><datalist id="dl-ans"></datalist></div>
+        </div>
+        <label class="toggle" id="backupRow"><input type="checkbox" data-key="use_backup"><span class="switch"></span><span class="tt"><b>Use Groq as a backup</b><span id="backupHelp">If a chosen service fails or runs out of credit, Groq continues so the meeting never stops.</span></span></label>
+      </div>
+
+
+      <div class="opt-title">Optional</div>
+
+      <details class="more" id="optLocal">
+        <summary><span class="opt-ic ok"><span data-icon="cpu"></span></span><div class="opt-text"><b>Local model</b> <span class="tag free">Free · offline</span><span class="opt-state" id="localSummary"></span>
+          <p>Speech to text on this computer: no internet and no limits. Needs a fast processor (press Test on this computer).</p></div><span class="chev"></span></summary>
+        <div class="opt-body" id="localCard">
+        <div class="local-status" id="localStatus"></div>
+        <div>
+          <span class="mini">Model</span>
+          <div class="input-row"><select class="input select" id="localModel"></select>
+            <button class="btn sm" id="localBrowse"><span data-icon="folder"></span>Choose folder…</button></div>
+          <div class="help">Downloaded a model yourself? Press <b>Choose file…</b> and pick the <b>model.bin</b> file inside its folder. It must be a <b>faster-whisper</b> model (a folder with model.bin, config.json and tokenizer.json).</div>
+        </div>
+        <div>
+          <span class="mini">Or download one here (once — it is kept in the program's "models" folder)</span>
+          <div class="input-row"><select class="input select" id="localCatalog"></select>
+            <button class="btn sm" id="localDl"><span data-icon="down"></span>Download</button></div>
+          <div class="dlbox" id="localDlBox" hidden><div class="dlbar"><i></i></div><span class="dltext"></span><button class="btn sm ghost" id="localDlCancel">Cancel</button></div>
+        </div>
+        <div class="input-row" style="flex-wrap:wrap">
+          <button class="btn sm primary" id="localTest"><span data-icon="zap"></span>Test on this computer</button>
+          <select class="input select" id="localDevice" style="width:auto"><option value="auto">Run on: automatic</option><option value="cpu">Run on: processor only</option></select>
+          <button class="btn sm ghost" id="localFolder">Open models folder</button>
+          <button class="btn sm ghost" id="localDelete" hidden>Delete this model</button>
+        </div>
+        <div class="caps" id="localCaps"></div>
+      </div>
+      </details>
+
+      <details class="more" id="optLlm">
+        <summary><span class="opt-ic ok"><span data-icon="sparkles"></span></span><div class="opt-text"><b>Local AI model</b> <span class="tag free">Free · offline</span><span class="opt-state" id="llmSummary"></span>
+          <p>Translation and answers on this computer: no internet, no key, no limits. Slower than online services — press Test.</p></div><span class="chev"></span></summary>
+        <div class="opt-body" id="llmCard">
+        <div class="local-status" id="llmStatus"></div>
+        <div>
+          <span class="mini">Model</span>
+          <div class="input-row"><select class="input select" id="llmModel"></select>
+            <button class="btn sm" id="llmBrowse"><span data-icon="folder"></span>Choose file…</button></div>
+          <div class="help">Any chat model in <b>.gguf</b> format works (for example from Hugging Face). Instruct / chat models only.</div>
+        </div>
+        <div>
+          <span class="mini">Or download one here (once — it is kept in the program's "models" folder)</span>
+          <div class="input-row"><select class="input select" id="llmCatalog"></select>
+            <button class="btn sm" id="llmDl"><span data-icon="down"></span>Download</button></div>
+          <div class="dlbox" id="llmDlBox" hidden><div class="dlbar"><i></i></div><span class="dltext"></span><button class="btn sm ghost" id="llmDlCancel">Cancel</button></div>
+        </div>
+        <div>
+          <span class="mini">Use it for</span>
+          <div class="input-row" style="flex-wrap:wrap;gap:14px">
+            <label class="toggle"><input type="checkbox" id="llmForTr"><span class="switch"></span><span class="tt"><b>Translation</b></span></label>
+            <label class="toggle"><input type="checkbox" id="llmForAns"><span class="switch"></span><span class="tt"><b>Answers</b></span></label>
+          </div>
+          <div class="help">The other tasks keep their service. With the local model the translation comes after each sentence (not while someone is still speaking).</div>
+        </div>
+        <div class="input-row" style="flex-wrap:wrap">
+          <button class="btn sm primary" id="llmTest"><span data-icon="zap"></span>Test on this computer</button>
+          <button class="btn sm ghost" id="llmFolder">Open models folder</button>
+          <button class="btn sm ghost" id="llmDelete" hidden>Delete this model</button>
+        </div>
+        <div class="test-results" id="llmResult"></div>
+      </div>
+      </details>
+
+      <details class="more" id="optRates">
+        <summary><span class="opt-ic"><span data-icon="gauge"></span></span><div class="opt-text"><b>Speed and token use</b><span class="opt-state" id="ratesSummary"></span>
+          <p>How often the text and translation are refreshed while someone is still speaking.</p></div><span class="chev"></span></summary>
+        <div class="opt-body">
+        <div class="mode-note" id="sttMode"></div>
+        <div class="rate-box">
+          <div class="rate-row"><span class="alabel">Preview while speaking<small>services without LIVE (Groq, OpenAI, …)</small></span>
+            <div class="seg" id="segPreview"><button data-val="0">Off</button><button data-val="1500">1.5 s</button><button data-val="2000">2 s</button><button data-val="3000">3 s</button><button data-val="5000">5 s</button></div></div>
+          <div class="rate-row" id="rateLocal"><span class="alabel">Local model live text<small>refreshed on this computer — no tokens (the translation of it does use tokens)</small></span>
+            <div class="seg" id="segLocal"><button data-val="500">0.5 s</button><button data-val="1000">1 s</button><button data-val="1500">1.5 s</button><button data-val="2000">2 s</button><button data-val="3000">3 s</button></div></div>
+          <div class="rate-row"><span class="alabel">Live translation refresh<small>LIVE services (Deepgram) and the local model</small></span>
+            <div class="seg" id="segLiveTr"><button data-val="3">3 words</button><button data-val="5">5 words</button><button data-val="8">8 words</button><button data-val="0">Sentence end</button></div></div>
+          <div class="help">Less often = fewer requests and tokens. More often = you see the text sooner. The final text and its translation after each sentence are always made.</div>
+        </div>
+        </div>
+      </details>
+
+      <details class="more" id="optNet">
+        <summary><span class="opt-ic"><span data-icon="globe"></span></span><div class="opt-text"><b>Network (VPN / proxy)</b><span class="opt-state" id="netSummary"></span>
+          <p>Only needed if the services cannot be reached.</p></div><span class="chev"></span></summary>
+        <div class="opt-body">
+          <div class="field">
+            <label for="fProxy">Proxy</label>
+            <input class="input" id="fProxy" data-key="proxy" spellcheck="false" placeholder="Leave empty to use your Windows proxy automatically">
+            <div class="help" id="proxyHelp"></div>
+            <div class="input-row"><button class="btn sm" id="testProxy"><span data-icon="zap"></span><span>Test proxy</span></button></div>
+            <div id="proxyResults" class="test-results"></div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- DISPLAY -->
+    <section class="pane" data-pane="display">
+      <div class="field">
+        <span class="label">Theme</span>
+        <div class="seg" data-key="theme"><button data-val="system">System</button><button data-val="light">Light</button><button data-val="dark">Dark</button></div>
+      </div>
+      <div class="field">
+        <label for="fSize">Text size</label>
+        <div class="range-row"><span>A</span><input type="range" id="fSize" min="80" max="170" step="5" data-key="text_size"><span style="font-size:1.3em">A</span></div>
+        <div class="help">Shortcuts: <kbd>Ctrl</kbd> <kbd>+</kbd> and <kbd>Ctrl</kbd> <kbd>−</kbd>. The answer has its own size buttons (A− / A+).</div>
+      </div>
+      <div class="field">
+        <span class="label">Keyboard shortcuts</span>
+        <div class="help"><kbd>F9</kbd> Start / Stop &nbsp;·&nbsp; <kbd>Shift</kbd> <kbd>F9</kbd> Continue last meeting &nbsp;·&nbsp; <kbd>F2</kbd> Answer now &nbsp;·&nbsp; <kbd>F8</kbd> Pause &nbsp;·&nbsp; <kbd>Ctrl</kbd> <kbd>,</kbd> Setup &nbsp;·&nbsp; <kbd>Esc</kbd> Close</div>
+      </div>
+    </section>
+    <!-- LOG -->
+    <section class="pane log-pane" data-pane="log">
+      <div class="callout"><span data-icon="info"></span><div>Everything the program does is written here. If something does not work, press <b>Check audio devices</b>, then <b>Copy log</b> and send the text for help.</div></div>
+      <div class="input-row log-actions">
+        <button class="btn sm" id="diagBtn"><span data-icon="headphones"></span><span>Check audio devices</span></button>
+        <button class="btn sm" id="copyLog"><span data-icon="copy"></span>Copy log</button>
+        <button class="btn sm" id="openLog"><span data-icon="text"></span>Open log file</button>
+        <button class="btn sm ghost danger-text" id="clearLog" title="Empty the log (the previous one is kept once as app.log.old)"><span data-icon="trash"></span>Clear log</button>
+      </div>
+      <div class="seg log-filter" id="logFilter"><button data-val="all" class="on">All</button><button data-val="problems">Problems only</button></div>
+      <pre class="logbox" id="logBox" dir="ltr"></pre>
+    </section>
+  </div>
+  <div class="drawer-foot">
+    <span class="help">Changes are saved automatically.</span>
+    <button class="btn primary" id="doneBtn">Done</button>
+  </div>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="helppop" id="helpPop" hidden role="dialog" aria-label="Keyboard shortcuts and tips">
+  <b>Keyboard</b>
+  <div class="hrow"><kbd>F9</kbd><span>Start / stop the meeting</span></div>
+  <div class="hrow"><kbd>Shift+F9</kbd><span>Continue the last meeting (same transcript)</span></div>
+  <div class="hrow"><kbd>F2</kbd><span>Answer the last thing they said</span></div>
+  <div class="hrow"><kbd>F8</kbd><span>Pause / continue listening</span></div>
+  <div class="hrow"><kbd>Ctrl</kbd><kbd>,</kbd><span>Setup</span></div>
+  <div class="hrow"><kbd>Ctrl</kbd><kbd>+</kbd> <kbd>Ctrl</kbd><kbd>−</kbd><span>Text size</span></div>
+  <b>In the transcript</b>
+  <div class="hrow"><span class="hic" data-icon="text"></span><span>Select words → <i>Explain in <span class="myl">Persian</span></i> or <i>Answer this</i></span></div>
+  <div class="hrow"><span class="hic" data-icon="edit"></span><span>Pencil next to a line → correct what was heard</span></div>
+  <div class="hrow"><span class="hic" data-icon="list"></span><span>Summary → a <span class="myl">Persian</span> summary of the meeting</span></div>
+</div>
+<div class="selpop" id="selPop" hidden>
+  <button class="btn soft" data-a="answer" title="Suggest what to say about the selected words"><span data-icon="zap"></span>Answer this</button>
+  <button class="btn ghost" data-a="explain" title="What do the selected words mean?"><span data-icon="help"></span>Explain in <span class="myl">Persian</span></button>
+</div>
+<div class="modal" id="sumModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-label="Meeting summary">
+    <div class="modal-head"><h2><span data-icon="list"></span>Meeting summary</h2><span class="spacer"></span>
+      <button class="btn sm ghost" id="sumAgain"><span data-icon="refresh"></span>Write again</button>
+      <button class="btn sm ghost" id="sumCopy"><span data-icon="copy"></span>Copy</button>
+      <button class="btn icon ghost" id="sumClose" aria-label="Close"><span data-icon="x"></span></button></div>
+    <div class="modal-body" id="sumBody" dir="rtl" lang="fa"></div>
+    <div class="modal-note" id="sumNote"></div>
+  </div>
+</div>
+<div class="modal" id="brModal" hidden>
+  <div class="modal-card br-card" role="dialog" aria-modal="true" aria-labelledby="brTitle">
+    <div class="modal-head"><h2 id="brTitle"><span data-icon="folder"></span><span>Choose</span></h2><span class="spacer"></span>
+      <button class="btn icon ghost" id="brClose" aria-label="Close"><span data-icon="x"></span></button></div>
+    <div class="br-bar">
+      <button class="btn sm ghost" id="brUp" title="Up one folder" aria-label="Up one folder"><span data-icon="down" style="display:inline-block;transform:rotate(180deg)"></span></button>
+      <input class="input" id="brPath" spellcheck="false" dir="ltr" aria-label="Folder">
+      <button class="btn sm" id="brGo">Open</button>
+    </div>
+    <div class="br-places" id="brPlaces"></div>
+    <div class="br-list" id="brList" dir="ltr"></div>
+    <div class="modal-note br-foot"><span id="brHint" class="br-hint"></span><span class="spacer"></span>
+      <button class="btn sm primary" id="brUse" hidden><span data-icon="check"></span><span>Use this model</span></button></div>
+  </div>
+</div>
+<div class="offline" id="offline" hidden><div><b>Meeting Assistant is not running</b>This window lost its connection to the program. Start it again from the desktop shortcut (or run.bat), then close this window.</div></div>
+
+<script>
+"use strict";
+const TOKEN = "__TOKEN__";
+try{ if(location.search) history.replaceState(null, "", "/"); }catch{}      // the key is not left in the address bar
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+
+/* ---------- icons ---------- */
+const ICONS = {
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  cpu:'<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  gauge:'<path d="M12 14l4-4"/><path d="M3.5 18a9 9 0 1 1 17 0"/>',
+  globe:'<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
+  trash:'<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+  pause:'<path d="M9 5v14M15 5v14"/>',
+  edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  file:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 15.5v-2M12 17v-5M15 15.5v-2"/>',
+  help:'<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  play:'<path d="M7 4.5v15l12-7.5z"/>',
+  stop:'<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  sliders:'<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  mic:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/>',
+  volume:'<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+  copy:'<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>',
+  sparkles:'<path d="m12 3-1.8 5.2a2 2 0 0 1-1.2 1.2L4 11l5 1.7a2 2 0 0 1 1.2 1.2L12 19l1.8-5.1a2 2 0 0 1 1.2-1.2L20 11l-5-1.6a2 2 0 0 1-1.2-1.2z"/>',
+  zap:'<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  alert:'<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  key:'<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2.5 2.5M14.5 8.5 17 11"/>',
+  headphones:'<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/>',
+  text:'<path d="M4 6h16M4 12h16M4 18h10"/>',
+  down:'<path d="M12 5v14M5 12l7 7 7-7"/>',
+  eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  wave:'<path d="M3 12h2.5l2.5-6 4 13 3.5-9 2 3H21"/>',
+  refresh:'<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>',
+};
+function icon(name){ return `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]||""}</svg>`; }
+function paintIcons(root=document){ root.querySelectorAll("[data-icon]").forEach(el=>{ if(!el.firstChild) el.innerHTML = icon(el.dataset.icon); }); }
+
+/* ---------- state ---------- */
+const S = {
+  cfg:null, running:false, stopping:false, monitoring:false, startedAt:null,
+  entries:new Map(), pend:new Map(), panelId:null,
+  proxy:["",""], net:{ok:null}, stats:{}, quota:null, sessionFile:"", meetingsDir:"",
+  online:false, everOnline:false, busy:false, audioOk:true, firstHello:true,
+};
+
+// actions that really take long (they run tests or wait for services); everything else answers quickly
+const SLOW_API = {test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
+                  audio_check: 90, test_proxy: 60, test_connection: 60, local_delete: 60, stop: 60, start: 60};
+async function api(name, body={}){
+  const ctl = new AbortController(), secs = SLOW_API[name] || 40;
+  const timer = setTimeout(() => ctl.abort(), secs * 1000);
+  try{
+    const r = await fetch("/api/"+name, {method:"POST", headers:{"Content-Type":"application/json","X-Token":TOKEN},
+                                          body:JSON.stringify(body), signal: ctl.signal});
+    return await r.json();
+  }catch(e){ return {ok:false, error: e && e.name === "AbortError" ? "The program did not answer in time." : "The program is not responding."}; }
+  finally{ clearTimeout(timer); }
+}
+
+/* ---------- helpers ---------- */
+const esc = t => String(t??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const clock = t => new Date(t*1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false});
+const label = src => src==="me" ? (S.cfg?.me_label||"Me") : (S.cfg?.them_label||"Person 1");
+function initials(name){
+  const w = String(name||"?").trim().split(/\s+/).filter(Boolean);
+  if(w.length===1) return w[0].slice(0,2);
+  return (w[0][0] + w[w.length-1][0]).toUpperCase();
+}
+function fmtDur(s){ s=Math.max(0,Math.floor(s)); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60; return (h? h+":"+String(m).padStart(2,"0") : String(m).padStart(2,"0"))+":"+String(x).padStart(2,"0"); }
+function basename(p){ return String(p||"").split(/[\\/]/).pop(); }
+
+/* ---------- events from the program ---------- */
+let offlineTimer = null, sseDelay = 3000;
+function connect(){
+  const es = new EventSource("/events");                    // the key travels in a cookie, not in the address
+  es.onopen = () => { sseDelay = 3000;  S.online = true; S.everOnline = true; clearTimeout(offlineTimer); $("#offline").hidden = true; };
+  es.onerror = () => {
+    S.online = false;
+    clearTimeout(offlineTimer);
+    offlineTimer = setTimeout(()=>{ if(!S.online && S.everOnline) $("#offline").hidden = false; }, 4000);
+    if(es.readyState === EventSource.CLOSED){
+      // refused (e.g. the program was restarted and this page holds an old key): if the program answers, reload
+      es.close();
+      setTimeout(async ()=>{
+        try{
+          const r = await fetch("/ping", {headers:{"X-Ping":"1"}, cache:"no-store"});
+          let last = 0; try{ last = +sessionStorage.getItem("maReload") || 0; }catch{}
+          if(r.ok && Date.now() - last > 20000){
+            try{ sessionStorage.setItem("maReload", String(Date.now())); }catch{}
+            location.reload(); return;
+          }
+        }catch{}
+        connect();
+      }, sseDelay);
+      sseDelay = Math.min(30000, sseDelay * 2);            // the program is down: ask less and less often
+    }
+  };
+  es.onmessage = ev => { let m; try{ m = JSON.parse(ev.data); }catch{ return; } try{ handle(m); }catch(err){ reportError(err); } };
+}
+function handle(m){
+  switch(m.type){
+    case "hello": return onHello(m);
+    case "config": S.cfg = m.config; if(m.proxy) S.proxy = m.proxy; applyConfig(); fillDrawer(false); return;
+    case "running": if(!m.running) S.paused = false; if(S.running !== m.running) setTimeout(renderAnswer, 0); S.running=m.running; S.stopping=m.stopping; S.monitoring=m.monitoring; S.startedAt=m.started_at; if(m.session_file) S.sessionFile=m.session_file; S.resume=m.resume||null; renderRunning(); return;
+    case "level": return onLevel(m);
+    case "speaking": return onSpeaking(m);
+    case "entry": return upsertEntry(m.entry);
+    case "stats": { const was = !!(S.quota && S.quota.blocked); S.stats=m.stats||{}; S.quota=m.quota; S.usage=m.usage||{}; renderFooter(); if(was !== !!(S.quota && S.quota.blocked)) renderRunning(); renderSumBtn(); return; }
+    case "net": S.net=m.net; renderFooter(); renderRunning(); if(S.cfg) renderGroq(); return;
+    case "toast": return toast(m.level, m.text);
+    case "devices_in_use": S.inUse = m; return;
+    case "session": return newSession(m);
+    case "speech_mode": S.speechMode = m; renderFooter(); renderSttMode(); return;
+    case "local": S.local = m.local; renderLocal(); renderSttMode(); return;
+    case "llm": S.llm = m.llm; renderLlm(); return;
+    case "download": S.download = m.download; renderDownload(); if(["done","error","cancelled"].includes(m.download.state)){ if(m.download.kind === "llm") loadLlm(); else loadLocal(); } return;
+    case "log": return addLog(m.entry, true);
+    case "log_cleared": $("#logBox").innerHTML = ""; $("#logDot").hidden = true; return;
+    case "paused": S.paused = m.paused; renderRunning(); return;
+    case "summary": return onSummary(m);
+    case "recording": S.rec = m.job; if(!recActive()){ S.pend.forEach(p => p.remove()); S.pend.clear(); } renderRec(); renderRunning(); return;
+  }
+}
+function clearTranscript(){
+  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null;
+  $("#jump").hidden = true;
+}
+function newSession(m){
+  clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.summary = m.summary || ""; S.paused = false;
+  (m.entries || []).forEach(e => upsertEntry(e, true));
+  if((m.entries || []).length) feed.scrollTop = feed.scrollHeight;
+  S.sumState = ""; $("#sumBody").innerHTML = ""; $("#sumNote").innerHTML = ""; $("#sumModal").hidden = true;
+  renderTitle();
+  renderAnswer(); renderThinking(); renderEmpty(); renderFooter();
+}
+function onHello(m){
+  $("#sbVer").textContent = "v" + (m.version || ""); $("#setupVer").textContent = "version " + (m.version || "");
+  document.title = "Meeting Assistant " + (m.version || "");
+  S.cfg = m.config; S.running=m.running; S.stopping=m.stopping; S.monitoring=m.monitoring; S.startedAt=m.started_at;
+  S.sessionFile=m.session_file||""; S.meetingsDir=m.meetings_dir; S.proxy=m.proxy||["",""]; S.net=m.net||{};
+  S.stats=m.stats||{}; S.quota=m.quota; S.audioOk=m.audio_ok; S.speechMode = m.speech_mode; S.usage = m.usage || {};
+  S.local = m.local || {}; S.download = m.download; loadLocal();
+  S.llm = m.llm || {}; loadLlm();
+  S.paused = !!m.paused; S.summary = m.summary || ""; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
+  S.recName = m.recording && ["starting","reading","finishing"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
+  clearTranscript(); renderTitle();
+  (m.entries||[]).forEach(e=>upsertEntry(e, true));
+  $("#logBox").innerHTML = ""; (m.log||[]).forEach(l => addLog(l, false));
+  applyConfig(); fillDrawer(true); renderRunning(); renderFooter(); renderAnswer();
+  if(S.lastTab === "audio" && $("#drawer").classList.contains("open")) loadDevices();
+  if(!S.audioOk) showBanner("error", "The audio library is missing. Close this window and run install.bat again.");
+  if(S.firstHello && !S.cfg.ready) openDrawer("connection");
+  S.firstHello = false;
+}
+
+/* ---------- config ---------- */
+function myLang(){
+  const c = S.cfg || {}, code = c.my_language || "fa", L = (c.langs || {})[code] || ["Persian", "فارسی", true];
+  return {code, name: L[0], rtl: !!L[2]};
+}
+function trAttr(){ const m = myLang(); return `dir="${m.rtl?"rtl":"ltr"}" lang="${m.code}"`; }
+function langName(code){ const L = ((S.cfg||{}).langs || {})[code]; return L ? L[0] : String(code||"").toUpperCase(); }
+function applyConfig(){
+  const c = S.cfg; if(!c) return;
+  const ml = myLang();
+  $$(".myl").forEach(x => { x.textContent = ml.name; });
+  document.documentElement.style.setProperty("--font-tr", ml.rtl ? "var(--font-fa)" : "var(--font)");
+  const sb = $("#sumBody"); sb.dir = ml.rtl ? "rtl" : "ltr"; sb.lang = ml.code;
+  document.documentElement.dataset.theme = c.theme;
+  document.documentElement.style.setProperty("--scale", c.text_size/100);
+  document.documentElement.style.setProperty("--answer-size", c.answer_size+"px");
+  const t = $("#topicLine");
+  const topic1 = (c.context || "").trim().split("\n")[0];
+  t.innerHTML = topic1 ? esc(topic1) : `No meeting topic yet · <button id="addTopic">Add one</button>`;
+  t.title = c.context || "";
+  const at = $("#addTopic"); if(at) at.onclick = () => openDrawer("meeting");
+  $("#legend").innerHTML = `<span title="${esc(label("them"))}: computer sound (the other side)"><i style="background:var(--them)"></i>${esc(label("them"))}</span><span title="${esc(label("me"))}: your microphone"><i style="background:var(--me)"></i>${esc(label("me"))}</span>`;
+  $("#keyDot").hidden = c.ready !== false;
+  $("#testBadge").hidden = !c.answer_me;
+  $("#mMe").querySelector(".meter-label").textContent = label("me");
+  $("#mThem").querySelector(".meter-label").textContent = label("them");
+  // refresh names in the transcript
+  S.entries.forEach(e => { const el=document.getElementById("e"+e.id); if(el) fillEntry(el, e); });
+  S.pend.forEach(p => { p.querySelector(".who").textContent = label(p.dataset.src); p.querySelector(".avatar").textContent = initials(label(p.dataset.src)); });
+  renderEmpty(); renderAnswer();
+}
+
+/* ---------- running state ---------- */
+function renderRunning(){
+  const pill = $("#statusPill"), txt = $("#statusText"), btn = $("#startBtn");
+  pill.className = "pill";
+  const recOn = recActive(), prob = S.running ? liveProblem() : "";
+  document.body.classList.toggle("capturing", !!(S.running || S.monitoring));
+  if(S.running && S.paused){ pill.classList.add("busy"); txt.textContent = "Paused"; }
+  else if(S.running && prob){ pill.classList.add("problem"); txt.textContent = "Live · " + prob; }
+  else if(S.running){ pill.classList.add("live"); txt.textContent = "Live"; }
+  else if(recOn){ pill.classList.add("busy"); txt.textContent = "Transcribing recording"; }
+  else if(S.stopping){ pill.classList.add("busy"); txt.textContent = "Finishing & saving…"; }
+  else if(S.monitoring){ pill.classList.add("test"); txt.textContent = "Testing audio"; }
+  else { txt.textContent = "Ready"; }
+  btn.className = "btn " + (S.running ? "stop" : "primary");
+  btn.querySelector("[data-icon]").innerHTML = icon(S.running ? "stop" : "play");
+  $("#startLabel").textContent = S.running ? "Stop" : "Start";
+  btn.disabled = S.stopping || S.busy || recOn;
+  const rb = $("#resumeBtn"), ri = S.resume;
+  rb.hidden = !ri || S.running || S.stopping || recOn;
+  rb.disabled = S.busy;
+  if(ri){
+    const d = new Date(ri.started * 1000);
+    rb.title = `Continue the last meeting (${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}, ${ri.lines} lines) — `
+             + `new lines are added to the same transcript and file. Start begins a new meeting; the old one stays saved.`;
+  }
+  $("#pauseBtn").hidden = !S.running;
+  $("#pauseLabel").textContent = S.paused ? "Continue" : "Pause";
+  $("#pauseBtn").querySelector("[data-icon]").innerHTML = icon(S.paused ? "play" : "pause");
+  $("#pauseBtn").classList.toggle("soft", !!S.paused);
+  $("#recBtn").hidden = S.running || S.stopping || recOn;
+  if(S.running && S.paused) showBanner("warn", "Listening is paused — nothing is written or sent. Press Continue (F8) to go on.", "pause");
+  else if($("#banner").dataset.kind === "pause") hideBanner();
+  $("#monitorBtn").querySelector("span:last-child").textContent = S.monitoring ? "Stop test" : "Test for 30 seconds";
+  $("#monitorBtn").querySelector("[data-icon]").innerHTML = icon(S.monitoring ? "stop" : "play");
+  $("#monitorBtn").disabled = S.running || S.stopping;
+  if(!S.running && !S.monitoring){ onLevel({me:null, them:null}); }
+  tickTimer(); renderEmpty(); renderFooter();
+}
+function liveProblem(){
+  const n = S.net || {}, q = S.quota;
+  if(n.ok === false) return "no connection";
+  if(q && q.blocked) return "free limit reached";
+  return "";
+}
+function tickTimer(){ $("#timer").textContent = (S.running && S.startedAt) ? fmtDur(Date.now()/1000 - S.startedAt) : ""; }
+setInterval(tickTimer, 500);
+
+async function toggleRun(resume){
+  if(S.stopping || S.busy) return;
+  if(resume === true && (S.running || !S.resume)) return;
+  S.busy = true; renderRunning();
+  let r;
+  try{ r = await api(S.running ? "stop" : "start", resume === true ? {resume: true} : {}); }
+  finally{ S.busy = false; renderRunning(); }
+  if(!r.ok){
+    if(r.error === "setup"){ openDrawer("connection"); toast("warn", "Setup is not complete: " + (r.missing || []).join("; ") + ". Add Groq (free) or another service."); }
+    else toast("error", r.error || "Could not start.");
+  }
+}
+
+/* ---------- level meters ---------- */
+function setBar(el, v){ const i = el.querySelector(".bar i"); i.style.transform = `scaleX(${v==null?0:v})`; }
+function onLevel(m){
+  for(const [src, id, big] of [["me","#mMe","#bmMe"],["them","#mThem","#bmThem"]]){
+    const v = m[src];
+    const el = $(id); el.classList.toggle("off", v==null); setBar(el, v); setBar($(big), v);
+  }
+}
+
+/* ---------- transcript ---------- */
+const feed = $("#feed"), list = $("#list");
+function nearBottom(){ return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 70; }
+function keepBottom(fn, added){
+  const stick = nearBottom();
+  fn();
+  if(stick) feed.scrollTop = feed.scrollHeight;
+  else if(added) $("#jump").hidden = false;
+}
+feed.addEventListener("scroll", () => { if(nearBottom()) $("#jump").hidden = true; });
+$("#jump").onclick = () => { feed.scrollTop = feed.scrollHeight; $("#jump").hidden = true; };
+
+function insertSorted(el){
+  const t = +el.dataset.t;
+  let node = list.lastElementChild;
+  while(node && +node.dataset.t > t) node = node.previousElementSibling;
+  list.insertBefore(el, node ? node.nextSibling : list.firstChild);
+}
+
+function onSpeaking(m){
+  let p = S.pend.get(m.seg);
+  if(m.phase === "discard"){ if(p){ p.remove(); S.pend.delete(m.seg); renderEmpty(); renderAnswerIfIdle(); } return; }
+  if(!p){
+    if(m.t0 == null) return;                           // a late update for a line that is already finished
+    p = document.createElement("article");
+    p.className = "entry pending " + m.source;
+    p.dataset.t = m.t0; p.dataset.src = m.source; p.dataset.born = Date.now();
+    p.innerHTML = `<div class="avatar">${esc(initials(label(m.source)))}</div><div class="body"><div class="meta"><span class="who">${esc(label(m.source))}</span><em class="state"></em><span class="mode"></span></div><p class="live-text" dir="auto"></p><div class="live-fa" ${trAttr()}></div><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><div class="skel"><i></i><i></i></div></div>`;
+    S.pend.set(m.seg, p);
+    keepBottom(() => insertSorted(p), true);
+    renderEmpty(); if(m.source === "them") renderAnswerIfIdle();
+  }
+  const tr = m.phase === "transcribing";
+  p.classList.toggle("transcribing", tr);
+  p.querySelector(".state").textContent = tr ? "writing…" : "speaking…";
+  if(m.text != null){
+    keepBottom(() => {
+      const lt = p.querySelector(".live-text"), w = m.text.split(/\s+/);
+      // settled words normal, the still-changing end lighter (it may change while the person speaks)
+      if(m.stable != null && m.stable < w.length)
+        lt.innerHTML = esc(w.slice(0, m.stable).join(" ")) + (m.stable ? " " : "") + `<span class="tail">${esc(w.slice(m.stable).join(" "))}</span>`;
+      else lt.textContent = m.text;
+    }, false);
+    p.classList.add("has-text");
+    p.querySelector(".mode").innerHTML = `<span class="live-tag" title="${m.live ? "Written while they speak" : "Updated every " + (S.speechMode?.every || 2) + " s while they speak — the final text comes when they pause"}">live</span>`;
+  }
+  if(m.translation != null) keepBottom(() => { p.querySelector(".live-fa").textContent = m.translation; }, false);
+}
+setInterval(() => { const now = Date.now(); S.pend.forEach((p, k) => { if(now - +p.dataset.born > 90000){ p.remove(); S.pend.delete(k); } }); }, 5000);
+
+function entryShell(e){
+  const el = document.createElement("article");
+  el.id = "e"+e.id; el.dataset.t = e.t0;
+  el.innerHTML = `<div class="avatar"></div><div class="body">
+    <div class="meta"><span class="who"></span><span class="time"></span><span class="tag" hidden></span><span class="edited" hidden>edited</span>
+      <button class="btn sm ghost act" title="Suggest an answer to this line">${icon("zap")}Answer this</button>
+      <button class="btn icon ghost edit" title="Correct this line (if a word was heard wrong) — it is translated again" aria-label="Correct this line">${icon("edit")}</button></div>
+    <p class="orig" dir="auto"></p><div class="fa" hidden></div>
+    <div class="explain" hidden><div class="q" dir="auto"></div><div class="x" ${trAttr()}></div></div><div class="ans-row"></div></div>`;
+  el.querySelector(".act").onclick = () => answerNow(e.id);
+  el.querySelector(".edit").onclick = () => startEdit(el, e.id);
+  return el;
+}
+function fillEntry(el, e){
+  el.className = "entry " + e.source + (el.classList.contains("latest") ? " latest" : "");
+  el.querySelector(".avatar").textContent = initials(label(e.source));
+  el.querySelector(".who").textContent = label(e.source);
+  el.querySelector(".time").textContent = clock(e.t0);
+  const tag = el.querySelector(".tag"); tag.hidden = !e.lang || (S.cfg?.languages || []).length < 2; tag.textContent = (e.lang||"").toUpperCase();
+  el.querySelector(".act").hidden = e.source === "me" && !S.cfg?.answer_me;
+  el.classList.toggle("answered", !!e.answer);
+  el.querySelector(".act").lastChild.textContent = e.answer ? "Answer again" : "Answer this";
+  if(!el.dataset.editing) el.querySelector(".orig").textContent = e.text;
+  el.querySelector(".edited").hidden = !e.edited;
+  const ex = el.querySelector(".explain"), xs = e.ex_state || "none";
+  ex.hidden = xs === "none";
+  if(!ex.hidden){
+    ex.querySelector(".q").textContent = "«" + (e.explain_q || "") + "»";
+    const x = ex.querySelector(".x");
+    if(xs === "thinking") x.innerHTML = `<span class="spinner"></span>`;
+    else if(xs === "error" && !e.explain){ x.textContent = "Explanation failed."; x.dir = "ltr"; }
+    else { x.dir = myLang().rtl ? "rtl" : "ltr"; x.lang = myLang().code; x.textContent = e.explain; }
+  }
+  const fa = el.querySelector(".fa");
+  fa.hidden = e.tr_state === "off";
+  fa.className = "fa"; fa.removeAttribute("dir"); fa.removeAttribute("lang");
+  if(e.tr_state === "pending" || (e.tr_state === "streaming" && !e.translation)){
+    fa.classList.add("pending"); fa.innerHTML = `<span class="spinner"></span>Translating…`;
+  } else if(e.tr_state === "error" && !e.translation){
+    fa.classList.add("err"); fa.textContent = "Translation failed.";
+  } else if(e.tr_state !== "off"){
+    fa.setAttribute("dir", myLang().rtl ? "rtl" : "ltr"); fa.setAttribute("lang", myLang().code);
+    fa.textContent = e.translation;
+    fa.classList.toggle("caret", e.tr_state === "streaming");
+  }
+  const row = el.querySelector(".ans-row");
+  const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
+  if(has){
+    row.innerHTML = `<button class="chip${S.panelId===e.id?" active":""}">${icon("sparkles")}${S.panelId===e.id ? "Answer shown on the right" : "Show suggested answer"}</button>`;
+    row.firstChild.onclick = () => { S.panelId = e.id; renderAnswer(); refreshChips(); };
+  } else if(e.ans_state === "thinking" && e.forced){
+    row.innerHTML = `<span class="chip muted"><span class="spinner"></span>Writing an answer…</span>`;
+  } else if(e.ans_state === "error"){
+    row.innerHTML = `<button class="chip err">${icon("alert")}Answer failed · retry</button>`;
+    row.firstChild.onclick = () => answerNow(e.id);
+  } else row.innerHTML = "";
+}
+function upsertEntry(e, silent){
+  S.entries.set(e.id, e);
+  (e.seg_ids||[]).forEach(id => { const p = S.pend.get(id); if(p){ p.remove(); S.pend.delete(id); } });
+  let el = document.getElementById("e"+e.id);
+  const added = !el;
+  keepBottom(() => {
+    if(!el){ el = entryShell(e); insertSorted(el); }
+    fillEntry(el, e);
+  }, added && !silent);
+  // the newest answer goes to the answer panel automatically
+  const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
+  const cur = S.panelId != null ? S.entries.get(S.panelId) : null;
+  const wanted = e.forced && S.forceId === e.id;
+  if(has && (!cur || e.id === S.panelId || e.t0 >= cur.t0 || wanted)){
+    if(wanted && e.ans_state === "done") S.forceId = null;
+    const changed = S.panelId !== e.id; S.panelId = e.id;
+    if(changed) refreshChips();
+  }
+  if(e.id === S.panelId && !has && e.ans_state === "none"){ /* keep the last shown answer */ }
+  if(e.id === S.panelId || has) renderAnswer();
+  renderThinking();
+  if(added) renderEmpty();
+  if(!has) renderAnswerIfIdle();
+  markLatest(); renderSumBtn();
+}
+function markLatest(){
+  let best = null;
+  S.entries.forEach(e => { if(e.source === "them" && (!best || e.t0 > best.t0)) best = e; });
+  $$("#list article.entry.latest").forEach(el => { if(!best || el.id !== "e" + best.id) el.classList.remove("latest"); });
+  if(best){ const el = document.getElementById("e" + best.id); if(el) el.classList.add("latest"); }
+  if(best && best.translation && !S.tipShown){
+    let seen = false; try{ seen = localStorage.getItem("ma.tip.select") === "1"; }catch{}
+    S.tipShown = true;
+    if(!seen) setTimeout(() => toast("info", "Tip: select words in a line to get their meaning in " + myLang().name + " or an answer about them. Press F8 to pause."), 800);
+    try{ localStorage.setItem("ma.tip.select", "1"); }catch{}
+  }
+}
+function refreshChips(){ $$(".ans-row .chip:not(.muted):not(.err)").forEach(c => { const id = +c.closest("article").id.slice(1); const on = id === S.panelId; c.classList.toggle("active", on); c.innerHTML = icon("sparkles") + (on ? "Answer shown on the right" : "Show suggested answer"); }); }
+
+/* ---------- empty / waiting state ---------- */
+function renderEmpty(){
+  const box = $("#empty");
+  const hasRows = S.entries.size > 0 || S.pend.size > 0;
+  if(hasRows){ box.hidden = true; return; }
+  box.hidden = false;
+  if(recActive()){
+    box.innerHTML = `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
+      <h3>Reading the recording…</h3><p>Lines and their ${esc(myLang().name)} translation appear here as the file is transcribed. Speakers are not told apart in a recording.</p></div>`;
+    return;
+  }
+  if(S.running){
+    box.innerHTML = `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
+      <h3>Listening…</h3><p>Lines appear here as soon as someone finishes a sentence. The ${esc(myLang().name)} translation follows right away, and suggested answers appear in the panel.</p></div>`;
+    return;
+  }
+  const c = S.cfg || {};
+  const keyOk = c.ready !== false;
+  box.innerHTML = `<div class="empty-card">
+    <div class="empty-icon">${icon("wave")}</div>
+    <h3>Ready when your meeting starts</h3>
+    <p>Press <b>Start</b>. What the other side says appears here with a ${esc(myLang().name)} translation. When you are asked a question, a suggested answer appears on the right.</p>
+    <ul class="checklist">
+      <li><span class="ck-icon ${keyOk?"done":""}">${icon(keyOk?"check":"key")}</span><span class="ck-body"><div class="ck-title">Services</div><div class="ck-sub">${keyOk ? esc(svcLine(c)) : "Needed to start — Groq is free, or use any other service"}</div></span><button class="btn sm ${keyOk?"ghost":"primary"}" data-go="connection">${keyOk?"Change":"Set up"}</button></li>
+      <li><span class="ck-icon ${c.context?"done":""}">${icon(c.context?"check":"text")}</span><span class="ck-body"><div class="ck-title">Meeting topic</div><div class="ck-sub">${c.context?esc(c.context):"Optional — improves answers"}</div></span><button class="btn sm ghost" data-go="meeting">${c.context?"Edit":"Add"}</button></li>
+      <li><span class="ck-icon ${c.about_me?"done":"todo"}">${icon(c.about_me?"check":"text")}</span><span class="ck-body"><div class="ck-title">About you</div><div class="ck-sub">${c.about_me ? esc(c.about_me) : "Recommended — otherwise answers contain [placeholders]"}</div></span><button class="btn sm ${c.about_me?"ghost":"soft"}" data-go="answers">${c.about_me?"Edit":"Add"}</button></li>
+      <li class="tip"><span class="ck-icon">${icon("headphones")}</span><span class="ck-body"><div class="ck-title">Tip: use headphones</div><div class="ck-sub">Then your microphone does not hear the other side</div></span><button class="btn sm ghost" data-go="audio">Test audio</button></li>
+    </ul>
+    <div class="empty-actions"><button class="btn primary lg" id="bigStart">${icon("play")}Start meeting<kbd>F9</kbd></button>${S.resume ? `<button class="btn ghost lg" id="bigResume">${icon("refresh")}Continue last meeting (${S.resume.lines} lines)</button>` : ""}</div>
+  </div>`;
+  box.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { openDrawer(b.dataset.go); if(b.dataset.go === "answers") setTimeout(() => $("#fAbout").focus(), 300); });
+  $("#bigStart").onclick = () => toggleRun(false);
+  const br = $("#bigResume"); if(br) br.onclick = () => toggleRun(true);
+}
+
+/* ---------- answer panel ---------- */
+function svcLine(c){
+  const T = c.tasks || {}, n = [...new Set(["stt", "tr", "ans"].map(t => (T[t] || {}).service).filter(Boolean))];
+  return n.length === 1 ? n[0] + " does everything" : ["stt", "tr", "ans"].map(t => `${(T[t] || {}).label}: ${(T[t] || {}).service}`).join(" · ");
+}
+function renderAnswer(){
+  const body = $("#answerBody");
+  const e = S.panelId != null ? S.entries.get(S.panelId) : null;
+  if(!e || !e.answer){
+    body.dataset.key = "";
+    const hearing = S.running && [...S.pend.values()].some(p => p.dataset.src === "them");
+    const thinking = [...S.entries.values()].some(x => x.ans_state === "thinking");
+    const tried = [...S.entries.values()].filter(x => x.ans_state && !["off", "none"].includes(x.ans_state)).sort((a, b) => a.t0 - b.t0).pop();
+    const failed = !thinking && tried && tried.ans_state === "error";
+    body.innerHTML = failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>Press <kbd>F2</kbd> to try again. The log (bottom right) says why.</span></div>`
+      : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>Writing an answer…</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
+      : hearing ? `<div class="answer-empty listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><b>Listening to the question…</b><span>The answer appears here as soon as they finish.</span></div>`
+      : `<div class="answer-empty">${icon("sparkles")}<b>No question yet</b><span>When the other side asks something, the answer to say appears here.<br>Press <kbd>F2</kbd> to answer the last thing they said.</span></div>`;
+    return;
+  }
+  const streaming = e.ans_state === "streaming";
+  const showFa = S.cfg?.answer_fa && e.answer_fa;
+  const key = [e.id, !!showFa, !!(e.translation && !e.question), e.question || e.text, e.forced, S.running].join("|");
+  if(body.dataset.key === key && body.querySelector(".a-text")){
+    const at = body.querySelector(".a-text");
+    if(at.textContent !== e.answer) at.textContent = e.answer;
+    at.classList.toggle("caret", streaming && !e.answer_fa);
+    const fp = body.querySelector(".a-fa p");
+    if(fp){ if(fp.textContent !== e.answer_fa) fp.textContent = e.answer_fa; fp.classList.toggle("caret", streaming); }
+    const qf = body.querySelector(".q-fa");
+    if(qf && qf.textContent !== e.translation) qf.textContent = e.translation;
+    body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8);
+    return;
+  }
+  body.dataset.key = key;
+  body.innerHTML = `
+    <div class="q-block">
+      <div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc(label(e.source))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>
+      <p class="q-orig" dir="auto"></p>
+      ${e.translation && !e.question ? `<p class="q-fa" ${trAttr()}></p>` : ""}
+    </div>
+    <p class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></p>
+    ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
+  body.querySelector(".q-orig").textContent = e.question || e.text;
+  if(e.translation && !e.question) body.querySelector(".q-fa").textContent = e.translation;
+  body.querySelector(".a-text").textContent = e.answer;
+  if(showFa) body.querySelector(".a-fa p").textContent = e.answer_fa;
+  requestAnimationFrame(() => body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8));
+  if(S.flashId !== e.id){ S.flashId = e.id; const a = body.querySelector(".a-text"); a.classList.add("fresh"); setTimeout(() => a.classList.remove("fresh"), 900); }
+}
+$("#answerBody").addEventListener("scroll", () => { const b = $("#answerBody"); b.classList.toggle("more", b.scrollHeight - b.scrollTop - b.clientHeight > 8); });
+function renderAnswerIfIdle(){
+  const e = S.panelId != null ? S.entries.get(S.panelId) : null;
+  if(!e || !e.answer) renderAnswer();
+}
+function renderThinking(){
+  const cur = S.panelId != null ? S.entries.get(S.panelId) : null;
+  let show = false;
+  S.entries.forEach(e => { if((e.ans_state === "thinking" || e.ans_state === "streaming") && (!cur || e.t0 >= cur.t0 || e.id === S.forceId)) show = true; });
+  $("#thinking").hidden = !show;
+}
+async function answerNow(entryId){
+  const now = Date.now(), k = String(entryId);
+  if(S.lastAsk && S.lastAsk.k === k && now - S.lastAsk.t < 1500) return;      // double click
+  S.lastAsk = {k, t: now};
+  S.forceId = entryId != null ? entryId : null;
+  const r = await api("answer_now", entryId != null ? {entry_id:entryId} : {});
+  if(!r.ok) toast("warn", r.error || "Could not answer.");
+}
+$("#answerNowBtn").onclick = () => answerNow();
+
+/* ---------- title, pause ---------- */
+function renderTitle(){
+  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : "Live transcript";
+}
+async function togglePause(){
+  if(!S.running) return;
+  const r = await api("pause", {on: !S.paused});
+  if(!r.ok) return toast("warn", r.error || "Could not pause.");
+  S.paused = r.paused; renderRunning();
+  if(S.paused){ S.pend.forEach(p => p.remove()); S.pend.clear(); renderEmpty(); }
+}
+$("#pauseBtn").onclick = togglePause;
+$("#helpBtn").onclick = ev => { ev.stopPropagation(); $("#helpPop").hidden = !$("#helpPop").hidden; };
+document.addEventListener("click", ev => { if(!$("#helpPop").hidden && !$("#helpPop").contains(ev.target)) $("#helpPop").hidden = true; });
+
+/* ---------- select words -> answer / explain ---------- */
+const selPop = $("#selPop");
+function hideSel(){ selPop.hidden = true; S.sel = null; }
+function checkSel(){
+  const sel = window.getSelection();
+  const txt = sel ? sel.toString().replace(/\s+/g, " ").trim() : "";
+  if(!txt || txt.length < 2 || !sel.rangeCount){ hideSel(); return; }
+  const range = sel.getRangeAt(0);
+  // only words of ONE spoken line (not the translation or the answer)
+  const node = range.commonAncestorContainer, el = node.nodeType === 1 ? node : node.parentElement;
+  const orig = el && el.closest(".orig"), art = orig && orig.closest("article.entry");
+  if(!art || art.classList.contains("pending") || !list.contains(art) || art.dataset.editing){ hideSel(); return; }
+  S.sel = {id: +art.id.slice(1), text: txt.slice(0, 600)};
+  const r = range.getBoundingClientRect();
+  selPop.hidden = false;
+  const w = selPop.offsetWidth, h = selPop.offsetHeight;
+  const x = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+  const y = r.top - h - 8 > 60 ? r.top - h - 8 : r.bottom + 8;
+  selPop.style.left = x + "px"; selPop.style.top = y + "px";
+}
+document.addEventListener("mouseup", ev => { if(!selPop.contains(ev.target)) setTimeout(checkSel, 0); });
+feed.addEventListener("scroll", hideSel);
+selPop.addEventListener("mousedown", ev => ev.preventDefault());           // keep the selection
+selPop.querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
+  const s = S.sel; if(!s) return;
+  hideSel(); window.getSelection().removeAllRanges();
+  if(b.dataset.a === "answer"){
+    S.forceId = s.id;
+    const r = await api("answer_now", {entry_id: s.id, text: s.text});
+    if(!r.ok) toast("warn", r.error || "Could not answer.");
+  } else {
+    const r = await api("explain", {entry_id: s.id, text: s.text});
+    if(!r.ok) toast("warn", r.error || "Could not explain.");
+  }
+});
+
+/* ---------- correct a line by hand ---------- */
+function startEdit(el, id){
+  const o = el.querySelector(".orig"), old = o.textContent;
+  if(el.dataset.editing) return;
+  el.dataset.editing = "1"; hideSel();
+  o.contentEditable = "plaintext-only";
+  if(o.contentEditable !== "plaintext-only") o.contentEditable = "true";
+  o.focus();
+  const rg = document.createRange(); rg.selectNodeContents(o); const sl = window.getSelection(); sl.removeAllRanges(); sl.addRange(rg);
+  const hint = document.createElement("div"); hint.className = "edit-hint"; hint.textContent = "Enter = save and translate again · Esc = cancel";
+  o.after(hint);
+  let done = false;
+  const finish = async save => {
+    if(done) return; done = true;
+    o.contentEditable = "false"; hint.remove(); delete el.dataset.editing;
+    const t = o.textContent.replace(/\s+/g, " ").trim();
+    if(!save || !t || t === old){ o.textContent = old; return; }
+    const r = await api("edit_entry", {entry_id: id, text: t});
+    if(!r.ok){ o.textContent = old; toast("warn", r.error || "Could not save."); }
+    else if(!r.changed) o.textContent = old;
+  };
+  o.onkeydown = ev => {
+    if(ev.isComposing) return;
+    if(ev.key === "Enter" && !ev.shiftKey){ ev.preventDefault(); finish(true); }
+    else if(ev.key === "Escape"){ ev.preventDefault(); ev.stopPropagation(); finish(false); }
+  };
+  o.onblur = () => finish(true);
+}
+
+/* ---------- copy the whole transcript ---------- */
+$("#copyAllBtn").onclick = async () => {
+  const rows = [...S.entries.values()].sort((a, b) => a.t0 - b.t0);
+  if(!rows.length) return toast("warn", "The transcript is empty.");
+  const out = rows.map(e => `[${clock(e.t0)}] ${label(e.source)}: ${e.text}` + (e.translation ? `\n    ${e.translation}` : "")
+    + (e.answer ? `\n    → ${e.answer}` : "")).join("\n");
+  try{ await navigator.clipboard.writeText(out + (S.summary ? "\n\n" + S.summary : "")); toast("ok", `Transcript copied (${rows.length} lines).`); }
+  catch{ toast("error", "Could not copy."); }
+};
+
+/* ---------- summary ---------- */
+function mdLite(t){
+  const out = []; let ul = false;
+  const inline = x => esc(x).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  String(t || "").split(/\n/).forEach(line => {
+    const l = line.trim();
+    const li = /^[-*•]\s+/.test(l);
+    if(!l) return;                                          // a blank line inside a list keeps the list
+    if(!li && ul){ out.push("</ul>"); ul = false; }
+    if(/^#{1,4}\s/.test(l)) out.push(`<h3>${inline(l.replace(/^#+\s*/, ""))}</h3>`);
+    else if(li){ if(!ul){ out.push("<ul>"); ul = true; } out.push(`<li>${inline(l.replace(/^[-*•]\s+/, ""))}</li>`); }
+    else out.push(`<p>${inline(l)}</p>`);
+  });
+  if(ul) out.push("</ul>");
+  return out.join("");
+}
+function showSummary(){ $("#sumModal").hidden = false; }
+function onSummary(m){
+  if(m.session_file && S.sessionFile && m.session_file !== S.sessionFile) return;
+  S.sumState = m.state;
+  if(m.text) $("#sumBody").innerHTML = mdLite(m.text);
+  const note = $("#sumNote");
+  if(m.state === "working"){ if(!m.text) $("#sumBody").innerHTML = ""; note.innerHTML = `<span class="spinner"></span>${esc(m.note || "Writing…")}`; }
+  else if(m.state === "streaming") note.innerHTML = `<span class="spinner"></span>Writing…`;
+  else if(m.state === "done"){ S.summary = m.text; note.innerHTML = `${icon("check")}Saved at the end of the meeting file.`; }
+  else if(m.state === "error") note.innerHTML = `${icon("alert")}${esc(m.note || "The summary failed.")}`;
+  $("#sumAgain").disabled = ["working", "streaming"].includes(m.state);
+}
+async function makeSummary(){
+  if(["working", "streaming"].includes(S.sumState)) return showSummary();
+  S.sumState = "working";                                   // a second click never starts a second summary
+  $("#sumBody").innerHTML = ""; $("#sumNote").innerHTML = `<span class="spinner"></span>Starting…`; showSummary();
+  $("#sumAgain").disabled = true;
+  const r = await api("summary");
+  if(!r.ok){ S.sumState = "error"; $("#sumNote").innerHTML = `${icon("alert")}${esc(r.error || "Could not start.")}`; $("#sumAgain").disabled = false; }
+}
+$("#summaryBtn").onclick = () => {
+  if(["working", "streaming"].includes(S.sumState)) return showSummary();
+  if(S.summary && !S.running){ $("#sumBody").innerHTML = mdLite(S.summary); $("#sumNote").innerHTML = ""; $("#sumAgain").disabled = false; return showSummary(); }
+  makeSummary();
+};
+$("#sumAgain").onclick = makeSummary;
+$("#sumClose").onclick = () => { $("#sumModal").hidden = true; };
+$("#sumModal").onclick = ev => { if(ev.target.id === "sumModal") $("#sumModal").hidden = true; };
+$("#sumCopy").onclick = async () => {
+  const t = $("#sumBody").innerText.trim(); if(!t) return;
+  try{ await navigator.clipboard.writeText(t); toast("ok", "Summary copied."); }catch{ toast("error", "Could not copy."); }
+};
+
+/* ---------- transcribe a recording ---------- */
+function renderSumBtn(){ const b = $("#summaryBtn"); if(b) b.disabled = S.entries.size < 2; }
+function recActive(){ return !!(S.rec && ["starting", "reading", "finishing"].includes(S.rec.state)); }
+function renderRec(){
+  const b = $("#recBar"), j = S.rec;
+  b.hidden = !recActive();
+  if(!j || b.hidden) return;
+  b.querySelector(".rname").textContent = j.name;
+  const pct = j.total ? Math.min(100, Math.round(j.pos / j.total * 100)) : null;
+  b.querySelector(".dlbar i").style.width = (pct == null ? 0 : pct) + "%";
+  b.querySelector(".rtext").textContent = (j.state === "finishing" ? "Finishing the last lines… · " : "")
+    + fmtDur(j.pos) + (j.total ? " / " + fmtDur(j.total) + " (" + pct + "%)" : "") + " · " + j.lines + " lines";
+}
+$("#recBtn").onclick = () => openBrowser("audio", startRecording);
+async function startRecording(path){
+  $("#recBtn").disabled = true;
+  const r = await api("recording", {path});
+  $("#recBtn").disabled = false;
+  if(!r.ok){
+    if(r.error === "setup"){ openDrawer("connection"); toast("warn", "Setup is not complete: " + (r.missing || []).join("; ") + "."); }
+    else toast("error", r.error || "Could not open the recording.");
+  }
+};
+$("#recCancel").onclick = () => api("recording", {cancel: true});
+/* ---------- folder browser (inside the window: a Windows dialog would often open behind it) ---------- */
+const BR = {kind: "model", onPick: null, path: ""};
+function openBrowser(kind, onPick){
+  BR.kind = kind; BR.onPick = onPick;
+  $("#brTitle span:last-child").textContent = kind === "model" ? "Choose a model folder" : "Choose a recording";
+  $("#brModal").hidden = false; brLoad("");
+}
+function closeBrowser(){ $("#brModal").hidden = true; }
+async function brLoad(path){
+  const list = $("#brList"), my = (BR.req = (BR.req || 0) + 1);
+  list.innerHTML = `<div class="br-empty"><span class="spinner"></span></div>`;
+  const r = await api("browse", {path, kind: BR.kind});
+  if(my !== BR.req) return;                                 // a newer folder was asked for meanwhile
+  $("#brPlaces").innerHTML = (r.places || []).map(p => `<button data-p="${esc(p.path)}" title="${esc(p.path)}">${esc(p.name)}</button>`).join("");
+  $("#brPlaces").querySelectorAll("button").forEach(b => b.onclick = () => brLoad(b.dataset.p));
+  if(!r.ok){ list.innerHTML = `<div class="br-empty">${esc(r.error || "Cannot open.")}</div>`; if(r.path) $("#brPath").value = r.path; return; }
+  BR.path = r.path; BR.parent = r.parent; $("#brPath").value = r.path; $("#brUp").disabled = !r.parent;
+  const rows = r.dirs.map(d => `<button class="br-row${d.model ? " model" : ""}" data-d="${esc(d.path)}">${icon("folder")}<span class="n">${esc(d.name)}</span>${d.model ? `<span class="tag">model</span>` : ""}</button>`)
+    .concat(r.files.map(f => `<button class="br-row" data-f="${esc(f.path)}">${icon("file")}<span class="n">${esc(f.name)}</span><span class="m">${f.mb} MB</span></button>`));
+  list.innerHTML = rows.join("") || `<div class="br-empty">${BR.kind === "model" ? "No folders here." : "No audio or video files here."}</div>`;
+  if(r.more) list.insertAdjacentHTML("beforeend", `<div class="br-empty">Only the first 400 are shown — type the path above.</div>`);
+  list.querySelectorAll("[data-d]").forEach(b => b.onclick = () => brLoad(b.dataset.d));
+  list.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { closeBrowser(); BR.onPick && BR.onPick(b.dataset.f); });
+  const use = $("#brUse");
+  use.hidden = BR.kind !== "model" || !r.is_model;
+  $("#brHint").textContent = BR.kind === "model"
+    ? (r.is_model ? "This folder is a model." : "Open the model's folder (the one that contains model.bin).")
+    : "Click a file to transcribe it.";
+  list.scrollTop = 0;
+}
+$("#brClose").onclick = closeBrowser;
+$("#brModal").onclick = ev => { if(ev.target.id === "brModal") closeBrowser(); };
+$("#brUp").onclick = () => { if(BR.parent) brLoad(BR.parent); };
+$("#brGo").onclick = () => brLoad($("#brPath").value.trim());
+$("#brPath").onkeydown = ev => { if(ev.key === "Enter"){ ev.preventDefault(); brLoad($("#brPath").value.trim()); } };
+$("#brUse").onclick = () => { closeBrowser(); BR.onPick && BR.onPick(BR.path); };
+
+$("#copyBtn").onclick = async () => {
+  const e = S.entries.get(S.panelId);
+  if(!e || !e.answer) return toast("warn", "There is no answer to copy yet.");
+  try{ await navigator.clipboard.writeText(e.answer); toast("ok", "Answer copied."); }catch{ toast("error", "Could not copy."); }
+};
+function bumpAnswerSize(d){ if(!S.cfg) return; const v = Math.max(14, Math.min(48, (S.cfg.answer_size||24) + d)); S.cfg.answer_size = v; applyConfig(); queueSave({answer_size:v}); }
+$("#aSmaller").onclick = () => bumpAnswerSize(-2);
+$("#aBigger").onclick = () => bumpAnswerSize(2);
+
+/* ---------- footer ---------- */
+function renderFooter(){
+  const n = S.net || {}, net = $("#sbNet");
+  const via = S.proxy && S.proxy[0] ? ` · via proxy` : "";
+  let dot = "", txt = "Not connected yet";
+  if(n.ok === true){ dot = "ok"; txt = `<b>${esc(n.name || "Groq")}</b> ${n.ms!=null ? n.ms+" ms" : "connected"}${via}`; }
+  else if(n.ok === false){ dot = "bad"; txt = `<b>Offline</b> ${esc(n.error||"")}`; }
+  net.innerHTML = `<span class="dot ${dot}"></span><span class="ellipsis">${txt}</span>`;
+  net.title = n.error || (S.proxy[0] ? "Proxy: "+S.proxy[0] : "");
+  const st = S.stats || {}, f = (v, plus) => v==null ? "–" : (plus ? "+" : "") + v.toFixed(1) + "s";
+  $("#sbDelay").innerHTML = (st.text!=null || S.running) ? `Delay after speech: text <b>${f(st.text)}</b> · translation <b>${f(st.translation, 1)}</b> · answer <b>${f(st.answer, 1)}</b>` : "";
+  const sm = S.running ? S.speechMode : null;
+  $("#sbMode").innerHTML = !sm ? "" : sm.mode === "live" ? `Live text · ${esc(sm.service)}`
+    : sm.mode === "preview" ? `Text updates every ${sm.every} s` + (sm.service !== (S.net || {}).name ? ` · ${esc(sm.service)}` : "")
+    : sm.mode === "local" ? `Text every ${sm.every} s · this computer`
+    : `Text after each sentence · ${esc(sm.service)}`;
+  $("#sbMode").title = !sm ? "" : sm.mode === "local" ? `${sm.service} writes the text on this computer every ${sm.every} s · final text: ${sm.final}` : "How the other side's words are written";
+  const q = S.quota, qe = $("#sbQuota");
+  qe.className = "sb";
+  if(q){
+    if(q.blocked){ qe.classList.add("warn"); qe.innerHTML = `${icon("alert")}<b>Free limit reached</b> · ${q.waiting} waiting`; }
+    else qe.innerHTML = (S.running && q.speech_left >= 25) ? "" : `Speech quota <b>${q.speech_left}%</b>` + (q.cooling && q.cooling.length ? ` · backup model in use` : "");
+    if(q.speech_left < 25 && !q.blocked) qe.classList.add("warn");
+    qe.title = "Groq free plan: speech-to-text allowance left for this hour";
+  } else qe.innerHTML = "";
+  const us = S.usage || {}, all = Object.keys(us), names = all.filter(n => n !== "Local model");
+  const ue = $("#sbUsage");
+  if(all.length){
+    const lm = us["Local model"];
+    const tot = names.reduce((a, n) => ({r: a.r + (us[n].requests ?? 0), t: a.t + (us[n].tokens ?? 0), a: a.a + (us[n].audio ?? 0)}), {r: 0, t: 0, a: 0});
+    const k = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+    ue.innerHTML = `This meeting: <b>${tot.r}</b> requests · <b>~${k(tot.t)}</b> tokens · <b>${(tot.a / 60).toFixed(1)}</b> min audio`;
+    ue.title = all.map(n => `${n}: ${us[n].requests ?? 0} requests, ~${k(us[n].tokens ?? 0)} tokens, ${((us[n].audio ?? 0) / 60).toFixed(1)} min audio`).join("\n");
+  } else ue.innerHTML = "";
+  const sv = $("#sbSave");
+  const html = `<button class="linkbtn" id="logLink">Log</button>` + (S.sessionFile ? `<span title="${esc(basename(S.sessionFile))}">${icon("check")} Saved</span><button class="linkbtn" id="openFolder">Open folder</button>`
+                               : `<button class="linkbtn" id="openFolder">${icon("folder")} Saved meetings</button>`);
+  if(sv.dataset.html !== html){
+    sv.dataset.html = html; sv.innerHTML = html;
+    $("#openFolder").onclick = async () => { const r = await api("open_folder"); if(!r.ok) toast("error", r.error || "Could not open it."); };
+    $("#logLink").onclick = () => openDrawer("log");
+  }
+}
+
+/* ---------- toasts & banner ---------- */
+const recentToasts = new Map();
+function toast(level, text){
+  const now = Date.now();
+  if(recentToasts.get(text) > now - 4000) return;
+  recentToasts.set(text, now);
+  if(recentToasts.size > 60) for(const [k, t] of recentToasts) if(t < now - 4000) recentToasts.delete(k);
+  const t = document.createElement("div");
+  t.className = "toast " + (level||"info");
+  t.innerHTML = icon(level==="error"||level==="warn" ? "alert" : level==="ok" ? "check" : "info") + `<div class="msg"></div><button class="x" aria-label="Dismiss">${icon("x")}</button>`;
+  t.querySelector(".msg").textContent = text;
+  if(level === "error" || level === "warn"){
+    const d = document.createElement("button"); d.className = "details"; d.textContent = "Show details in log";
+    d.onclick = () => { t.remove(); openDrawer("log"); };
+    t.querySelector(".msg").appendChild(d);
+  }
+  t.querySelector(".x").onclick = () => t.remove();
+  $("#toasts").appendChild(t);
+  while($("#toasts").children.length > 4) $("#toasts").firstChild.remove();
+  // during a meeting a problem stays until you close it (you may not be looking at the screen)
+  if(!(level === "error" && S.running)) setTimeout(() => t.remove(), level === "error" ? 12000 : level === "warn" ? 8000 : 4500);
+}
+function showBanner(level, text, kind){ const b = $("#banner"); b.className = "banner " + (level==="warn"?"warn":""); b.innerHTML = icon("alert") + `<span>${esc(text)}</span>`; b.hidden = false; b.dataset.kind = kind || ""; }
+function hideBanner(){ const b = $("#banner"); b.hidden = true; b.dataset.kind = ""; }
+
+/* ---------- setup drawer ---------- */
+function openDrawer(tab){
+  selectTab(tab || S.lastTab || (S.cfg && !S.cfg.ready ? "connection" : "meeting"));
+  $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); $("#drawer").setAttribute("aria-hidden","false"); $("#drawer").inert = false;
+  fillDrawer(true);
+}
+function closeDrawer(){
+  const d = $("#drawer"), wasOpen = d.classList.contains("open");
+  d.classList.remove("open"); $("#scrim").classList.remove("open"); d.setAttribute("aria-hidden","true"); d.inert = true;
+  if(wasOpen) $("#setupBtn").focus({preventScroll: true, focusVisible: false});
+}
+function selectTab(name){
+  S.lastTab = name;
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  $$(".pane").forEach(p => p.classList.toggle("active", p.dataset.pane === name));
+  if(name === "audio") loadDevices();
+  if(name === "log"){ $("#logDot").hidden = true; const b = $("#logBox"); setTimeout(() => b.scrollTop = b.scrollHeight, 0); }
+}
+$$(".tab").forEach(t => t.onclick = () => selectTab(t.dataset.tab));
+$("#setupBtn").onclick = () => openDrawer();
+$("#testBadge").onclick = () => openDrawer("answers");
+$("#closeDrawer").onclick = closeDrawer; $("#doneBtn").onclick = closeDrawer; $("#scrim").onclick = closeDrawer;
+
+function langOptions(sel, first){
+  const c = S.cfg, codes = Object.keys(c.langs || {}).sort((a,b) => langName(a).localeCompare(langName(b)));
+  const html = (first || "") + codes.map(k => `<option value="${k}">${esc(langName(k))}${c.langs[k][1] !== langName(k) ? " · " + esc(c.langs[k][1]) : ""}</option>`).join("");
+  if(sel.dataset.html !== html){ sel.innerHTML = html; sel.dataset.html = html; }
+}
+function renderLangs(){
+  const c = S.cfg, box = $("#langChips"), cur = c.languages || [];
+  const html = cur.map(k => `<span class="lchip">${esc(langName(k))}${cur.length > 1 ? `<button data-rm="${k}" title="Remove" aria-label="Remove ${esc(langName(k))}">×</button>` : ""}</span>`).join("")
+    + (cur.length < 6 ? `<select class="input" id="langAdd" aria-label="Add a language"></select>` : "");
+  if(box.dataset.html !== html){
+    box.innerHTML = html; box.dataset.html = html;
+    const add = $("#langAdd");
+    if(add){
+      langOptions(add, `<option value="">+ Add a language…</option>`);
+      [...add.options].forEach(o => { if(cur.includes(o.value)) o.remove(); });
+      add.onchange = () => { if(!add.value) return; setLangs([...cur, add.value]); };
+    }
+    box.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => setLangs(cur.filter(x => x !== b.dataset.rm)));
+  }
+  langOptions($("#fMyLang"));
+  langOptions($("#fAnsLang"), `<option value="same">Same language as the question</option>`);
+}
+function setLangs(list){
+  S.cfg.languages = list; renderLangs(); queueSave({languages: list});
+}
+function fillDrawer(force){
+  const c = S.cfg; if(!c) return;
+  renderLangs();
+  $$("[data-key]").forEach(el => {
+    const k = el.dataset.key, v = c[k];
+    if(!force && document.activeElement === el) return;
+    if(el.classList.contains("seg") || el.classList.contains("opt-cards")){
+      el.querySelectorAll("[data-val]").forEach(b => b.classList.toggle(el.classList.contains("seg")?"on":"on", b.dataset.val === v));
+    } else if(el.type === "checkbox") el.checked = !!v;
+    else if(el.tagName === "SELECT"){ /* filled by loadDevices */ if([...el.options].some(o=>o.value===v)) el.value = v; }
+    else if(el.value !== String(v ?? "")) el.value = v ?? "";
+  });
+  const kh = $("#keyHint");
+  kh.hidden = !c.has_key; kh.innerHTML = c.has_key ? `${icon("check")} Key saved (${esc(c.key_hint||"")}). Paste a new one to replace it.` : "";
+  $("#keyWelcome").hidden = c.has_key;
+  renderServices(); renderLocal();
+  const [p, src] = S.proxy || ["",""];
+  const ns = $("#netSummary"); ns.className = "opt-state" + (p ? "" : " off"); ns.textContent = p ? "proxy " + p : "direct connection";
+  $("#proxyHelp").textContent = p ? (src === "system" ? `Using your Windows proxy automatically: ${p}` : `Using: ${p}`)
+                                  : "No proxy found. That is fine if your VPN works in TUN / global mode. Otherwise enter your VPN app's HTTP proxy, for example http://127.0.0.1:10809";
+}
+
+let saveTimer = null, pendingSave = {}, saveFails = 0;
+function queueSave(obj){
+  Object.assign(pendingSave, obj);
+  clearTimeout(saveTimer);
+  $("#savedState").className = "saved"; $("#savedState").textContent = "Saving…";
+  saveTimer = setTimeout(async () => {
+    const body = pendingSave; pendingSave = {};
+    const r = await api("save_config", body);
+    if(r.ok){ saveFails = 0; S.cfg = r.config; applyConfig(); renderGroq(); renderOverview(); $("#savedState").className = "saved show"; $("#savedState").innerHTML = icon("check")+"Saved"; }
+    else {
+      // keep what was typed (newer changes win) and try again, so nothing is silently lost
+      pendingSave = Object.assign({}, body, pendingSave);
+      saveFails++;
+      $("#savedState").className = "saved show"; $("#savedState").textContent = "Not saved yet — retrying…";
+      if(saveFails === 1) toast("error", (r.error || "Could not save.") + " Retrying…");
+      if(saveFails <= 5) queueSave({}); else { $("#savedState").textContent = "Not saved"; toast("error", "Settings could not be saved. Check the log."); }
+    }
+  }, saveFails ? 3000 : 450);
+}
+$$("[data-key]").forEach(el => {
+  const k = el.dataset.key;
+  if(el.classList.contains("seg") || el.classList.contains("opt-cards")){
+    el.querySelectorAll("[data-val]").forEach(b => b.onclick = () => {
+      el.querySelectorAll("[data-val]").forEach(x => x.classList.toggle("on", x === b));
+      S.cfg[k] = b.dataset.val; if(k === "theme") applyConfig();
+      queueSave({[k]: b.dataset.val});
+    });
+  } else if(el.type === "checkbox"){
+    el.onchange = () => { S.cfg[k] = el.checked; queueSave({[k]: el.checked}); };
+  } else if(el.type === "range"){
+    el.oninput = () => { S.cfg[k] = +el.value; if(k === "text_size") applyConfig(); queueSave({[k]: +el.value}); };
+  } else if(el.tagName === "SELECT"){
+    el.onchange = () => queueSave({[k]: el.value});
+  } else {
+    el.oninput = () => queueSave({[k]: el.value});
+  }
+});
+$$("[data-fill]").forEach(b => b.onclick = () => {
+  const k = b.dataset.fill, el = $(`[data-key="${k}"]`);
+  el.value = b.dataset.text; el.focus(); queueSave({[k]: el.value});
+});
+
+/* API key */
+let keyTimer = null;
+$("#fKey").addEventListener("input", () => {
+  clearTimeout(keyTimer);
+  const v = $("#fKey").value.trim();
+  if(v.length < 20) return;
+  keyTimer = setTimeout(async () => {
+    const r = await api("save_config", {api_key: v});
+    if(r.ok){ S.cfg = r.config; $("#fKey").value = ""; $("#fKey").type = "password"; applyConfig(); fillDrawer(true); testConnection(); }
+  }, 600);
+});
+$("#showKey").onclick = () => { const k = $("#fKey"); k.type = k.type === "password" ? "text" : "password"; };
+async function testConnection(){
+  const res = $("#connResult"), btn = $("#testConn");
+  btn.disabled = true; res.hidden = false; res.className = "result"; res.innerHTML = `<span class="spinner"></span>Testing…`;
+  const r = await api("test_connection", {api_key: $("#fKey").value.trim(), proxy: $("#fProxy").value.trim()});
+  btn.disabled = false;
+  if(r.ok){
+    res.className = "result ok";
+    res.innerHTML = `${icon("check")}<span><b>Connected.</b> Response time ${r.ms} ms${r.proxy?" through "+esc(r.proxy):""}. ${r.stt_models}/2 speech models and ${r.chat_models}/3 answer models available.${r.ms>900?" The connection is slow — a faster VPN server will make everything quicker.":""}</span>`;
+  } else {
+    res.className = "result bad";
+    res.innerHTML = `${icon("alert")}<span>${esc(r.error || "Failed.")}</span>`;
+  }
+}
+$("#testConn").onclick = testConnection;
+
+/* devices */
+async function loadDevices(){
+  if(!S.cfg) return;                       // not connected yet: filled when the program answers
+  const r = await api("devices");
+  const fill = (sel, names, def, cur) => {
+    sel.innerHTML = `<option value="">Windows default${def ? " — "+esc(def) : ""}</option>` + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    if(cur && !names.includes(cur)) sel.insertAdjacentHTML("beforeend", `<option value="${esc(cur)}">${esc(cur)} (not connected)</option>`);
+    sel.value = cur || "";
+  };
+  if(!r.ok && r.error){ toast("error", r.error); }
+  fill($("#fMic"), r.mics||[], r.default_mic, S.cfg.mic_device);
+  fill($("#fSpk"), r.speakers||[], r.default_speaker, S.cfg.speaker_device);
+}
+$("#refreshDevices").onclick = loadDevices;
+$("#monitorBtn").onclick = async () => {
+  const r = await api("monitor", {on: !S.monitoring});
+  if(!r.ok) toast("error", r.error || "Could not test audio.");
+};
+
+/* ---------- other services ---------- */
+const IRANIAN = new Set(["avalai", "gapgpt"]);
+const isSttModel = m => /whisper|transcri|voxtral|speech|stt|audio/i.test(m);
+const isChatModel = m => !isSttModel(m) && !/embed|tts|dall|image|moderation|rerank|vision-only|guard/i.test(m);
+const GROQ_MODELS = {stt: ["whisper-large-v3-turbo", "whisper-large-v3"],
+                     tr: ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"],
+                     ans: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"]};
+let provTimers = {};
+
+const AV_COLORS = {openai:"#10a37f", avalai:"#2563eb", gapgpt:"#7c3aed", openrouter:"#6366f1", gemini:"#1a73e8",
+                   cerebras:"#f97316", mistral:"#ff7000", deepgram:"#13ef93", custom:"#64748b"};
+S.openCards = new Set();
+function usedFor(pid){
+  const c = S.cfg, names = {stt: "speech to text", tr: "translation", ans: "answers"};
+  return ["stt", "tr", "ans"].filter(t => c[t + "_provider"] === pid).map(t => names[t]);
+}
+function provChip(p){
+  const c = p.caps || {};
+  if(!p.has_key) return ["warn", "Key needed"];
+  if(!c.at) return ["", "Not tested"];
+  const stt = c.stt && c.stt.ok, chat = c.chat && c.chat.ok;
+  if(stt && chat) return ["ok", "Does everything"];
+  if(stt) return ["part", "Speech to text only"];
+  if(chat) return ["part", "Translation & answers"];
+  return ["bad", "Not working"];
+}
+function renderProviders(){
+  const box = $("#provList");
+  const provs = S.cfg.providers || [];
+  const ids = new Set(provs.map(p => p.id));
+  box.querySelectorAll(".svc-card").forEach(c => { if(!ids.has(c.dataset.id)) c.remove(); });
+  provs.forEach(p => {
+    let card = box.querySelector(`.svc-card[data-id="${p.id}"]`);
+    if(!card){
+      card = document.createElement("div");
+      card.className = "svc-card"; card.dataset.id = p.id;
+      card.innerHTML = `<div class="svc-top" tabindex="0" role="button"><span class="svc-avatar"></span>
+          <div class="svc-title"><div class="svc-name"><span class="nm"></span><span class="tags"></span></div><div class="svc-sub"></div></div>
+          <span class="schip"></span><span class="chev"></span></div>
+        <div class="svc-body">
+          <div class="field"><label>API key</label><input class="input key" type="password" autocomplete="off" spellcheck="false"></div>
+          <div class="svc-grid">
+            <div class="field"><label>Name</label><input class="input name" aria-label="Name"></div>
+            <div class="field"><label>Address (base URL)</label><input class="input url" spellcheck="false" placeholder="https://…/v1"></div>
+          </div>
+          <label class="toggle"><input type="checkbox" class="px"><span class="switch"></span><span class="tt"><b>Connect through the VPN / proxy</b><span>Turn off for Iranian services — they often block foreign connections.</span></span></label>
+          <div class="svc-foot"><button class="btn sm primary test">${icon("zap")}Test</button><span class="res help"></span>
+            <button class="btn sm ghost rm" title="Remove this service">${icon("trash")}Remove</button></div>
+          <div class="caps"></div>
+        </div>`;
+      box.appendChild(card);
+      const top = card.querySelector(".svc-top");
+      const toggle = () => { card.classList.toggle("open"); card.classList.contains("open") ? S.openCards.add(p.id) : S.openCards.delete(p.id); };
+      top.onclick = toggle; top.onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(); } };
+      if(!p.has_key || !(p.caps || {}).at) { card.classList.add("open"); S.openCards.add(p.id); }
+      const save = (fields, delay=500) => {
+        clearTimeout(provTimers[p.id]);
+        provTimers[p.id] = setTimeout(async () => {
+          const r = await api("save_provider", {id: p.id, ...fields});
+          if(r.ok){ S.cfg = r.config; if(fields.api_key){ card.querySelector(".key").value = ""; } renderServices(); }
+          else toast("error", r.error || "Could not save.");
+        }, delay);
+      };
+      card.querySelector(".name").oninput = e => save({name: e.target.value});
+      card.querySelector(".url").oninput = e => save({base_url: e.target.value}, 700);
+      card.querySelector(".key").oninput = e => { if(e.target.value.trim().length >= 8) save({api_key: e.target.value.trim()}, 700); };
+      card.querySelector(".px").onchange = e => save({use_proxy: e.target.checked}, 0);
+      card.querySelector(".rm").onclick = async () => {
+        if(!confirm(`Remove ${card.querySelector(".name").value}?`)) return;
+        const r = await api("remove_provider", {id: p.id});
+        if(r.ok){ S.cfg = r.config; renderServices(); }
+      };
+      card.querySelector(".test").onclick = async () => {
+        const res = card.querySelector(".res"), b = card.querySelector(".test");
+        b.disabled = true; res.className = "res help"; res.innerHTML = `<span class="spinner"></span> Testing — and checking what it can do (up to ~15 s)…`;
+        const r = await api("provider_test", {id: p.id});
+        b.disabled = false;
+        if(r.ok){ res.className = "res ok"; res.textContent = r.note ? "✓ " + r.note : `✓ Connected${r.ms != null ? " · " + r.ms + " ms" : ""} · ${r.models} models`; }
+        else { res.className = "res bad"; res.textContent = "✗ " + (r.error || "Failed"); }
+      };
+    }
+    card.classList.toggle("open", S.openCards.has(p.id));
+    const pr = S.cfg.presets?.[p.preset] || {};
+    const av = card.querySelector(".svc-avatar");
+    av.textContent = (p.name || "?").trim().slice(0, 1).toUpperCase(); av.style.setProperty("--av", AV_COLORS[p.preset] || AV_COLORS.custom);
+    card.querySelector(".nm").textContent = p.name;
+    const tags = [];
+    if(IRANIAN.has(p.preset)) tags.push(`<span class="tag ir">Iranian · Rial</span>`);
+    if(p.kind === "live") tags.push(`<span class="tag live">LIVE</span>`);
+    if(p.preset === "custom") tags.push(`<span class="tag">Custom</span>`);
+    card.querySelector(".tags").innerHTML = tags.join("");
+    const uf = usedFor(p.id);
+    card.querySelector(".svc-sub").innerHTML = !p.has_key ? "Paste its API key, then press <b>Test</b>."
+      : uf.length ? `Used for: <b>${esc(uf.join(", "))}</b>` : (p.caps || {}).at ? "Not used yet — choose it below or press <b>Use it for…</b>" : "Press <b>Test</b> to see what it can do.";
+    const [cls, txt] = provChip(p), chip = card.querySelector(".schip");
+    chip.className = "schip " + cls; chip.textContent = txt;
+    const nm = card.querySelector(".name"); if(document.activeElement !== nm) nm.value = p.name;
+    const url = card.querySelector(".url"); if(document.activeElement !== url) url.value = p.base_url;
+    card.querySelector(".key").placeholder = p.has_key ? `Saved (${p.key_hint}) — paste a new one to replace` : "Paste the API key";
+    card.querySelector(".px").checked = p.use_proxy;
+    renderCaps(card, p);
+  });
+}
+function renderCaps(card, p){
+  const box = card.querySelector(".caps"), c = p.caps || {};
+  if(!c.at){ box.innerHTML = `<div class="cap m"><div>Press <b>Test</b> to see what this service can do for you.</div></div>`; return; }
+  const every = (S.cfg.preview_ms || 2000) / 1000;
+  const row = (ok, title, detail) => `<div class="cap ${ok ? "ok" : "no"}">${icon(ok ? "check" : "x")}<div><b>${title}</b> ${detail}</div></div>`;
+  const stt = c.stt || {}, chat = c.chat || {};
+  const sttMode = stt.mode === "live" ? `<span class="badge-live">LIVE</span> words appear while they are spoken`
+                                      : `<span class="badge-prev">PREVIEW · every ${every} s</span> then final text after each sentence`;
+  let h = row(stt.ok, "Speech to text", stt.ok ? `${sttMode}<div class="m">${esc(stt.model)} · ${stt.mode === "live" ? "connected" : "answered"} in ${stt.secs} s</div>` : `<div class="m">${esc(stt.why || "")}</div>`);
+  h += row(chat.ok, "Translation", chat.ok ? `<div class="m">${esc(chat.model)} · first words after ${chat.secs} s</div>` : `<div class="m">${esc(chat.why || "")}</div>`);
+  h += row(chat.ok, "Answers", chat.ok ? `<div class="m">${esc(chat.model)}</div>` : "");
+  const all = stt.ok && chat.ok, some = stt.ok || chat.ok;
+  const missing = [!stt.ok && "speech to text", !chat.ok && "translation & answers"].filter(Boolean).join(" and ");
+  const other = S.cfg.has_key ? "Groq keeps doing" : "another service is needed for";
+  h += `<div class="verdict">${all ? `${icon("check")} Does your whole job` : some ? `Does part of the job — ${other} ${esc(missing)}` : `${icon("alert")} Cannot do this job`}
+        ${some ? `<button class="btn sm primary use">Use it for ${all ? "everything" : stt.ok ? "speech to text" : "translation & answers"}</button>` : ""}</div>`;
+  box.innerHTML = h;
+  const b = box.querySelector(".use");
+  if(b) b.onclick = async () => {
+    const r = await api("use_provider", {id: p.id});
+    if(r.ok){ S.cfg = r.config; renderServices(); toast("ok", `${p.name} is now used for ${all ? "everything" : stt.ok ? "speech to text" : "translation and answers"}.`); }
+  };
+}
+
+$("#addProv").onclick = async () => {
+  const preset = $("#addPreset").value;
+  if(!preset){ $("#addPreset").focus(); return toast("info", "First choose which service to add."); }
+  const r = await api("save_provider", {preset});
+  if(r.ok){
+    S.openCards.add(r.id);
+    S.cfg = r.config; renderServices();
+    const card = $(`#provList .svc-card[data-id="${r.id}"]`);
+    if(card){ card.scrollIntoView({block:"nearest"}); (preset === "custom" ? card.querySelector(".url") : card.querySelector(".key")).focus(); }
+  }
+};
+
+function renderServices(){
+  if(!S.cfg) return;
+  renderProviders(); renderAssign(); renderSttMode(); renderGroq(); renderOverview();
+}
+function renderOverview(){
+  const c = S.cfg, T = c.tasks || {}, box = $("#svcOverview");
+  const rows = ["stt", "tr", "ans"].map(t => T[t]).filter(Boolean);
+  const bad = rows.filter(r => !r.ok);
+  let h = bad.length ? `<div class="ov-head bad">${icon("alert")}Not ready yet — ${bad.length === 1 ? "one task needs" : bad.length + " tasks need"} a service<span class="sub">Groq (free) or any other service</span></div>`
+                     : `<div class="ov-head ok">${icon("check")}Ready — every task has a service</div>`;
+  const one = rows.length === 3 && rows.every(r => r.ok && !r.fallback && r.service === rows[0].service && !r.model);
+  if(one){
+    h += `<div class="ov-row ok">${icon("check")}<span class="t">All tasks</span><span class="s"><b>${esc(rows[0].service)}</b> <small>· automatic</small></span>${rows[0].backup ? `<span class="schip">+ Groq backup</span>` : ""}</div>`;
+    rows.length = 0;
+  }
+  rows.forEach(r => {
+    const who = r.ok ? `<b>${esc(r.service)}</b>${r.model ? ` <small>· ${esc(r.model)}</small>` : r.service === "Groq" ? " <small>· automatic</small>" : ""}`
+                     : `<small>${esc(r.why)}</small>`;
+    const note = r.fallback ? `<span class="schip warn" title="${esc(r.why)}">Groq fills in</span>` : r.backup ? `<span class="schip" title="If it fails, Groq continues">+ Groq backup</span>` : "";
+    h += `<div class="ov-row ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "check" : "alert")}<span class="t">${esc(r.label)}</span><span class="s">${who}</span>${note}</div>`;
+  });
+  box.innerHTML = h;
+  $$(".astat").forEach(el => { const r = T[el.dataset.stat] || {}; el.className = "astat " + (r.ok ? "ok" : "bad"); el.innerHTML = icon(r.ok ? "check" : "alert"); el.title = r.ok ? "" : r.why || ""; });
+  const bk = $("#backupRow"), inp = bk.querySelector("input");
+  inp.disabled = !c.has_key; bk.style.opacity = c.has_key ? "" : ".55";
+  $("#backupHelp").textContent = c.has_key ? "If a chosen service fails or runs out of credit, Groq continues so the meeting never stops."
+                                          : "Needs a Groq key (step 1). Without it, a failing service stops that task.";
+}
+function renderGroq(){
+  const c = S.cfg, n = S.net || {}, card = $("#groqCard");
+  const uf = usedFor("groq"), chip = $("#groqChip");
+  let cls = "", txt = "";
+  if(!c.has_key) { cls = uf.length ? "warn" : ""; txt = uf.length ? "Key needed" : "Not used"; }
+  else if(n.ok === true && (n.name || "Groq") === "Groq") { cls = "ok"; txt = "Connected" + (n.ms != null ? " · " + n.ms + " ms" : ""); }
+  else if(n.ok === false && (n.name || "Groq") === "Groq") { cls = "bad"; txt = "Not reachable"; }
+  else { cls = "part"; txt = "Key saved"; }
+  chip.className = "schip " + cls; chip.textContent = txt;
+  $("#groqSub").innerHTML = !c.has_key ? (uf.length ? "Paste a free API key — or choose other services in step 2." : "Optional — your other services do all the work.")
+    : uf.length ? `Used for: <b>${esc(uf.join(", "))}</b>` + (c.use_backup ? " · backup for the rest" : "") : c.use_backup ? "Backup: takes over if another service fails." : "Not used right now.";
+  if(!card.dataset.init){ card.dataset.init = 1; card.classList.toggle("open", !c.has_key && !(c.providers || []).length); }
+}
+$("#groqCard .svc-top").onclick = () => $("#groqCard").classList.toggle("open");
+$("#groqCard .svc-top").onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); $("#groqCard").classList.toggle("open"); } };
+
+function renderRates(){
+  const c = S.cfg; if(!c) return;
+  const pv = c.live_preview ? String(c.preview_ms) : "0";
+  $$("#segPreview [data-val]").forEach(b => b.classList.toggle("on", b.dataset.val === pv));
+  $$("#segLiveTr [data-val]").forEach(b => b.classList.toggle("on", b.dataset.val === String(c.live_tr_words)));
+  $$("#segLocal [data-val]").forEach(b => b.classList.toggle("on", b.dataset.val === String(c.local_preview_ms)));
+  $("#rateLocal").hidden = !(c.local_model && (c.local_preview || c.stt_provider === "local"));
+  const rs = $("#ratesSummary");
+  rs.className = "opt-state off";
+  rs.textContent = (c.live_preview ? `text ${(c.preview_ms || 2000) / 1000} s` : "text at sentence end") + " · " + (c.live_tr_words ? `translation ${c.live_tr_words} words` : "translation at sentence end");
+}
+$$("#segLocal [data-val]").forEach(b => b.onclick = () => {
+  S.cfg.local_preview_ms = +b.dataset.val; renderRates(); renderSttMode(); renderLocal(); queueSave({local_preview_ms: +b.dataset.val});
+});
+$$("#segPreview [data-val]").forEach(b => b.onclick = () => {
+  const v = +b.dataset.val;
+  S.cfg.live_preview = v > 0; if(v > 0) S.cfg.preview_ms = v;
+  renderRates(); renderSttMode(); queueSave(v > 0 ? {live_preview: true, preview_ms: v} : {live_preview: false});
+});
+$$("#segLiveTr [data-val]").forEach(b => b.onclick = () => {
+  S.cfg.live_tr_words = +b.dataset.val; renderRates(); queueSave({live_tr_words: +b.dataset.val});
+});
+
+function renderSttMode(){
+  const c = S.cfg; if(!c) return;
+  renderRates();
+  const prov = (c.providers || []).find(p => p.id === c.stt_provider);
+  const el = $("#sttMode");
+  const L = S.local || {}, lev = (c.local_preview_ms || 1000) / 1000;
+  const localOn = c.local_model && (c.local_preview || c.stt_provider === "local");
+  if(localOn && L.state === "error"){
+    el.innerHTML = `${icon("alert")}<span><b>Local model problem:</b> ${esc(L.error)} Until it is fixed, ${c.live_preview ? "Groq previews" : "text after each sentence"} are used.</span>`;
+  } else if(localOn){
+    const fin = c.stt_provider === "local" ? "the local model too" + (c.use_backup && c.has_key ? " (Groq helps when it is busy)" : "") : (prov ? prov.name : "Groq");
+    el.innerHTML = `<span class="badge-local">LOCAL · every ${lev} s</span><span><b>Local model${L.name ? " (" + esc(L.name) + ")" : ""}</b> writes the other side's words on this computer about every ${lev} s while they speak${L.state === "loading" ? " (loading…)" : ""}. ${c.live_tr_words ? `The translation is refreshed every ${c.live_tr_words} new words.` : "The translation comes after each sentence."} The final text after each sentence: <b>${esc(fin)}</b>.</span>`;
+  } else if(prov && prov.kind === "live"){
+    const w = c.live_tr_words;
+    el.innerHTML = `<span class="badge-live">LIVE</span><span><b>${esc(prov.name)}</b> writes the other side's words while they are spoken. ${w ? `The translation is refreshed every ${w} new words;` : "The translation comes"} the final version after each sentence.</span>`;
+  } else if(c.live_preview){
+    const ev = (c.preview_ms || 2000) / 1000;
+    el.innerHTML = `<span class="badge-prev">PREVIEW · every ${ev} s</span><span><b>${esc(prov ? prov.name : "Groq")}</b> has no live mode: while someone speaks, text and translation are refreshed about every ${ev} seconds; the final version comes after each sentence.</span>`;
+  } else {
+    el.innerHTML = `<span class="badge-prev">AFTER EACH SENTENCE</span><span>Text and translation appear when the speaker pauses.</span>`;
+  }
+}
+
+
+/* ---------- local AI model (translation and answers) ---------- */
+async function loadLlm(){ const r = await api("llm_state"); if(r.ok) applyLlmState(r); }
+function applyLlmState(r){
+  if(r.llm) S.llm = r.llm; S.llmModels = r.models || []; S.llmCatalog = r.catalog || S.llmCatalog || [];
+  if(r.config) S.cfg = r.config;
+  if(r.download !== undefined) S.download = r.download;
+  renderLlm(); renderDownload(); renderAssign(); renderOverview();
+}
+function renderLlm(){
+  const c = S.cfg, L = S.llm || {}; if(!c) return;
+  const st = $("#llmStatus");
+  let cls = "", txt;
+  if(L.engine === false){ cls = "bad"; txt = `${icon("alert")}<span>The local AI engine is not in this program version. Run <b>build_exe.bat</b> again. <span class="m">${esc(L.engine_error || "")}</span></span>`; }
+  else if(!c.llm_model){ txt = `${icon("info")}<span>No model yet. Download one below (<b>gemma3-4b</b> is a good start), or choose a .gguf file you already have.</span>`; }
+  else if(L.state === "loading"){ txt = `<span class="spinner"></span><span>Loading <b>${esc(L.name)}</b> into memory…</span>`; }
+  else if(L.state === "ready"){ cls = "ok"; txt = `${icon("check")}<span><b>${esc(L.name)}</b> is ready${L.load_secs ? ` (loaded in ${L.load_secs} s)` : ""}${L.speed ? ` · about ${L.speed} words per second` : ""}.</span>`; }
+  else if(L.state === "error"){ cls = "bad"; txt = `${icon("alert")}<span>${esc(L.error)}</span>`; }
+  else { txt = `${icon("info")}<span><b>${esc(basename(c.llm_model))}</b> is chosen. It is loaded when a task uses it — press <b>Test on this computer</b>.</span>`; }
+  st.className = "local-status " + cls; st.innerHTML = txt;
+  const uses = ["tr", "ans"].filter(t => c[t + "_provider"] === "llm");
+  const sum = $("#llmSummary");
+  sum.className = "opt-state" + (uses.length ? "" : " off");
+  sum.textContent = uses.length ? "used for " + uses.map(t => t === "tr" ? "translation" : "answers").join(" and ") : (c.llm_model ? "chosen, not used" : "off");
+  $("#llmForTr").checked = c.tr_provider === "llm"; $("#llmForAns").checked = c.ans_provider === "llm";
+  $("#llmForTr").disabled = $("#llmForAns").disabled = !c.llm_model;
+  const sel = $("#llmModel"), models = S.llmModels || [];
+  const opts = models.map(m => `<option value="${esc(m.path)}">${esc(m.name)} · ${m.mb} MB</option>`);
+  if(c.llm_model && !models.some(m => m.path === c.llm_model)) opts.unshift(`<option value="${esc(c.llm_model)}">${esc(basename(c.llm_model))}</option>`);
+  const html = (c.llm_model ? "" : `<option value="">— none —</option>`) + opts.join("");
+  if(sel.dataset.html !== html){ sel.innerHTML = html; sel.dataset.html = html; }
+  sel.value = c.llm_model || "";
+  const cat = $("#llmCatalog"), ch = (S.llmCatalog || []).map(m => `<option value="${esc(m.id)}">${esc(m.id)} · ${(m.mb / 1000).toFixed(1)} GB — ${esc(m.note)}</option>`).join("");
+  if(cat.dataset.html !== ch){ cat.innerHTML = ch; cat.dataset.html = ch; }
+  const cur = models.find(m => m.path === c.llm_model);
+  $("#llmDelete").hidden = !(cur && cur.removable);
+}
+$("#llmModel").onchange = async e => { if(!e.target.value) return; const r = await api("llm_choose", {path: e.target.value}); applyLlmState(r); if(!r.ok) toast("error", r.error); };
+$("#llmBrowse").onclick = () => openBrowser("gguf", async path => { const r = await api("llm_choose", {path}); applyLlmState(r); if(!r.ok) toast("error", r.error); else toast("ok", "Model chosen. Press Test on this computer."); });
+async function setLlmUse(){
+  const tasks = [...($("#llmForTr").checked ? ["tr"] : []), ...($("#llmForAns").checked ? ["ans"] : [])];
+  const r = await api("llm_use", {tasks}); applyLlmState(r); if(!r.ok) toast("error", r.error);
+}
+$("#llmForTr").onchange = setLlmUse; $("#llmForAns").onchange = setLlmUse;
+$("#llmDl").onclick = async () => {
+  const r = await api("llm_download", {id: $("#llmCatalog").value});
+  if(!r.ok) return toast("error", r.error || "Could not start the download.");
+  S.download = r.download; renderDownload();
+};
+$("#llmDlCancel").onclick = () => api("llm_download", {cancel: true});
+$("#llmFolder").onclick = async () => { const r = await api("local_open_folder"); if(!r.ok) toast("error", r.error || "Could not open it."); };
+$("#llmDelete").onclick = async () => {
+  if(!confirm(`Delete the model file "${basename(S.cfg.llm_model)}" from this computer?`)) return;
+  const r = await api("llm_delete", {path: S.cfg.llm_model}); applyLlmState(r); if(!r.ok) toast("error", r.error);
+};
+$("#llmTest").onclick = async () => {
+  const b = $("#llmTest"), box = $("#llmResult");
+  b.disabled = true; box.innerHTML = `<div class="trow"><span class="spinner"></span><span>Loading the model and translating a test sentence…</span></div>`;
+  const r = await api("llm_test");
+  b.disabled = false;
+  if(r.llm) applyLlmState(r);
+  box.innerHTML = !r.ok ? `<div class="trow bad">${icon("alert")}<span class="sub">${esc(r.error || "Test failed.")}</span></div>`
+    : `<div class="trow ${r.total < 8 ? "ok" : "bad"}">${icon(r.total < 8 ? "check" : "alert")}<div><b>${esc(r.verdict)}</b>
+       <span class="sub" style="display:block">First words after ${r.first} s · whole sentence ${r.total} s${r.speed ? ` · ${r.speed} words per second` : ""}${r.language_ok ? "" : " · the reply was not in your language — try a bigger model"}</span>
+       <span class="sub" style="display:block" ${trAttr()}>${esc(r.text)}</span></div></div>`;
+};
+
+/* ---------- local model ---------- */
+async function loadLocal(){
+  const r = await api("local_state");
+  if(r.ok) applyLocalState(r);
+}
+function applyLocalState(r){
+  S.local = r.local || S.local; S.localModels = r.models || []; S.catalog = r.catalog || S.catalog || [];
+  S.host = r.host; if(r.download !== undefined) S.download = r.download;
+  renderLocal(); renderDownload();
+}
+const LOCAL_ROLES = [["off", "Off"], ["preview", "Live text only"], ["all", "All speech to text"]];
+function localRole(){ const c = S.cfg; return c.stt_provider === "local" ? "all" : c.local_preview ? "preview" : "off"; }
+function renderLocal(){
+  const c = S.cfg, L = S.local || {}; if(!c) return;
+  const st = $("#localStatus");
+  let cls = "", txt;
+  if(L.engine === false){ cls = "bad"; txt = `${icon("alert")}<span>The local model engine is not in this program version. Run <b>build_exe.bat</b> again. <span class="m">${esc(L.engine_error || "")}</span></span>`; }
+  else if(!c.local_model){ txt = `${icon("info")}<span>No model yet. Download one below (<b>small</b> is a good start), or choose one you already have.</span>`; }
+  else if(L.state === "loading"){ txt = `<span class="spinner"></span><span>Loading <b>${esc(L.name)}</b> into memory…</span>`; }
+  else if(L.state === "ready"){ cls = "ok"; txt = `${icon("check")}<span><b>${esc(L.name)}</b> is ready on the ${esc(L.device)}${L.load_secs ? ` (loaded in ${L.load_secs} s)` : ""}.</span>`; }
+  else if(L.state === "error"){ cls = "bad"; txt = `${icon("alert")}<span>${esc(L.error)}</span>`; }
+  else { txt = `${icon("info")}<span><b>${esc(basename(c.local_model))}</b> is chosen. It is loaded when you use it — press <b>Test on this computer</b>.</span>`; }
+  st.className = "local-status " + cls; st.innerHTML = txt;
+  const ls = $("#localSummary"), role0 = localRole();
+  ls.className = "opt-state" + (role0 === "off" || !c.local_model ? " off" : "");
+  ls.textContent = !c.local_model ? "not set up" : role0 === "off" ? "off" : role0 === "preview" ? "on · live text" : "on · all speech to text";
+
+  const sel = $("#localModel"), models = S.localModels || [];
+  sel.innerHTML = (c.local_model ? "" : `<option value="">— no model chosen —</option>`)
+    + models.map(m => `<option value="${esc(m.path)}">${esc(m.name)} · ${m.mb >= 1000 ? (m.mb / 1000).toFixed(1) + " GB" : m.mb + " MB"} · ${esc(m.source)}</option>`).join("");
+  sel.value = c.local_model || "";
+  const cur = models.find(m => m.path === c.local_model);
+  $("#localDelete").hidden = !(cur && cur.removable);
+  const have = new Set(models.filter(m => m.removable).map(m => m.name));
+  const cat = $("#localCatalog");
+  if(cat.options.length !== (S.catalog || []).length || cat.dataset.have !== [...have].join()){
+    const keep = cat.value;
+    cat.innerHTML = (S.catalog || []).map(m => `<option value="${m.id}">${m.id} — ${m.mb >= 1000 ? (m.mb / 1000).toFixed(1) + " GB" : m.mb + " MB"} — ${esc(m.note)}${have.has(m.id) ? " (downloaded)" : ""}</option>`).join("");
+    cat.value = keep || "small"; cat.dataset.have = [...have].join();
+  }
+  $("#localDevice").value = c.local_device || "auto";
+  $("#localTest").disabled = !c.local_model || L.engine === false || S.localTesting;
+
+  // what it can do on this computer
+  const box = $("#localCaps"), b = c.local_bench || {};
+  if(!c.local_model){ box.innerHTML = ""; return; }
+  if(S.localTesting){
+    box.innerHTML = `<div class="cap"><span class="spinner"></span><div>Loading the model and measuring it on this computer (the first time can take up to a minute)…</div></div>`;
+    return;
+  }
+  const row = (ok, title, detail) => `<div class="cap ${ok ? "ok" : "no"}">${icon(ok ? "check" : "x")}<div><b>${title}</b> ${detail}</div></div>`;
+  let h = "";
+  if(!b.at){
+    h = `<div class="cap m"><div>Press <b>Test on this computer</b> — it measures how fast this model is here (every computer is different).</div></div>`;
+  } else {
+    const other = S.host && b.host && b.host !== S.host;
+    if(other) h += `<div class="cap no">${icon("alert")}<div>This test was made on another computer (${esc(b.host)}). Press <b>Test</b> again here.</div></div>`;
+    const ev = b.every ? b.every / 1000 : 0;
+    h += row(!!b.every, "Live text while speaking", b.every ? `<span class="badge-local">LOCAL · every ${ev} s</span><div class="m">${b.quick} s per update · ${esc(b.device || "")}</div>` : `<div class="m">${b.quick} s per update — too slow here</div>`);
+    h += row(b.final_ok, "Final text of each sentence", `<div class="m">${b.final} s per sentence${b.final_ok ? "" : " — keep an online service (Groq) for the final text"}</div>`);
+    h += row(false, "Translation & answers", `<div class="m">Not possible offline — Groq (or another service) keeps doing this.</div>`);
+    if(b.heard) h += `<div class="cap m"><div>Test sentence: “What is the difference between OSPF and EIGRP?” — it heard: <span class="heard">“${esc(b.heard)}”</span>${b.match != null ? ` (${Math.round(b.match * 100)}% right)` : ""}</div></div>`;
+    (b.notes || []).forEach(n => h += `<div class="cap no">${icon("alert")}<div>${esc(n)}</div></div>`);
+    h += `<div class="verdict ${b.level}">${icon(b.level === "bad" || b.level === "slow" ? "alert" : "check")} ${esc(b.text)}${b.smaller && (b.level === "bad" || b.level === "slow") ? ` <button class="btn sm primary" id="getSmaller">${icon("down")}Download ${esc(b.smaller)}</button>` : ""}</div>`;
+  }
+  const role = localRole();
+  h += `<div class="use-row">Use it for: <div class="seg" id="localRole">${LOCAL_ROLES.map(([v, t]) => `<button data-val="${v}" class="${role === v ? "on" : ""}">${t}</button>`).join("")}</div></div>`;
+  h += `<div class="cap m"><div>${role === "off" ? "Not used. Nothing is loaded into memory." : role === "preview" ? `Live text on this computer; the final text of each sentence still comes from <b>${esc(c.stt_provider === "groq" ? "Groq" : ((c.providers || []).find(p => p.id === c.stt_provider) || {}).name || "Groq")}</b> (most accurate). Recommended.`
+        : "All speech to text on this computer — works without internet; only translation and answers go online." + (c.use_backup && c.has_key ? " Groq helps when the local model is busy." : "")}</div></div>`;
+  box.innerHTML = h;
+  const gs = box.querySelector("#getSmaller");
+  if(gs) gs.onclick = () => { $("#localCatalog").value = b.smaller; $("#localDl").click(); };
+  box.querySelectorAll("#localRole [data-val]").forEach(btn => btn.onclick = async () => {
+    const r = await api("local_use", {role: btn.dataset.val});
+    if(r.ok){ S.cfg = r.config; applyLocalState(r); renderAssign(); renderSttMode(); renderRates(); }
+    else toast("error", r.error || "Could not change it.");
+  });
+}
+function renderDownload(){
+  const d = S.download, isLlm = !!(d && d.kind === "llm");
+  const box = $(isLlm ? "#llmDlBox" : "#localDlBox");
+  $(isLlm ? "#localDlBox" : "#llmDlBox").hidden = true;
+  const active = d && ["starting", "listing", "downloading", "checking"].includes(d.state);
+  $("#localDl").disabled = $("#llmDl").disabled = !!active;
+  if(!d || d.state === "done"){ box.hidden = true; return; }
+  box.hidden = false;
+  const pct = d.total ? Math.min(100, d.done / d.total * 100) : 0;
+  box.querySelector(".dlbar > i").style.width = pct.toFixed(1) + "%";
+  const mb = x => (x / 1e6).toFixed(0);
+  box.querySelector(".dltext").textContent =
+      d.state === "listing" ? `Connecting to ${d.via}…`
+    : d.state === "downloading" ? `${d.id}: ${mb(d.done)} / ${mb(d.total)} MB · ${pct.toFixed(0)}%${d.speed ? " · " + (d.speed / 1e6).toFixed(1) + " MB/s" : ""}`
+    : d.state === "checking" ? "Checking the files…"
+    : d.state === "cancelled" ? `Cancelled at ${pct.toFixed(0)}% — press Download to continue where it stopped.`
+    : d.state === "error" ? "✗ " + d.error : "Starting…";
+  box.querySelector(".btn").hidden = !active;
+}
+$("#localModel").onchange = async e => {
+  if(!e.target.value) return;
+  const r = await api("local_choose", {path: e.target.value});
+  if(r.config){ S.cfg = r.config; applyLocalState(r); renderAssign(); renderSttMode(); }
+  if(!r.ok) toast("error", r.error);
+};
+$("#localBrowse").onclick = () => openBrowser("model", chooseModel);
+async function chooseModel(path){
+  const b = $("#localBrowse"); b.disabled = true;
+  const r = await api("local_choose", {path});
+  b.disabled = false;
+  if(!r.ok) return toast("error", r.error || "Could not use that file.");
+  if(r.cancelled) return;
+  S.cfg = r.config; applyLocalState(r); renderAssign(); renderSttMode();
+  toast("ok", "Model chosen. Press Test on this computer.");
+};
+$("#localDl").onclick = async () => {
+  const r = await api("local_download", {id: $("#localCatalog").value});
+  if(!r.ok) return toast("error", r.error || "Could not start the download.");
+  S.download = r.download; renderDownload();
+};
+$("#localDlCancel").onclick = () => api("local_download", {cancel: true});
+$("#localFolder").onclick = async () => { const r = await api("local_open_folder"); if(!r.ok) toast("error", r.error || "Could not open it."); };
+$("#localDelete").onclick = async () => {
+  const c = S.cfg; if(!confirm(`Delete the model files of "${basename(c.local_model)}" from this computer?`)) return;
+  const r = await api("local_delete", {path: c.local_model});
+  if(r.ok){ S.cfg = r.config; applyLocalState(r); renderAssign(); renderSttMode(); } else toast("error", r.error);
+};
+$("#localDevice").onchange = async e => {
+  S.cfg.local_device = e.target.value;
+  const r = await api("save_config", {local_device: e.target.value});
+  if(r.ok) S.cfg = r.config;
+};
+$("#localTest").onclick = async () => {
+  const b = $("#localTest"), box = $("#localCaps");
+  S.localTesting = true; b.disabled = true; renderLocal();
+  const r = await api("local_test");
+  S.localTesting = false;
+  if(r.ok){ S.cfg = r.config; applyLocalState(r); renderRates(); }
+  else { renderLocal(); toast("error", r.error || "Test failed."); }
+};
+
+function renderAssign(){
+  const c = S.cfg, provs = c.providers || [];
+  for(const t of ["stt", "tr", "ans"]){
+    const sel = $(`[data-assign="${t}"]`), inp = $(`[data-model="${t}"]`), dl = $(`#dl-${t}`);
+    const cur = c[t + "_provider"];
+    const usable = provs.filter(p => t === "stt" || p.kind !== "live");
+    sel.innerHTML = `<option value="groq">Groq (free)</option>` + usable.map(p => `<option value="${esc(p.id)}">${esc(p.name)}${p.kind === "live" ? " — LIVE" : ""}</option>`).join("")
+      + (t === "stt" && (c.local_model || cur === "local") ? `<option value="local">Local model (this computer)</option>` : "")
+      + (t !== "stt" && (c.llm_model || cur === "llm") ? `<option value="llm">Local AI model (this computer)</option>` : "");
+    sel.value = cur;
+    inp.disabled = cur === "local" || cur === "llm";
+    if(cur === "local" || cur === "llm"){ inp.hidden = false; inp.value = ""; inp.placeholder = cur === "llm" ? "The chosen local AI model" : "The chosen local model"; dl.innerHTML = ""; const am0 = inp.parentElement.querySelector(".amodel"); if(am0) am0.hidden = true; continue; }
+    if(document.activeElement !== inp) inp.value = c[t + "_model"] || "";
+    inp.placeholder = "Model — pick or type";
+    inp.hidden = cur === "groq" && !c[t + "_model"];
+    let am = inp.parentElement.querySelector(".amodel");
+    if(!am){ am = document.createElement("span"); am.className = "amodel"; inp.after(am); }
+    am.hidden = !inp.hidden; am.textContent = "automatic";
+    const cp = provs.find(p => p.id === cur) || {};
+    const models = cur === "groq" ? GROQ_MODELS[t] : cp.kind === "live" ? (cp.models && cp.models.length ? cp.models : ["nova-3"])
+                 : (cp.models || []).filter(t === "stt" ? isSttModel : isChatModel);
+    dl.innerHTML = models.map(m => `<option value="${esc(m)}">`).join("");
+  }
+}
+for(const t of ["stt", "tr", "ans"]){
+  $(`[data-assign="${t}"]`).onchange = e => {
+    const pid = e.target.value, provs = S.cfg.providers || [];
+    let model = "";
+    const chosen = provs.find(p => p.id === pid) || {};
+    if(chosen.kind === "live") model = "nova-3";
+    else if(pid === "llm"){
+      const tasks = ["tr", "ans"].filter(x => x === t || S.cfg[x + "_provider"] === "llm");
+      api("llm_use", {tasks}).then(r => { applyLlmState(r); if(!r.ok) toast("error", r.error); });
+      return;
+    }
+    else if(pid === "local"){
+      api("local_use", {role: "all"}).then(r => { if(r.ok){ S.cfg = r.config; applyLocalState(r); renderAssign(); renderSttMode(); } else toast("error", r.error); });
+      return;
+    }
+    else if(pid !== "groq"){   // suggest a model from the service's list
+      const list = ((provs.find(p => p.id === pid) || {}).models || []).filter(t === "stt" ? isSttModel : isChatModel);
+      const pref = t === "stt" ? [/gpt-4o-mini-transcribe/, /transcribe/, /whisper/, /voxtral/] : [/mini|flash|instant|fast|small/, /./];
+      for(const re of pref){ const m = list.find(x => re.test(x)); if(m){ model = m; break; } }
+    }
+    S.cfg[t + "_provider"] = pid; S.cfg[t + "_model"] = model;
+    renderAssign(); renderSttMode(); queueSave({[t + "_provider"]: pid, [t + "_model"]: model});
+  };
+  $(`[data-model="${t}"]`).oninput = e => { S.cfg[t + "_model"] = e.target.value.trim(); queueSave({[t + "_model"]: e.target.value.trim()}); };
+}
+$("#testAll").onclick = async () => {
+  const b = $("#testAll"), box = $("#testResults");
+  b.disabled = true; b.querySelector("span:last-child").textContent = "Testing…";
+  box.innerHTML = `<div class="trow"><span class="spinner"></span><span>Running each part once with the service you chose…</span></div>`;
+  clearTimeout(saveTimer);
+  if(Object.keys(pendingSave).length){
+    const body = pendingSave; pendingSave = {};
+    const sr = await api("save_config", body);
+    if(sr.ok) S.cfg = sr.config; else { pendingSave = Object.assign({}, body, pendingSave); queueSave({}); }
+  }
+  const r = await api("test_services");
+  b.disabled = false; b.querySelector("span:last-child").textContent = "Test all parts";
+  if(!r.ok){ box.innerHTML = ""; return toast("error", r.error || "Test failed."); }
+  box.innerHTML = r.results.map(x => `<div class="trow ${x.ok ? "ok" : "bad"}">${icon(x.ok ? "check" : "alert")}<div>
+      <b>${esc(x.label)} — ${esc(x.service)}${x.model ? " · " + esc(x.model) : ""}</b>
+      <span class="sub">${esc(x.ok ? x.detail || "Works." : x.error || "Failed.")}</span></div></div>`).join("");
+};
+
+$("#creditBtn").onclick = async () => {
+  const b = $("#creditBtn"), box = $("#creditResults");
+  b.disabled = true;
+  box.innerHTML = `<div class="trow"><span class="spinner"></span><span>Asking each service how much is left…</span></div>`;
+  const r = await api("credit");
+  b.disabled = false;
+  if(!r.ok){ box.innerHTML = ""; return toast("error", r.error || "Could not check."); }
+  if(!r.services.length){ box.innerHTML = `<div class="trow">${icon("info")}<span class="sub">No service with an API key yet.</span></div>`; return; }
+  box.innerHTML = r.services.map(x => `<div class="trow ${x.ok ? "ok" : "bad"}">${icon(x.ok ? "gauge" : "alert")}<div>
+      <b>${esc(x.name)}</b>${x.lines.map(l => `<span class="sub" style="display:block">${esc(l)}</span>`).join("")}
+      ${x.link ? `<a class="link" href="${esc(x.link)}" target="_blank" rel="noopener">Open its account page</a>` : ""}</div></div>`).join("");
+};
+
+$("#testProxy").onclick = async () => {
+  const b = $("#testProxy"), box = $("#proxyResults");
+  b.disabled = true; box.innerHTML = `<div class="trow"><span class="spinner"></span><span>Testing the route to Groq…</span></div>`;
+  const r = await api("test_proxy", {proxy: $("#fProxy").value.trim()});
+  b.disabled = false;
+  box.innerHTML = (r.steps || [{ok:false, text: r.error || "Test failed."}]).map(x =>
+    `<div class="trow ${x.ok ? "ok" : "bad"}">${icon(x.ok ? "check" : "alert")}<span class="sub">${esc(x.text)}</span></div>`).join("");
+};
+
+/* ---------- log ---------- */
+function addLog(l, live){
+  const box = $("#logBox");
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const row = document.createElement("span");
+  row.className = "l " + (l.level || "info");
+  row.innerHTML = `<span class="t">${esc(l.t)}</span>`;
+  row.appendChild(document.createTextNode(l.text));
+  box.appendChild(row);
+  while(box.childElementCount > 800) box.firstChild.remove();
+  if(stick) box.scrollTop = box.scrollHeight;
+  if(live && l.level === "error" && S.lastTab !== "log") $("#logDot").hidden = false;
+}
+$("#diagBtn").onclick = async () => {
+  const b = $("#diagBtn"); b.disabled = true; b.querySelector("span:last-child").textContent = "Checking…";
+  const r = await api("audio_check");
+  b.disabled = false; b.querySelector("span:last-child").textContent = "Check audio devices";
+  if(!r.ok) toast("warn", r.error || "Check failed."); else toast("ok", "Audio check finished — see the log below.");
+  $("#logBox").scrollTop = $("#logBox").scrollHeight;
+};
+$("#copyLog").onclick = async () => {
+  const rows = [...$("#logBox").querySelectorAll(".l")].filter(r => r.offsetParent !== null || !$("#logBox").classList.contains("problems"));
+  const text = rows.map(r => r.textContent.replace(/^(\d\d:\d\d:\d\d)/, "$1 ")).join("\n");
+  try{ await navigator.clipboard.writeText(text); toast("ok", "Log copied. Paste it in your message."); }catch{ toast("error", "Could not copy."); }
+};
+$("#openLog").onclick = async () => { const r = await api("open_log"); if(!r.ok) toast("error", r.error || "Could not open it."); };
+$("#clearLog").onclick = async () => {
+  if(!confirm("Clear the log? (The previous log is kept once as app.log.old.)")) return;
+  const r = await api("clear_log"); if(!r.ok) toast("error", r.error || "Could not clear the log.");
+};
+$$("#logFilter [data-val]").forEach(b => b.onclick = () => {
+  $$("#logFilter [data-val]").forEach(x => x.classList.toggle("on", x === b));
+  $("#logBox").classList.toggle("problems", b.dataset.val === "problems");
+});
+
+/* ---------- keyboard ---------- */
+document.addEventListener("keydown", ev => {
+  if(ev.key === "F9"){ ev.preventDefault(); toggleRun(ev.shiftKey); }
+  else if(ev.key === "F2"){
+    ev.preventDefault();
+    const a = document.activeElement;
+    if(!a?.isContentEditable && !["INPUT", "TEXTAREA", "SELECT"].includes(a?.tagName)) answerNow();
+  }
+  else if(ev.key === "F8"){ ev.preventDefault(); togglePause(); }
+  else if(ev.key === "Escape"){ if(!$("#brModal").hidden) closeBrowser(); else if(!$("#sumModal").hidden) $("#sumModal").hidden = true; else closeDrawer(); hideSel(); }
+  else if((ev.ctrlKey || ev.metaKey) && ev.key === ","){ ev.preventDefault(); openDrawer(); }
+  else if((ev.ctrlKey || ev.metaKey) && (ev.key === "=" || ev.key === "+" || ev.key === "-")){
+    ev.preventDefault();
+    if(!S.cfg) return;
+    const v = Math.max(80, Math.min(170, (S.cfg.text_size||100) + (ev.key === "-" ? -10 : 10)));
+    S.cfg.text_size = v; applyConfig(); fillDrawer(true); queueSave({text_size: v});
+  }
+});
+$("#startBtn").onclick = () => toggleRun(false);
+$("#resumeBtn").onclick = () => toggleRun(true);
+
+/* ---------- errors from this page go to app.log ---------- */
+function reportError(err){ try{ api("ui_error", {message: String(err && err.message || err), stack: String(err && err.stack || "")}); }catch{} }
+window.addEventListener("error", e => reportError(e.error || e.message));
+window.addEventListener("unhandledrejection", e => reportError(e.reason));
+
+paintIcons();
+renderAnswer(); renderEmpty(); renderFooter();
+connect();
+</script>
+</body>
+</html>

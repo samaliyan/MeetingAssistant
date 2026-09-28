@@ -1,0 +1,6 @@
+# Only what the tests need (works on Windows, Linux and macOS - no audio library):
+#   python -m pip install -r requirements-test.txt
+#   python -m pytest tests
+numpy>=1.26,<3
+httpx[http2,socks]>=0.27,<1
+pytest>=8

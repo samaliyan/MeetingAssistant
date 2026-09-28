@@ -1,0 +1,7264 @@
+# -*- coding: utf-8 -*-
+"""
+Meeting Assistant 4
+-------------------
+Live transcript of your microphone and your computer's sound, instant translation
+into your own language and suggested answers - through Groq (one free API key),
+other OpenAI-compatible services, Deepgram, or a local Whisper model.
+
+The window is a local web page shown by Microsoft Edge in "app mode"; this
+Python program does the audio work and talks to Groq.
+Windows only (uses WASAPI loopback to hear system audio).
+"""
+from __future__ import annotations
+
+import collections
+import datetime
+import difflib
+import hashlib
+import io
+import itertools
+import json
+import os
+import queue
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import types
+import urllib.parse
+import urllib.request
+import wave
+import webbrowser
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# numpy's own thread pool would compete with the local speech model's threads (set before numpy loads)
+# (only OpenBLAS: numpy uses it; the speech engine uses MKL/OpenMP and must keep all its threads)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import numpy as np
+import httpx
+
+try:
+    import pyaudiowpatch as pyaudio
+except ImportError:  # not Windows / not installed
+    pyaudio = None
+
+try:
+    import h2  # noqa: F401  (enables HTTP/2: one warm connection for everything)
+    HTTP2 = True
+except ImportError:
+    HTTP2 = False
+
+try:
+    import soundfile as sf
+except Exception:  # missing or libsndfile problem -> plain WAV upload
+    sf = None
+
+VERSION = "6.0"
+FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
+# files that ship with the program (read-only) ...
+RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+# ... and your own files (settings, meetings, log) next to the program
+APP_DIR = os.path.dirname(os.path.abspath(sys.executable if FROZEN else __file__))
+
+
+def _writable(folder):
+    """Can we create and write this folder?"""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, ".write-test")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+# Everything the program writes (settings, meetings, log, models, window cache) lives in ONE folder,
+# "Data", next to the program — nothing else is created beside the exe.
+MAKE_SHORTCUT = "--make-shortcut" in sys.argv       # (the build script only creates the desktop icon)
+DATA_DIR = os.path.join(APP_DIR, "Data")
+APP_DIR_MOVED = ""
+OLD_DATA_ITEMS = ("config.json", "config.json.bak", "app.log", "app.log.old", "meetings", "models", ".window", ".port")
+
+
+def _move_into(src, dst):
+    """Moves a file or folder; folders that already exist are merged."""
+    if not os.path.exists(dst):
+        os.replace(src, dst)
+        return
+    if os.path.isfile(src) and os.path.isfile(dst):
+        os.replace(src, dst)                     # the newer copy (next to the program) wins
+        return
+    if os.path.isdir(src) and os.path.isdir(dst):
+        for name in os.listdir(src):
+            _move_into(os.path.join(src, name), os.path.join(dst, name))
+        try:
+            os.rmdir(src)
+        except OSError:
+            pass
+
+
+def _tidy_old_files(prog, data):
+    """Files of earlier versions lay next to the exe: move them into the Data folder (once)."""
+    moved = []
+    for name in list(OLD_DATA_ITEMS) + [n for n in os.listdir(prog) if n.startswith("config.json.bad-")]:
+        src = os.path.join(prog, name)
+        if os.path.exists(src):
+            try:
+                _move_into(src, os.path.join(data, name))
+                moved.append(name)
+            except OSError:
+                pass
+    return moved
+
+
+TIDIED = []
+if not MAKE_SHORTCUT:
+    if not _writable(DATA_DIR):      # e.g. inside Program Files: keep the data in the user's own folder instead
+        APP_DIR_MOVED = APP_DIR
+        DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "MeetingAssistant")
+        os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        TIDIED = _tidy_old_files(APP_DIR, DATA_DIR)
+    except OSError:
+        TIDIED = []
+WEB_DIR = os.path.join(RES_DIR, "web")
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
+MEETINGS_DIR = os.path.join(DATA_DIR, "meetings")
+LOG_PATH = os.path.join(DATA_DIR, "app.log")
+WINDOW_PROFILE = os.path.join(DATA_DIR, ".window")
+MODELS_DIR = os.path.join(DATA_DIR, "models")          # local speech-to-text models (downloaded or copied here)
+PORT_FILE = os.path.join(DATA_DIR, ".port")
+LAST_MEETING = os.path.join(DATA_DIR, ".last_meeting.json")   # lets "Continue" work after a restart too
+BASE_URL = os.environ.get("MA_BASE_URL", "https://api.groq.com/openai/v1")
+try:
+    DEFAULT_PORT = int(os.environ.get("MA_PORT", "17650"))
+except ValueError:
+    DEFAULT_PORT = 17650
+
+# ----------------------------------------------------------------------------
+# Groq free plan facts (checked Sept 2026)
+#   Whisper: 20 requests/min and 7,200 audio seconds/hour PER MODEL,
+#            every request is billed as at least 10 seconds.
+#   Chat:    30 requests/min, 8,000 tokens/min per model.
+#   Only Qwen 3.8 can switch thinking off completely -> fastest translation.
+# ----------------------------------------------------------------------------
+WHISPER_MODELS = {
+    "them": ["whisper-large-v3-turbo", "whisper-large-v3"],
+    "me": ["whisper-large-v3-turbo", "whisper-large-v3"],
+}
+STT_RPM = 19
+STT_HOUR_BUDGET = 7000.0
+MIN_BILLED = 10.0
+STT_WORKERS = 3
+MAX_MERGED = 28.0
+
+QWEN = ("qwen/qwen3.8-27b", "none")
+OSS_20 = ("openai/gpt-oss-20b", "low")
+OSS_120 = ("openai/gpt-oss-120b", "low")
+TRANSLATE_CHAIN = [QWEN, OSS_20, OSS_120]
+ANSWER_CHAINS = {"smart": [OSS_120, OSS_20, QWEN], "fast": [OSS_20, QWEN, OSS_120]}
+
+ANSWER_HISTORY = 8
+ANSWERED_EARLIER = 10            # earlier questions and the answers given (kept consistent when asked again)
+TRANSLATE_HISTORY = 2
+
+CONFIG_VERSION = 5                 # settings format; older files are converted when they are read
+DEFAULTS = {
+    "config_version": CONFIG_VERSION,
+    "api_key": "",
+    "proxy": "",
+    "languages": ["en", "de"],   # the meeting is in one of these (one = fixed, several = detected among them)
+    "my_language": "fa",         # translations, explanations, summary and the answer's meaning are in this language
+    "answer_language": "same",   # "same" = the language of the question, or a language code
+    "context": "",
+    "answer_style": "",
+    "about_me": "",
+    "me_label": "Me",
+    "them_label": "Person 1",
+    "transcribe_me": True,
+    "translate_me": True,        # a translation under my own lines too
+    "answer_me": False,          # test mode: suggest answers to your own lines too
+    "answer_mode": "fast",       # fast | smart
+    "answer_fa": True,           # the meaning (in my language) under the suggested answer
+    "mic_device": "",            # "" = Windows default
+    "speaker_device": "",
+    "sensitivity": 6,            # 1 (less) .. 10 (more)
+    "theme": "system",           # system | light | dark
+    "text_size": 100,            # % of normal
+    "answer_size": 24,           # px
+    # other services (OpenAI-compatible) and which service does what
+    "providers": [],
+    "stt_provider": "groq", "stt_model": "",     # "" = automatic (Groq's best models)
+    "tr_provider": "groq", "tr_model": "",
+    "ans_provider": "groq", "ans_model": "",
+    "use_backup": True,          # if a chosen service fails, Groq takes over
+    "live_preview": True,        # show text + translation while the other side is still speaking
+    "preview_ms": 2000,          # services without a live mode: preview every 1500/2000/3000/5000 ms
+    "live_tr_words": 3,          # live services: refresh the translation every 3/5/8 new words (0 = at sentence end)
+    # local model on this computer (faster-whisper); stt_provider "local" = it does all speech to text
+    "local_model": "",           # folder of the chosen model
+    "local_preview": False,      # the local model writes the text while the other side is still speaking
+    "local_preview_ms": 1000,    # how often (500 / 1000 / 1500 / 2000 / 3000 ms)
+    "local_device": "auto",      # auto (NVIDIA card if usable) | cpu
+    "local_bench": {},           # last speed test on this computer
+    # local AI model for translation and answers (llama.cpp); tr_provider / ans_provider "llm" = it does that task
+    "llm_model": "",             # the chosen .gguf file
+    "last_recording_dir": "",    # where the last transcribed recording was
+}
+PREVIEW_EVERY = 2.0              # default seconds between previews for services without a live mode
+
+
+def preview_seconds(cfg):
+    return max(1.0, min(10.0, cfg.get("preview_ms", 2000) / 1000.0))
+
+# Known services. All speak the OpenAI format. Iranian services are reached without the VPN proxy.
+PRESETS = {
+    "openai":     {"name": "OpenAI", "base_url": "https://api.openai.com/v1", "use_proxy": True},
+    "avalai":     {"name": "AvalAI", "base_url": "https://api.avalai.ir/v1", "use_proxy": False},
+    "gapgpt":     {"name": "GapGPT", "base_url": "https://api.gapgpt.app/v1", "use_proxy": False},
+    "openrouter": {"name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "use_proxy": True},
+    "gemini":     {"name": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "use_proxy": True},
+    "cerebras":   {"name": "Cerebras", "base_url": "https://api.cerebras.ai/v1", "use_proxy": True},
+    "mistral":    {"name": "Mistral", "base_url": "https://api.mistral.ai/v1", "use_proxy": True},
+    "deepgram":   {"name": "Deepgram", "base_url": "https://api.deepgram.com/v1", "use_proxy": True, "kind": "live"},
+    "custom":     {"name": "My service", "base_url": "", "use_proxy": True},
+}
+TASKS = {"stt": "Speech to text", "tr": "Translation", "ans": "Answers"}
+KEEP_FROM_OLD = ("api_key", "proxy", "language", "languages", "context", "answer_style", "about_me",
+                 "translate_me", "me_label", "them_label")
+CHOICES = {"answer_mode": ("smart", "fast"),
+           "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu")}
+RANGES = {"sensitivity": (1, 10), "text_size": (80, 170), "answer_size": (14, 48),
+          "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
+
+# Phrases Whisper tends to "hear" in noise
+HALLUCINATIONS = {
+    "thank you", "thank you very much", "thanks for watching", "thank you for watching",
+    "you", "bye", "subtitles by the amara org community", "the end",
+    "untertitel der amara org community", "untertitelung des zdf 2020",
+    "untertitel im auftrag des zdf 2021", "vielen dank", "danke", "tschüss",
+    "vielen dank fürs zuschauen", "untertitel von stephanie geiges",
+}
+# code: (name in English, own name, written right-to-left). All are understood by Whisper.
+LANGS = {
+    "en": ("English", "English", False), "de": ("German", "Deutsch", False), "fr": ("French", "Français", False),
+    "es": ("Spanish", "Español", False), "it": ("Italian", "Italiano", False), "pt": ("Portuguese", "Português", False),
+    "nl": ("Dutch", "Nederlands", False), "sv": ("Swedish", "Svenska", False), "da": ("Danish", "Dansk", False),
+    "no": ("Norwegian", "Norsk", False), "fi": ("Finnish", "Suomi", False), "pl": ("Polish", "Polski", False),
+    "cs": ("Czech", "Čeština", False), "ro": ("Romanian", "Română", False), "hu": ("Hungarian", "Magyar", False),
+    "el": ("Greek", "Ελληνικά", False), "tr": ("Turkish", "Türkçe", False), "az": ("Azerbaijani", "Azərbaycanca", False),
+    "ru": ("Russian", "Русский", False), "uk": ("Ukrainian", "Українська", False), "ca": ("Catalan", "Català", False),
+    "ar": ("Arabic", "العربية", True), "fa": ("Persian", "فارسی", True), "ur": ("Urdu", "اردو", True),
+    "he": ("Hebrew", "עברית", True), "hi": ("Hindi", "हिन्दी", False), "bn": ("Bengali", "বাংলা", False),
+    "zh": ("Chinese", "中文", False), "ja": ("Japanese", "日本語", False), "ko": ("Korean", "한국어", False),
+    "vi": ("Vietnamese", "Tiếng Việt", False), "th": ("Thai", "ไทย", False),
+    "id": ("Indonesian", "Bahasa Indonesia", False), "ms": ("Malay", "Bahasa Melayu", False),
+}
+LANG_CODES = {c: c for c in LANGS}
+LANG_CODES.update({v[0].lower(): c for c, v in LANGS.items()})
+LANG_CODES.update({"farsi": "fa", "castilian": "es", "flemish": "nl", "valencian": "ca", "mandarin": "zh",
+                   "moldavian": "ro", "moldovan": "ro", "nynorsk": "no", "nn": "no", "iw": "he"})
+DEEPGRAM_MULTI = {"en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"}
+# a reply really in that language? (checked by its letters; Latin-letter languages are not checked)
+LANG_SCRIPT = {"fa": r"[\u0600-\u06FF]", "ar": r"[\u0600-\u06FF]", "ur": r"[\u0600-\u06FF]", "he": r"[\u0590-\u05FF]",
+               "ru": r"[\u0400-\u04FF]", "uk": r"[\u0400-\u04FF]", "el": r"[\u0370-\u03FF]", "hi": r"[\u0900-\u097F]",
+               "bn": r"[\u0980-\u09FF]", "zh": r"[\u4E00-\u9FFF]", "ja": r"[\u3040-\u30FF\u4E00-\u9FFF]",
+               "ko": r"[\uAC00-\uD7AF]", "th": r"[\u0E00-\u0E7F]"}
+
+
+def in_language(text, code):
+    """Rough check that a reply is written in that language (by its letters)."""
+    text = (text or "").strip()
+    if len(text) < 3:
+        return False
+    pat = LANG_SCRIPT.get(code)
+    return bool(re.search(pat, text)) if pat else True
+
+
+def lang_name(code):
+    return LANGS.get(code, (code or "?",))[0]
+
+
+def meeting_langs(cfg):
+    return [c for c in cfg.get("languages") or [] if c in LANGS] or ["en"]
+
+
+def fixed_lang(cfg):
+    """The meeting language when only one is chosen (recognition is told it: faster, more accurate)."""
+    ls = meeting_langs(cfg)
+    return ls[0] if len(ls) == 1 else None
+
+
+def clean_langs(v):
+    out = []
+    for c in v if isinstance(v, list) else []:
+        c = str(c).lower()
+        if c in LANGS and c not in out:
+            out.append(c)
+    return out[:6] or ["en", "de"]
+
+
+_log_lock = threading.Lock()
+LOG_LINES = collections.deque(maxlen=600)      # shown in Setup › Log
+LOG_LISTENERS = []
+
+
+_log_file_q = queue.Queue()
+_log_writer = [None]
+_log_file_lock = threading.Lock()
+
+
+def _write_log_lines(block):
+    """Writes waiting log lines to the file (one thread at a time; the file is rotated at 1 MB)."""
+    lines = []
+    while True:
+        try:
+            lines.append(_log_file_q.get(block=block and not lines, timeout=1.0 if block else None))
+        except queue.Empty:
+            break
+    if not lines:
+        return
+    with _log_file_lock:
+        try:
+            if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 1_000_000:
+                os.replace(LOG_PATH, LOG_PATH + ".old")
+        except Exception:
+            pass
+        try:
+            with open(LOG_PATH, "a", encoding="utf-8") as f:
+                f.write("".join(lines))
+        except Exception:
+            pass
+
+
+def _log_writer_loop():
+    # the disk is written by this thread only: audio, speech and window threads never wait for it
+    while True:
+        _write_log_lines(True)
+
+
+def log_flush():
+    _write_log_lines(False)
+
+
+def log(*parts, level="info"):
+    text = " ".join(str(p) for p in parts).rstrip()
+    now = datetime.datetime.now()
+    entry = {"t": now.strftime("%H:%M:%S"), "level": level, "text": text}
+    with _log_lock:
+        LOG_LINES.append(entry)
+        if MAKE_SHORTCUT:
+            return
+        _log_file_q.put(f"{now:%Y-%m-%d %H:%M:%S} [{level}] {text}\n")
+        if _log_writer[0] is None:
+            try:
+                t = threading.Thread(target=_log_writer_loop, daemon=True, name="log-writer")
+                t.start()
+                _log_writer[0] = t
+            except RuntimeError:                         # the program is closing: write it right here
+                _write_log_lines(False)
+    for fn in list(LOG_LISTENERS):
+        try:
+            fn(entry)
+        except Exception:
+            pass
+
+
+def short(e, n=220):
+    s = str(e) or e.__class__.__name__
+    return s if len(s) <= n else s[:n] + "…"
+
+
+# ----------------------------------------------------------------------------
+# Settings
+# ----------------------------------------------------------------------------
+CONFIG_NOTE = []
+
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    saved = {}
+    for i, path in enumerate((CONFIG_PATH, CONFIG_PATH + ".bak")):
+        data = None
+        for attempt in range(5):                       # OneDrive / antivirus may lock it for a moment
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                break
+            except FileNotFoundError:
+                break
+            except (ValueError, UnicodeDecodeError) as e:
+                log("config damaged:", short(e, 100), level="error")
+                if i == 0:
+                    try:                               # keep the damaged file for inspection, never overwrite it silently
+                        os.replace(CONFIG_PATH, CONFIG_PATH + time.strftime(".bad-%Y%m%d-%H%M%S"))
+                        bad = sorted(f for f in os.listdir(DATA_DIR) if f.startswith("config.json.bad-"))
+                        for f in bad[:-3]:                 # the newest three are enough
+                            os.remove(os.path.join(DATA_DIR, f))
+                    except OSError:
+                        pass
+                break
+            except OSError as e:
+                if attempt == 4:
+                    log("config could not be read:", short(e, 100), level="error")
+                    break
+                time.sleep(0.2)
+        if isinstance(data, dict):
+            saved = data
+            if i == 1:
+                CONFIG_NOTE.append("Your settings file was damaged — the backup copy was used.")
+                log("config.json was damaged — the backup copy of your settings was used", level="warn")
+            break
+    if not isinstance(saved, dict):
+        saved = {}
+    if saved.get("config_version", 1) < 4:          # from versions 1-3: keep only what still applies
+        saved = {k: v for k, v in saved.items() if k in KEEP_FROM_OLD}
+    for k, v in saved.items():
+        if k in DEFAULTS:
+            cfg[k] = v
+    if "languages" not in saved and saved.get("language") in LANGS:
+        cfg["languages"] = [saved["language"]]          # earlier versions: one "language" (or "auto")
+    old_models = os.path.join(APP_DIR, "models")
+    lm = str(cfg.get("local_model") or "")
+    if lm and os.path.normcase(lm).startswith(os.path.normcase(old_models + os.sep)) and not os.path.isdir(lm):
+        cfg["local_model"] = MODELS_DIR + lm[len(old_models):]          # the models folder moved into Data
+    return sanitize(cfg)
+
+
+def sanitize(cfg):
+    out = dict(DEFAULTS)
+    for k, default in DEFAULTS.items():
+        v = cfg.get(k, default)
+        if isinstance(default, list):
+            continue                                   # validated separately
+        if isinstance(default, dict):
+            out[k] = v if isinstance(v, dict) else {}
+            continue
+        if isinstance(default, bool):
+            v = bool(v)
+        elif isinstance(default, int):
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                v = default
+            lo, hi = RANGES.get(k, (v, v))
+            v = min(hi, max(lo, v))
+        else:
+            v = "" if v is None else str(v)
+            if k in CHOICES and v not in CHOICES[k]:
+                v = default
+        out[k] = v
+    out["providers"] = clean_providers(cfg.get("providers"))
+    out["languages"] = clean_langs(cfg.get("languages"))
+    if out["my_language"] not in LANGS:
+        out["my_language"] = "fa"
+    if out["answer_language"] != "same" and out["answer_language"] not in LANGS:
+        out["answer_language"] = "same"
+    ids = {p["id"] for p in out["providers"]}
+    for t in TASKS:
+        if out[f"{t}_provider"] == "local" and t == "stt":
+            continue
+        if out[f"{t}_provider"] == "llm" and t != "stt":
+            out[f"{t}_model"] = ""
+            continue
+        if out[f"{t}_provider"] != "groq" and out[f"{t}_provider"] not in ids:
+            out[f"{t}_provider"] = "groq"
+        out[f"{t}_model"] = out[f"{t}_model"].strip()[:120]
+    out["config_version"] = CONFIG_VERSION
+    out["api_key"] = out["api_key"].strip()
+    return out
+
+
+def clean_providers(v):
+    out, seen = [], set()
+    for p in v if isinstance(v, list) else []:
+        if not isinstance(p, dict):
+            continue
+        pid = re.sub(r"[^a-z0-9_-]", "", str(p.get("id") or "").lower())[:40]
+        if not pid or pid in seen or pid in ("groq", "local", "llm"):     # names the program uses itself
+            continue
+        seen.add(pid)
+        out.append({"id": pid,
+                    "preset": str(p.get("preset") or "custom")[:20],
+                    "name": (str(p.get("name") or "").strip() or pid)[:40],
+                    "base_url": str(p.get("base_url") or "").strip().rstrip("/")[:300],
+                    "api_key": str(p.get("api_key") or "").strip(),
+                    "use_proxy": bool(p.get("use_proxy", True)),
+                    "kind": "live" if str(p.get("preset")) == "deepgram" else "openai",
+                    "models": [str(m)[:120] for m in (p.get("models") if isinstance(p.get("models"), list) else [])
+                               if m][:500],
+                    "caps": p.get("caps") if isinstance(p.get("caps"), dict) else {}})
+    return out
+
+
+_cfg_save_lock = threading.Lock()
+
+
+def save_config(cfg):
+    with _cfg_save_lock:
+        tmp = CONFIG_PATH + ".tmp"
+        data = json.dumps(cfg, ensure_ascii=False, indent=2)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())                     # a power cut must never leave an empty settings file
+        for i in range(10):                          # antivirus / OneDrive may hold the file for a moment
+            try:
+                if os.path.exists(CONFIG_PATH):
+                    try:
+                        shutil.copyfile(CONFIG_PATH, CONFIG_PATH + ".bak")
+                    except OSError:
+                        pass
+                os.replace(tmp, CONFIG_PATH)
+                return
+            except OSError:
+                if i == 9:
+                    try:
+                        os.remove(tmp)                   # nothing half-done is left behind
+                    except OSError:
+                        pass
+                    raise
+                time.sleep(0.2)
+
+
+_proxy_cache = {}
+
+
+def detect_proxy(manual):
+    """Cached for 5 s: reading the Windows proxy setting for every request is wasted work."""
+    now = time.time()
+    hit = _proxy_cache.get(manual)
+    if hit and now - hit[0] < 5:
+        return hit[1]
+    res = _detect_proxy(manual)
+    _proxy_cache[manual] = (now, res)
+    return res
+
+
+def _detect_proxy(manual):
+    """Manual proxy if given, otherwise the Windows system proxy (e.g. v2rayN 'system proxy')."""
+    p = (manual or "").strip()
+    source = "manual"
+    if not p:
+        source = "system"
+        try:
+            sysp = urllib.request.getproxies()
+        except Exception:
+            sysp = {}
+        p = sysp.get("https") or sysp.get("http") or ""
+        # Windows proxies speak plain HTTP even for https:// targets
+        if p.startswith("https://"):
+            p = "http://" + p[len("https://"):]
+    if not p:
+        return "", ""
+    if p.startswith("socks://"):
+        p = "socks5://" + p[len("socks://"):]
+    if "://" not in p:
+        p = "http://" + p
+    return p, source
+
+
+# ----------------------------------------------------------------------------
+# Audio helpers
+# ----------------------------------------------------------------------------
+FRAME_SEC = 0.03
+_seg_counter = itertools.count(1)
+_entry_ids = itertools.count(1)
+
+
+def resample16k(x, sr):
+    x = x.astype(np.float32, copy=False)
+    if sr == 16000 or len(x) == 0 or not sr or sr <= 0:
+        return x
+    if sr % 16000 == 0:                       # 48 kHz / 32 kHz: average blocks (clean and fast)
+        k = sr // 16000
+        n = len(x) // k * k
+        return x[:n].reshape(-1, k).mean(axis=1)
+    k = max(1, int(round(sr / 16000)))
+    if k > 1:
+        x = np.convolve(x, np.ones(k, dtype=np.float32) / k, mode="same")
+    n = int(len(x) * 16000 / sr)
+    return np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype(np.float32)
+
+
+def to_wav_bytes(x, sr=16000):
+    pcm = (np.clip(x, -1.0, 1.0) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+class AudioEncoder:
+    """Compressed upload: Opus (~10x smaller) > FLAC (~2x) > WAV. Checked once at start."""
+    ORDER = ("opus", "flac", "wav")
+
+    def __init__(self):
+        self.mode = "wav"
+        for m in ("opus", "flac"):
+            if self._probe(m):
+                self.mode = m
+                break
+        log("audio upload format:", self.mode)
+
+    def _encode(self, x, mode):
+        if mode == "wav":
+            return to_wav_bytes(x), "speech.wav", "audio/wav"
+        buf = io.BytesIO()
+        if mode == "opus":
+            sf.write(buf, x, 16000, format="OGG", subtype="OPUS")
+            return buf.getvalue(), "speech.ogg", "audio/ogg"
+        sf.write(buf, x, 16000, format="FLAC", subtype="PCM_16")
+        return buf.getvalue(), "speech.flac", "audio/flac"
+
+    def _probe(self, mode):
+        if sf is None:
+            return False
+        try:
+            t = (np.sin(np.linspace(0, 2 * np.pi * 440, 16000)) * 0.3).astype(np.float32)
+            data, _, _ = self._encode(t, mode)
+            y, _ = sf.read(io.BytesIO(data), dtype="float32")
+            return len(data) > 100 and len(y) > 8000
+        except Exception as e:
+            log("encoder", mode, "not available:", short(e))
+            return False
+
+    def encode(self, x):
+        try:
+            return self._encode(x, self.mode)
+        except Exception as e:
+            log("encode failed:", short(e))
+            if self.downgrade():
+                return self.encode(x)
+            raise
+
+    def downgrade(self):
+        i = self.ORDER.index(self.mode)
+        if i < len(self.ORDER) - 1:
+            self.mode = self.ORDER[i + 1]
+            log("audio upload format ->", self.mode)
+            return True
+        return False
+
+
+class Segmenter:
+    """Turns a continuous audio stream into sentences.
+
+    * background noise is measured all the time, so room noise never keeps a
+      sentence open;
+    * the longer someone talks, the shorter the pause needed to cut -> long
+      questions show up piece by piece instead of all at the end;
+    * a forced cut happens at the quietest moment, never in the middle of a word.
+    """
+
+    def __init__(self, source, rate, sensitivity, sink, clock=None):
+        self.source = source
+        self.rate = rate
+        self.sink = sink
+        self.clock = clock or time.time        # a recording file uses its own position as the clock
+        self.is_me = source == "me"
+        self.set_sensitivity(sensitivity)
+        self.max_len = 20.0 if self.is_me else 9.0
+        self.preview_every = 0.0          # >0: send "preview" events while someone is speaking
+        self.preview_min = 1.2            # seconds of speech before the first preview
+        self.last_preview = 0.0
+        self.recent = collections.deque(maxlen=260)          # ~8 s of loudness values
+        self.floor = 0.0
+        self.count = 0
+        self.level = 0.0
+        self.pre = collections.deque(maxlen=12)               # ~0.36 s before speech starts
+        self.loud_run = 0
+        self.drop_req = False                                 # set by Pause/Continue: forget the unfinished sentence
+        self.spec_final = False                               # local model does the final text: try it at each pause
+        self.spec_sent = False
+        self._reset()
+
+    def set_sensitivity(self, s):
+        s = min(10, max(1, int(s)))
+        self.min_level = 0.02 * (0.1 ** ((s - 1) / 9.0))    # 0.02 (1) ... 0.002 (10)
+
+    def _reset(self):
+        self.active = False
+        self.frames, self.louds, self.rms = [], [], []
+        self.samples = 0
+        self.quiet = 0.0
+        self.t0 = 0.0
+        self.seg_id = None
+
+    def end_silence(self, length):
+        if self.is_me:
+            return 1.1 if length < 10 else 0.6
+        if length < 3.5:
+            return 0.45
+        if length < 6.0:
+            return 0.32
+        return 0.22
+
+    def _drop(self):
+        self.drop_req = False
+        if self.active:
+            self.sink("discard", self.source, self.seg_id)
+        self._reset()
+        self.pre.clear()
+        self.loud_run = 0
+
+    def feed(self, x):
+        if self.drop_req:
+            self._drop()
+        rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+        self.level = rms
+        self.recent.append(rms)
+        self.count += 1
+        if self.count % 8 == 0 or len(self.recent) < 16:
+            self.floor = float(np.percentile(self.recent, 10))
+        loud = rms > max(self.min_level, self.floor * 2.5)
+        dur = len(x) / self.rate
+
+        if not self.active:
+            self.pre.append((x, loud, rms))
+            self.loud_run = (self.loud_run + 1) if loud else 0
+            if self.loud_run >= 3:                             # ~90 ms of real sound
+                self._begin()
+            return
+
+        self.frames.append(x)
+        self.louds.append(loud)
+        self.rms.append(rms)
+        self.samples += len(x)
+        if loud:
+            self.spec_sent = False                          # speaking again: a later pause gets a new try
+        self.quiet = 0.0 if loud else self.quiet + dur
+        length = self.samples / self.rate
+        if self.quiet >= self.end_silence(length):
+            self._finish()
+        elif length >= self.max_len:
+            self._cut()
+        elif self.spec_final and not self.spec_sent and length >= 0.6 and 0.1 <= self.quiet < 0.2:
+            # the speaker just paused: one update of the WHOLE sentence now; if the pause turns out to be
+            # the end, this text is used as the final one (no second pass, no waiting)
+            self.spec_sent = True
+            self.sink("preview", self.source, self.seg_id, audio=resample16k(np.concatenate(self.frames), self.rate),
+                      t0=self.t0, spec=True)
+        elif self.preview_every and length >= self.preview_min and self.quiet < 0.2:
+            now = self.clock()
+            if now - self.last_preview >= self.preview_every:
+                self.last_preview = now
+                # always from the START of the sentence: no word is ever cut in half for good
+                self.sink("preview", self.source, self.seg_id,
+                          audio=resample16k(np.concatenate(self.frames), self.rate), t0=self.t0)
+
+    def silence(self, dur):
+        """The device delivered nothing (system audio does this when nothing plays)."""
+        if self.drop_req:
+            self._drop()
+        self.level = 0.0
+        self.loud_run = 0
+        if self.active:
+            self.quiet += dur
+            if self.quiet >= self.end_silence(self.samples / self.rate):
+                self._finish()
+            elif self.spec_final and not self.spec_sent and self.samples / self.rate >= 0.6 and 0.1 <= self.quiet < 0.2:
+                self.spec_sent = True
+                self.sink("preview", self.source, self.seg_id,
+                          audio=resample16k(np.concatenate(self.frames), self.rate), t0=self.t0, spec=True)
+
+    def flush(self):
+        if self.active:
+            self._finish()
+
+    def _begin(self):
+        self.active = True
+        self.frames = [f for f, _, _ in self.pre]
+        self.louds = [l for _, l, _ in self.pre]
+        self.rms = [r for _, _, r in self.pre]
+        self.pre.clear()
+        self.loud_run = 0
+        self.samples = sum(len(f) for f in self.frames)
+        self.quiet = 0.0
+        self.t0 = self.clock() - sum(len(f) for f in self.frames[-3:]) / self.rate
+        self.seg_id = next(_seg_counter)
+        self.last_preview = 0.0                   # first preview as soon as 1.2 s have been spoken
+        self.spec_sent = False
+        self.sink("start", self.source, self.seg_id, t0=self.t0)
+
+    def _emit(self, frames, louds, t0, seg_id, t_end):
+        speech = sum(len(f) for f, l in zip(frames, louds) if l) / self.rate
+        if speech < 0.3:
+            self.sink("discard", self.source, seg_id)
+            return
+        k = 0                                                   # drop long trailing silence
+        while k < len(louds) and not louds[-1 - k]:
+            k += 1
+        if k > 8:
+            frames = frames[:len(frames) - (k - 8)]
+        audio = np.concatenate(frames)
+        dur = len(audio) / self.rate
+        self.sink("segment", self.source, seg_id, audio=resample16k(audio, self.rate),
+                  t0=t0, t_end=t_end, dur=dur)
+
+    def _finish(self):
+        self._emit(self.frames, self.louds, self.t0, self.seg_id, self.clock() - self.quiet)
+        self._reset()
+
+    def _cut(self):
+        n = len(self.frames)
+        window = max(1, min(n - 1, int(1.5 / FRAME_SEC)))
+        start = n - window
+        i = start + int(np.argmin(self.rms[start:n]))
+        head_samples = sum(len(f) for f in self.frames[:i + 1])
+        head_dur = head_samples / self.rate
+        self._emit(self.frames[:i + 1], self.louds[:i + 1], self.t0, self.seg_id, self.t0 + head_dur)
+        self.frames = self.frames[i + 1:]
+        self.louds = self.louds[i + 1:]
+        self.rms = self.rms[i + 1:]
+        self.samples -= head_samples
+        self.t0 += head_dur
+        q = 0
+        while q < len(self.louds) and not self.louds[-1 - q]:
+            q += 1
+        self.quiet = q * FRAME_SEC
+        self.seg_id = next(_seg_counter)
+        self.last_preview = 0.0                   # a new sentence: previews and the pause-update start afresh
+        self.spec_sent = False
+        self.sink("start", self.source, self.seg_id, t0=self.t0)
+
+
+def friendly_audio_error(e, device_name=""):
+    s = str(e)
+    dev = f" ({device_name})" if device_name else ""
+    if "-9999" in s or "Unanticipated host error" in s:
+        return (f"Windows refused to share this sound device{dev}. Choose another speaker/headphone "
+                "in Setup › Audio (for Bluetooth pick the 'Headphones' entry, not 'Headset / Hands-Free'), "
+                "then press 'Check audio devices' in Setup › Log.")
+    if "-9996" in s or "Invalid device" in s:
+        return "The selected audio device is not available. Choose another one in Setup › Audio."
+    if "-9997" in s or "sample rate" in s.lower():
+        return "The audio device refused its sample rate. Try another device in Setup › Audio."
+    if "-9985" in s or "unavailable" in s.lower():
+        return "The audio device is busy or blocked. Check Windows microphone privacy settings."
+    return "Audio error: " + short(s)
+
+
+def fmt_name(fmt):
+    return "int16" if fmt == pyaudio.paInt16 else "float32"
+
+
+WORKING_PLAN = {}          # device name -> (mode, fmt, channels, buffer) that worked
+
+
+def com_init():
+    """WASAPI needs COM in every thread that opens a stream; without it Windows
+    answers -9999 'Unanticipated host error'."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        hr = ctypes.windll.ole32.CoInitializeEx(None, 0x0)        # COINIT_MULTITHREADED
+        return hr in (0, 1)                                         # S_OK / S_FALSE
+    except Exception:
+        return False
+
+
+def default_endpoint_ids():
+    """Windows' current default speaker and microphone (their device ids), or None if unknown.
+    Used to follow the user when he plugs in / switches headphones during a meeting."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    import uuid
+    from ctypes import byref, c_void_p, c_int, c_wchar_p, POINTER, WINFUNCTYPE, HRESULT, c_ulong
+    ole = ctypes.OleDLL("ole32")
+
+    def guid(text):
+        return (ctypes.c_ubyte * 16).from_buffer_copy(uuid.UUID(text).bytes_le)
+
+    def method(obj, index, restype, *argtypes):
+        vtbl = ctypes.cast(obj, POINTER(POINTER(c_void_p))).contents
+        fn = WINFUNCTYPE(restype, c_void_p, *argtypes)(vtbl[index])
+        return lambda *a: fn(obj, *a)
+
+    enum = c_void_p()
+    ole.CoCreateInstance(byref(guid("BCDE0395-E52F-467C-8E3D-C4579291692E")), None, 0x17,
+                         byref(guid("A95664D2-9614-4F35-A746-DE8DB63617E6")), byref(enum))
+    if not enum.value:
+        return None
+    out = []
+    try:
+        for flow in (0, 1):                                   # speakers (render), microphone (capture)
+            dev = c_void_p()
+            try:
+                # IMMDeviceEnumerator::GetDefaultAudioEndpoint(dataFlow, eConsole, &device)
+                method(enum, 4, HRESULT, c_int, c_int, POINTER(c_void_p))(flow, 0, byref(dev))
+            except OSError:
+                out.append("")                                 # no such device right now
+                continue
+            if not dev.value:                                  # (a failure that did not raise)
+                out.append("")
+                continue
+            try:
+                sid = c_wchar_p()
+                method(dev, 5, HRESULT, POINTER(c_wchar_p))(byref(sid))   # IMMDevice::GetId
+                out.append(sid.value or "")
+                free = ctypes.windll.ole32.CoTaskMemFree
+                free.restype = None
+                free(sid)
+            finally:
+                method(dev, 2, c_ulong)()                      # Release
+    finally:
+        method(enum, 2, c_ulong)()
+    return tuple(out)
+
+
+def com_uninit(done):
+    if done:
+        try:
+            import ctypes
+            ctypes.windll.ole32.CoUninitialize()
+        except Exception:
+            pass
+
+
+def open_input_stream(pa, device, callback=None, attempts=None, skip=(), remember=True):
+    """Opens a device for recording. Some Windows drivers refuse the first way
+    (error -9999), so several ways are tried in turn. Returns (stream, mode, fmt, channels, rate, desc)."""
+    ch = max(1, int(device["maxInputChannels"]))
+    rate = int(device["defaultSampleRate"])
+    idx = int(device["index"])
+    plans = []
+    if callback is not None:
+        plans += [("callback", pyaudio.paInt16, ch, max(256, int(rate * FRAME_SEC))),
+                  ("callback", pyaudio.paInt16, ch, 0),
+                  ("callback", pyaudio.paFloat32, ch, 0)]
+    plans += [("polling", pyaudio.paInt16, ch, 0), ("polling", pyaudio.paFloat32, ch, 0),
+              ("polling", pyaudio.paInt16, ch, 4096)]
+    if ch > 2:
+        plans.append(("polling", pyaudio.paFloat32, 2, 0))
+    known = WORKING_PLAN.get(device.get("name"))
+    if known in plans:
+        plans.remove(known)
+        plans.insert(0, known)
+    plans = [pl for pl in plans if pl not in skip]
+    if not plans:
+        raise OSError("no other way left to open this device")
+    last = None
+    for plan in plans:
+        mode, fmt, c, fpb = plan
+        desc = f"{mode}, {fmt_name(fmt)}, {c} ch, {rate} Hz, buffer {fpb or 'auto'}"
+        try:
+            kw = dict(format=fmt, channels=c, rate=rate, input=True, input_device_index=idx,
+                      frames_per_buffer=fpb)
+            if mode == "callback":
+                kw["stream_callback"] = callback
+            st = pa.open(**kw)
+            if remember:
+                WORKING_PLAN[device.get("name")] = plan
+            if attempts is not None:
+                attempts.append("OK    " + desc)
+            return st, mode, fmt, c, rate, desc, plan
+        except Exception as e:
+            last = e
+            if attempts is not None:
+                attempts.append(f"FAIL  {desc}  ->  {short(e, 120)}")
+    raise last
+
+
+def start_reader(stream, rate, q, stop):
+    """Reads a blocking stream in its own thread and hands the data over like a callback would.
+    (Asking Windows how much audio is ready does not work reliably, so we simply wait for it.)"""
+    n = max(256, int(rate * FRAME_SEC))
+
+    def loop():
+        while not stop.is_set():
+            try:
+                q.put(stream.read(n, exception_on_overflow=False))
+            except Exception as e:
+                if not stop.is_set():
+                    log("audio read stopped:", short(e), level="warn")
+                break
+    t = threading.Thread(target=loop, daemon=True, name="audio-reader")
+    t.start()
+    return t
+
+
+def _stream_alive(stream):
+    try:
+        return stream.is_active()
+    except Exception:
+        return False
+
+
+def _close_if_done(stream, reader):
+    """Closes a stream whose reader thread has finished; True when it is gone."""
+    if reader.is_alive():
+        return False
+    try:
+        stream.close()
+    except Exception:
+        pass
+    return True
+
+
+def to_float(data, fmt, ch):
+    if fmt == pyaudio.paInt16:
+        x = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    else:
+        x = np.frombuffer(data, dtype=np.float32).copy()
+    if ch > 1:
+        x = x[:len(x) // ch * ch].reshape(-1, ch).mean(axis=1)
+    return x
+
+
+def describe_device(d):
+    kind = "loopback" if d.get("isLoopbackDevice") else ("input" if d["maxInputChannels"] > 0 else "output")
+    return (f"#{d['index']} {d['name']}  [{kind}, in {d['maxInputChannels']} ch, "
+            f"out {d['maxOutputChannels']} ch, {int(d['defaultSampleRate'])} Hz]")
+
+
+class AudioCapture(threading.Thread):
+    """Reads one device (your microphone or the system-sound loopback)."""
+
+    def __init__(self, pa, device, source, sensitivity, sink):
+        super().__init__(daemon=True, name=f"capture-{source}")
+        self.pa, self.device, self.source = pa, device, source
+        self.sensitivity, self.sink = sensitivity, sink
+        self.stop_event = threading.Event()
+        self.level = 0.0
+        self.error = None
+        self.seg = None
+        self.com = False
+        self.started = time.time()
+        self.received = 0.0
+        self.peak = 0.0
+        self.reported_health = False
+        self.first_sound = False
+        self.tap = None               # live service: gets every audio frame
+        self.preview_every = 0.0
+        self.preview_min = 1.2
+        self.soft_errors = set()
+        self.last_data = time.time()
+        self.restarts = 0
+        self.error_note = ""
+        self.spec_final = False
+
+    def set_sensitivity(self, s):
+        self.sensitivity = s
+        if self.seg:
+            self.seg.set_sensitivity(s)
+
+    def _got(self, x, rate):
+        self.last_data = time.time()
+        tap = self.tap
+        if tap is not None:
+            try:
+                tap(x, rate)
+            except Exception as e:
+                self._soft_error("live", e)
+        try:
+            self.seg.feed(x)
+        except Exception as e:
+            self._soft_error("segment", e)
+        self.level = self.seg.level
+        self.received += len(x) / rate
+        if len(x):
+            self.peak = max(self.peak, float(np.abs(x).max()))
+        self._health(rate)
+
+    def _soft_error(self, where, e):
+        """A problem AFTER the audio arrived (transcription side): log it once, keep listening."""
+        key = (where, type(e).__name__)
+        if key not in self.soft_errors:
+            self.soft_errors.add(key)
+            log(f"audio processing problem ({where}, {self.source}) — still listening:", short(e, 160), level="error")
+            log(traceback.format_exc(), level="debug")
+
+    def _health(self, rate):
+        """One clear line in the log after ~4 s: is sound really arriving?"""
+        what = "Microphone" if self.source == "me" else "Computer sound"
+        if not self.reported_health and time.time() - self.started > 4:
+            self.reported_health = True
+            if self.received > 0.5:
+                log(f"{what}: OK — audio is arriving (loudest level so far {self.peak:.3f}).")
+            elif self.source == "me":
+                log("Microphone: no audio arrives from this device. Check Windows microphone privacy "
+                    "settings or choose another microphone in Setup › Audio.", level="error")
+            else:
+                log("Computer sound: no sound has played yet. This is normal if nothing is playing — "
+                    "a line will appear here when the first sound arrives.")
+        if self.reported_health and not self.first_sound and self.source == "them" and self.peak > 0.01:
+            self.first_sound = True
+            log(f"Computer sound: OK — first sound received (level {self.peak:.3f}).")
+
+    def run(self):
+        stream = None
+        name = self.device.get("name", "?")
+        what = "Microphone" if self.source == "me" else "Computer sound"
+        try:
+            self.com = com_init()
+            tried = []
+            while not self.stop_event.is_set():
+                q = queue.Queue()        # a fresh queue each time: an old stream that is still alive can't mix in
+
+                def callback(in_data, frame_count, time_info, status, q=q):
+                    q.put(in_data)
+                    return (None, pyaudio.paContinue)
+                attempts = []
+                try:
+                    stream, mode, fmt, ch, rate, desc, plan = open_input_stream(
+                        self.pa, self.device, callback, attempts, skip=tried)
+                except Exception:
+                    for a in attempts:                   # every way failed -> show all of them as problems
+                        log(f"{what} open: {a}", level="warn")
+                    raise
+                refused = len(attempts) - 1
+                note = f" (Windows refused {refused} other way{'s' if refused > 1 else ''} first — not a problem)" if refused else ""
+                log(f"{what}: recording from {describe_device(self.device)} using {desc}{note}")
+                for a in attempts[:-1]:
+                    log(f"{what} open: {a}", level="debug")
+                if self.seg is None:
+                    self.seg = Segmenter(self.source, rate, self.sensitivity, self.sink)
+                    self.seg.preview_every = self.preview_every
+                    self.seg.preview_min = self.preview_min
+                    self.seg.spec_final = self.spec_final
+                self.started = time.time()
+                self.received = 0.0
+                stop_reader = threading.Event()
+                reader = None
+                stream.start_stream()
+                if mode != "callback":
+                    reader = start_reader(stream, rate, q, stop_reader)
+                stalled = lost = False
+                self.last_data = time.time()
+                while not self.stop_event.is_set():
+                    try:
+                        data = q.get(timeout=0.05)
+                    except queue.Empty:
+                        try:
+                            self.seg.silence(0.05)
+                        except Exception as e:
+                            self._soft_error("segment", e)
+                        self.level = 0.0
+                        tap = self.tap
+                        if tap is not None:
+                            try:
+                                tap(None, 0.05)             # keeps the live service's clock in step
+                            except Exception as e:
+                                self._soft_error("live", e)
+                        # a microphone always delivers audio (even silence); nothing at all = this way is broken
+                        if self.source == "me" and self.received == 0 and time.time() - self.started > 3:
+                            stalled = True
+                            break
+                        # it worked, then stopped (device unplugged, Bluetooth dropped, reader died): open it again
+                        if (self.source == "me" and self.received > 0 and time.time() - self.last_data > 2.5) or \
+                                (reader is not None and not reader.is_alive()) or \
+                                (reader is None and not _stream_alive(stream)):     # callback mode: the stream died
+                            lost = True
+                            break
+                        self._health(rate)
+                        continue
+                    self._got(to_float(data, fmt, ch), rate)
+                stop_reader.set()
+                try:
+                    stream.stop_stream()
+                except Exception:
+                    pass
+                if reader is not None:
+                    reader.join(timeout=1.5)
+                if reader is None or not reader.is_alive():
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                else:
+                    # still stuck inside the driver: closing it now can crash; it is closed once the read returns
+                    self.stuck_streams = [x for x in getattr(self, "stuck_streams", []) if not _close_if_done(*x)]
+                    self.stuck_streams.append((stream, reader))
+                    log(f"{what}: the old audio stream is still busy in the driver (closed later)", level="warn")
+                stream = None
+                self.stuck_streams = [x for x in getattr(self, "stuck_streams", []) if not _close_if_done(*x)]
+                if lost and not self.stop_event.is_set():
+                    if time.time() - getattr(self, "last_restart", 0) > 120:
+                        self.restarts = 0                           # it worked well for a while: new budget
+                    self.last_restart = time.time()
+                    self.restarts += 1
+                    if self.restarts > 5:
+                        raise OSError("the device keeps stopping")
+                    log(f"{what}: the audio stopped arriving — opening the device again", level="warn")
+                    self.error_note = f"{what} stopped for a moment and was reopened."
+                    while not q.empty():
+                        q.get_nowait()
+                    time.sleep(0.5)
+                    continue
+                if not stalled:
+                    break
+                WORKING_PLAN.pop(name, None)
+                tried.append(plan)
+                log(f"{what}: no audio arrived with '{desc}' — trying another way.", level="warn")
+                while not q.empty():
+                    q.get_nowait()
+            if self.seg:
+                self.seg.flush()
+        except Exception as e:
+            self.error = friendly_audio_error(e, name)
+            log(f"{what} failed on {describe_device(self.device) if 'index' in self.device else name}: {e}", level="error")
+            log(traceback.format_exc(), level="debug")
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            com_uninit(self.com)
+
+
+def wasapi_devices(pa):
+    info = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+    devs = []
+    for i in range(pa.get_device_count()):
+        try:
+            d = pa.get_device_info_by_index(i)
+        except Exception:
+            continue
+        if d.get("hostApi") == info["index"]:
+            devs.append(d)
+    mics = [d for d in devs if d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice")]
+    speakers = [d for d in devs if d["maxOutputChannels"] > 0 and not d.get("isLoopbackDevice")]
+    loops = [d for d in devs if d.get("isLoopbackDevice")]
+    return info, mics, speakers, loops
+
+
+PA_LOCK = threading.RLock()          # PortAudio must not be started/stopped by two threads at once
+
+
+def new_pa():
+    with PA_LOCK:
+        return pyaudio.PyAudio()
+
+
+def close_pa(pa):
+    with PA_LOCK:
+        try:
+            pa.terminate()
+        except Exception:
+            pass
+
+
+def device_at(pa, index):
+    """Device info by index, or None (a device can disappear between two calls)."""
+    try:
+        return pa.get_device_info_by_index(index) if index is not None and index >= 0 else None
+    except Exception:
+        return None
+
+
+def list_devices():
+    if pyaudio is None:
+        return {"mics": [], "speakers": [], "default_mic": "", "default_speaker": "",
+                "error": "Audio library missing (run install.bat)."}
+    pa = new_pa()
+    try:
+        try:
+            info, mics, speakers, _ = wasapi_devices(pa)
+        except Exception as e:
+            return {"mics": [], "speakers": [], "default_mic": "", "default_speaker": "",
+                    "error": friendly_audio_error(e)}
+        dm = (device_at(pa, info.get("defaultInputDevice", -1)) or {}).get("name", "")
+        ds = (device_at(pa, info.get("defaultOutputDevice", -1)) or {}).get("name", "")
+        return {"mics": [d["name"] for d in mics], "speakers": [d["name"] for d in speakers],
+                "default_mic": dm, "default_speaker": ds}
+    finally:
+        close_pa(pa)
+
+
+def audio_check(cfg):
+    """Tries every relevant device for about a second and writes a readable report."""
+    out = []
+    add = out.append
+    add(f"Meeting Assistant {VERSION} · Python {sys.version.split()[0]} · {sys.platform}")
+    if pyaudio is None:
+        add("PyAudioWPatch is NOT installed -> run install.bat again.")
+        return out
+    add(f"PyAudioWPatch {getattr(pyaudio, '__version__', '?')} · {pyaudio.get_portaudio_version_text()}")
+    add(f"Upload format: {'soundfile OK' if sf else 'soundfile missing (WAV upload)'} · HTTP/2: {'yes' if HTTP2 else 'no'}")
+    com = com_init()
+    pa = new_pa()
+    try:
+        try:
+            info, mics, speakers, loops = wasapi_devices(pa)
+        except Exception as e:
+            add(f"WASAPI is not available: {e}")
+            return out
+        dm = info.get("defaultInputDevice", -1)
+        ds = info.get("defaultOutputDevice", -1)
+        add("")
+        add(f"Windows default microphone: {(device_at(pa, dm) or {}).get('name', '(none)')}")
+        add(f"Windows default speakers:   {(device_at(pa, ds) or {}).get('name', '(none)')}")
+        add("")
+        add("WASAPI devices:")
+        for d in mics + speakers + loops:
+            add("  " + describe_device(d))
+        mic, loop = resolve_devices(pa, cfg, True)
+        add("")
+        add(f"Selected microphone:      {mic['name'] if mic else '(none)'}")
+        add(f"Selected computer sound:  {loop['name'] if loop else '(none)'}")
+
+        def trial(dev, label):
+            add("")
+            add(f"Test: {label} -> {dev['name']}")
+            tried, frames, peak = [], 0, 0.0
+            while True:
+                attempts = []
+                q = queue.Queue()
+
+                def cb(data, fc, ti, status):
+                    q.put(data)
+                    return (None, pyaudio.paContinue)
+                try:
+                    st, mode, fmt, ch, rate, desc, plan = open_input_stream(pa, dev, cb, attempts,
+                                                                            skip=tried, remember=False)
+                except Exception:
+                    for a in attempts:
+                        add("   " + a)
+                    if not tried:
+                        add("   RESULT: cannot open this device.")
+                        return False
+                    add("   RESULT: opens, but no way delivered any audio.")
+                    return dev.get("isLoopbackDevice", False)
+                for a in attempts:
+                    add("   " + a)
+                stop = threading.Event()
+                reader = None
+                frames, peak, t_end = 0, 0.0, time.time() + 1.5
+                try:
+                    st.start_stream()
+                    if mode != "callback":
+                        reader = start_reader(st, rate, q, stop)
+                    while time.time() < t_end:
+                        try:
+                            x = to_float(q.get(timeout=0.05), fmt, ch)
+                        except queue.Empty:
+                            continue
+                        frames += len(x)
+                        peak = max(peak, float(np.abs(x).max()) if len(x) else 0.0)
+                except Exception as e:
+                    add(f"   error while reading: {e}")
+                finally:
+                    stop.set()
+                    try:
+                        st.stop_stream()
+                    except Exception:
+                        pass
+                    if reader is not None:
+                        reader.join(timeout=1.5)
+                    if reader is None or not reader.is_alive():
+                        try:
+                            st.close()
+                        except Exception:
+                            pass
+                if frames == 0 and not dev.get("isLoopbackDevice"):
+                    add("   -> no audio arrived this way, trying the next one")
+                    tried.append(plan)
+                    continue
+                break
+            if frames == 0 and dev.get("isLoopbackDevice"):
+                add("   RESULT: opens OK. No sound was playing during the test (that is normal).")
+            else:
+                add(f"   RESULT: OK — received {frames / rate:.1f} s of audio, loudest level {peak:.3f}")
+            return True
+
+        if mic:
+            trial(mic, "microphone")
+        if loop:
+            ok = trial(loop, "computer sound")
+            if not ok:
+                others = [d for d in loops if d["index"] != loop["index"]]
+                if others:
+                    add("")
+                    add("Trying the other speaker devices:")
+                    for d in others:
+                        if trial(d, "alternative"):
+                            add(f"   >>> This one works. In Setup › Audio choose: {d['name'].replace(' [Loopback]', '')}")
+        else:
+            add("")
+            add("No loopback device found for the selected speakers.")
+    finally:
+        close_pa(pa)
+        com_uninit(com)
+    return out
+
+
+def resolve_devices(pa, cfg, want_mic=True):
+    info, mics, speakers, loops = wasapi_devices(pa)
+    mic = None
+    if want_mic:
+        mic = next((d for d in mics if d["name"] == cfg["mic_device"]), None) if cfg["mic_device"] else None
+        if mic is None and info.get("defaultInputDevice", -1) >= 0:
+            mic = device_at(pa, info["defaultInputDevice"])
+    spk = next((d for d in speakers if d["name"] == cfg["speaker_device"]), None) if cfg["speaker_device"] else None
+    if spk is None and info.get("defaultOutputDevice", -1) >= 0:
+        spk = device_at(pa, info["defaultOutputDevice"])
+    loop = None
+    if spk is not None:
+        if spk.get("isLoopbackDevice"):
+            loop = spk
+        else:
+            loop = next((d for d in loops if d["name"] == spk["name"] + " [Loopback]"), None) \
+                or next((d for d in loops if d["name"].startswith(spk["name"])), None)
+    if loop is None and not cfg["speaker_device"]:
+        try:
+            loop = pa.get_default_wasapi_loopback()
+        except Exception:
+            loop = None
+    return mic, loop
+
+
+# ----------------------------------------------------------------------------
+# Groq API (direct HTTP: one warm, reused connection)
+# ----------------------------------------------------------------------------
+class APIError(Exception):
+    def __init__(self, message, status=0, retry_after=None):
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
+
+
+class AuthError(APIError):
+    pass
+
+
+class RateLimited(APIError):
+    pass
+
+
+class ModelUnavailable(APIError):
+    pass
+
+
+class BadRequest(APIError):
+    pass
+
+
+class Transient(APIError):
+    pass
+
+
+def network_error(e, name="Groq"):
+    if isinstance(e, httpx.ProxyError):
+        return Transient("Cannot connect through the proxy — is your proxy / VPN app running?")
+    if isinstance(e, httpx.ConnectTimeout):
+        return Transient(f"Connecting to {name} timed out — check your internet connection.")
+    if isinstance(e, httpx.ConnectError):
+        return Transient(f"Cannot reach {name} — check your internet connection (or the address).")
+    if isinstance(e, (httpx.ReadTimeout, httpx.WriteTimeout)):
+        return Transient(f"{name} took too long to respond.")
+    return Transient("Network problem: " + short(e, 120))
+
+
+# where each service shows its balance / usage (for services that do not report it through the API)
+BILLING_PAGES = {
+    "groq": "https://console.groq.com/settings/limits", "openai": "https://platform.openai.com/settings/organization/billing",
+    "openrouter": "https://openrouter.ai/settings/credits", "gemini": "https://aistudio.google.com/",
+    "cerebras": "https://cloud.cerebras.ai/", "mistral": "https://console.mistral.ai/", "deepgram": "https://console.deepgram.com/",
+    "avalai": "https://avalai.ir/", "gapgpt": "https://gapgpt.app/",
+}
+
+
+def _num(v):
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_n(v):
+    return f"{v:,.0f}" if v is not None and v >= 100 else (f"{v:g}" if v is not None else "?")
+
+
+def _fmt_reset(v):
+    """'2m59.5s' / '7.66s' / '1h2m' / seconds -> a short readable time."""
+    if not v:
+        return ""
+    v = str(v).strip()
+    try:
+        if re.fullmatch(r"[\d.]+", v):
+            secs = float(v)
+        else:
+            secs = 0.0
+            for n, u in re.findall(r"([\d.]+)(ms|h|m|s)", v):
+                secs += float(n) * {"h": 3600, "m": 60, "s": 1, "ms": 0.001}[u]
+    except ValueError:                                   # an odd value such as ".."
+        return ""
+    if secs < 1:
+        return ""
+    if secs >= 3600:
+        return f"{secs / 3600:.1f} h"
+    if secs >= 60:
+        return f"{secs / 60:.0f} min"
+    return f"{secs:.0f} s"
+
+
+def describe_limits(h, groq=False):
+    """Readable lines from x-ratelimit-* headers. Groq: 'requests' = per day, 'tokens' = per minute."""
+    out = []
+    kinds = sorted({k[len("x-ratelimit-limit-"):] for k in h if k.startswith("x-ratelimit-limit-")})
+    for kind in kinds:
+        lim, rem = _num(h.get(f"x-ratelimit-limit-{kind}")), _num(h.get(f"x-ratelimit-remaining-{kind}"))
+        if lim is None and rem is None:
+            continue
+        what = kind.replace("-", " ")
+        if groq and kind == "requests":
+            what = "requests today"
+        elif groq and kind == "tokens":
+            what = "tokens this minute"
+        else:
+            what = what.replace("requests day", "requests today").replace("tokens minute", "tokens this minute") \
+                       .replace("requests minute", "requests this minute").replace("tokens day", "tokens today")
+        reset = _fmt_reset(h.get(f"x-ratelimit-reset-{kind}"))
+        out.append(f"{_fmt_n(rem)} of {_fmt_n(lim)} {what} left" + (f" (full again in {reset})" if reset else ""))
+    return out
+
+
+
+def effort_for(model):
+    """Thinking settings that make a model answer fastest (ignored/retried if not supported)."""
+    m = model.lower()
+    if "qwen3" in m:
+        return "none"
+    if re.search(r"(^|/)(gpt-oss|gpt-5|o[134])", m):
+        return "low"
+    return None
+
+
+USAGE = {}                     # service name -> {"requests", "tokens", "audio"} for the current meeting
+_usage_lock = threading.Lock()
+
+
+USAGE_ON = [False]             # only meetings are counted (not tests)
+
+
+def usage_copy():
+    with _usage_lock:
+        return {k: dict(v) for k, v in USAGE.items()}
+
+
+def record_usage(service, requests=1, tokens=0, audio=0.0):
+    if not USAGE_ON[0]:
+        return
+    with _usage_lock:
+        u = USAGE.setdefault(service, {"requests": 0, "tokens": 0, "audio": 0.0})
+        u["requests"] += requests
+        u["tokens"] += int(tokens)
+        u["audio"] += audio
+
+
+class GroqAPI:
+    """Client for Groq or any other service that speaks the OpenAI format."""
+
+    def __init__(self, key, proxy, base_url=None, name="Groq"):
+        self.name = name
+        self.stt_level = 0            # how much of the full transcription request this service accepts
+        self.stt_miss = 0             # full requests refused in a row (one refusal may be a bad sound file)
+        self.stt_calls = 0
+        self.compat = {}              # model -> chat request variant that works
+        self.limits = {}              # "chat" / "audio" -> the service's last x-ratelimit-* headers
+        kw = dict(base_url=base_url or BASE_URL,
+                  headers={"Authorization": f"Bearer {key}", "User-Agent": f"MeetingAssistant/{VERSION}"},
+                  timeout=httpx.Timeout(20.0, connect=8.0),
+                  limits=httpx.Limits(max_connections=16, max_keepalive_connections=8, keepalive_expiry=150.0),
+                  trust_env=False)
+        if HTTP2:
+            kw["http2"] = True
+        if proxy:
+            kw["proxy"] = proxy
+        try:
+            self.client = httpx.Client(**kw)
+        except ValueError:
+            raise APIError(f"The proxy address '{proxy}' is not valid. Example: http://127.0.0.1:10809")
+        except ImportError as e:
+            if "socks" in str(e).lower():
+                raise APIError("SOCKS proxy support is missing — run install.bat again, "
+                               "or use your VPN's HTTP proxy port.")
+            raise
+        self.encoder = AudioEncoder()
+
+    def close(self):
+        try:
+            self.client.close()
+        except Exception:
+            pass
+
+    def _note_limits(self, r, kind):
+        """Remembers the service's own 'what is left' numbers (x-ratelimit-* headers) of the last answer."""
+        h = {k.lower(): v for k, v in r.headers.items() if k.lower().startswith(("x-ratelimit", "x-credit", "x-balance"))}
+        if h:
+            self.limits[kind] = {"t": time.time(), "h": h}
+
+    def _raise_for(self, r):
+        self._note_limits(r, "audio" if "/audio/" in str(r.url) else "chat")
+        if r.status_code < 300:
+            return
+        try:
+            err = r.json().get("error", {})
+            msg = err.get("message") or r.text
+            code = err.get("code") or ""
+        except Exception:
+            msg, code = r.text, ""
+        msg = short(msg, 300)
+        s = r.status_code
+        if s in (401, 403):
+            raise AuthError(f"{self.name} rejected the API key: " + msg, s)
+        if s == 402:
+            raise AuthError(f"{self.name}: no credit left on this account — " + msg, s)
+        if s == 429:
+            try:
+                ra = float(r.headers.get("retry-after", "5"))
+            except ValueError:
+                ra = 5.0
+            raise RateLimited("Rate limit: " + msg, s, ra)
+        if s == 404 or code in ("model_not_found", "model_decommissioned") or "does not exist" in msg:
+            raise ModelUnavailable(msg, s)
+        if s in (400, 413, 422):
+            raise BadRequest(msg, s)
+        raise Transient(f"{self.name} error {s}: {msg}", s)
+
+    def request(self, method, path, **kw):
+        try:
+            r = self.client.request(method, path, **kw)
+        except httpx.TransportError as e:
+            raise network_error(e, self.name)
+        self._raise_for(r)
+        return r
+
+    def ping_light(self, model="whisper-large-v3-turbo"):
+        """Tiny request that keeps the connection open (a few hundred bytes, no model is run)."""
+        t = time.time()
+        try:
+            self.request("GET", f"/models/{model}", timeout=httpx.Timeout(10.0, connect=8.0))
+        except ModelUnavailable:
+            pass                                    # the service answered - that is all we need
+        return (time.time() - t) * 1000
+
+    def ping(self):
+        t = time.time()
+        r = self.request("GET", "/models", timeout=httpx.Timeout(10.0, connect=8.0))
+        ms = (time.time() - t) * 1000
+        try:
+            ids = [m["id"] for m in r.json().get("data", [])]
+        except Exception:
+            ids = []
+        return ms, ids
+
+    def transcribe(self, audio16k, model, language=None, prompt=None, _again=False):
+        """Level 0: full request (segments + confidence). Levels 1-2: simpler requests for
+        services that do not accept everything (e.g. OpenAI's newer models, Mistral)."""
+        data, name, mime = self.encoder.encode(audio16k)          # (in the new format after a downgrade)
+        last = None
+        if not _again:
+            self.stt_calls += 1
+        first = 0 if self.stt_calls % 50 == 0 else self.stt_level     # now and then: try the full request again
+        for level in range(first, 3):
+            fields = {"model": model}
+            if level == 0:
+                fields.update({"response_format": "verbose_json", "temperature": "0"})
+            elif level == 1:
+                fields["response_format"] = "json"
+            if language:
+                fields["language"] = language
+            if prompt and level < 2:
+                fields["prompt"] = prompt
+            try:
+                r = self.request("POST", "/audio/transcriptions", data=fields,
+                                 files={"file": (name, data, mime)},
+                                 timeout=httpx.Timeout(min(45.0, 6.0 + 0.6 * len(audio16k) / 16000), connect=8.0))
+                if level == 0:
+                    self.stt_level = self.stt_miss = 0
+                elif first == 0:
+                    self.stt_miss += 1
+                    if self.stt_miss >= 2:                     # refused twice in a row: remember it
+                        self.stt_level = level
+                record_usage(self.name, audio=len(audio16k) / 16000)
+                try:
+                    return r.json()
+                except ValueError:
+                    return {"text": r.text}
+            except BadRequest as e:
+                last = e
+                if self.encoder.mode != "wav" and re.search(r"file|format|media|decode|codec", str(e), re.I) \
+                        and not re.search(r"response_format", str(e), re.I):
+                    self.encoder.downgrade()
+                    return self.transcribe(audio16k, model, language, prompt, _again=True)
+        raise last
+
+    def chat_stream(self, model, messages, max_tokens, temperature, effort, on_text, old_style=False):
+        """Streams the reply. on_text(text_so_far) may return False to stop early."""
+        body = {"model": model, "messages": messages, "temperature": temperature, "stream": True}
+        body["max_tokens" if old_style else "max_completion_tokens"] = max_tokens
+        if effort:
+            body["reasoning_effort"] = effort
+            if model.startswith("openai/gpt-oss"):
+                body["include_reasoning"] = False
+        raw = ""
+        used = [None]
+        try:
+            with self.client.stream("POST", "/chat/completions", json=body,
+                                    timeout=httpx.Timeout(25.0, connect=8.0)) as r:
+                if r.status_code >= 300:
+                    r.read()
+                    self._raise_for(r)
+                self._note_limits(r, "chat")
+                for line in r.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        j = json.loads(payload)
+                    except ValueError:
+                        continue
+                    if j.get("error"):
+                        raise Transient(f"{self.name} stream error: " + short(j["error"]))
+                    u = j.get("usage") or (j.get("x_groq") or {}).get("usage")
+                    if u and u.get("total_tokens"):
+                        used[0] = u["total_tokens"]
+                    choices = j.get("choices") or []
+                    if not choices:
+                        continue
+                    piece = (choices[0].get("delta") or {}).get("content")
+                    if piece:
+                        raw += piece
+                        if on_text(strip_think(raw)) is False:
+                            break
+        except httpx.TransportError as e:
+            raise network_error(e, self.name)
+        finally:
+            if raw or used[0]:
+                # exact count when the service reports it, otherwise an estimate (~4 characters per token)
+                est = used[0] or (sum(len(str(m.get("content", ""))) for m in messages) + len(raw)) // 4
+                record_usage(self.name, tokens=est)
+        return strip_think(raw)
+
+
+def chat_compat(client, model, messages, max_tokens, temperature, effort, on_text):
+    """Tries the full request first; if the service rejects it (400), retries with a
+    simpler one: without thinking settings, then with the older 'max_tokens' field."""
+    variants = [(effort, False), (None, False), (None, True)] if effort else [(None, False), (None, True)]
+    no_effort, old_only = client.compat.get(model, (False, False))     # what this model is known to refuse
+    todo = [(e, o) for e, o in variants if not (no_effort and e) and not (old_only and not o)] or variants[-1:]
+    last = None
+    for eff, old in todo:
+        try:
+            text = client.chat_stream(model, messages, max_tokens, temperature, eff, on_text, old)
+            client.compat[model] = (no_effort or (bool(effort) and eff is None), old)
+            return text
+        except BadRequest as e:
+            last = e
+    raise last
+
+
+def strip_think(t):
+    """Removes a model's hidden reasoning (<think>…</think>, also nested or not closed yet)."""
+    while True:
+        u = re.sub(r"<think>(?:(?!<think>).)*?</think>", "", t, flags=re.S)
+        if u == t:
+            break
+        t = u
+    if "<think>" in t:
+        t = t.split("<think>", 1)[0]
+    if "</think>" in t:
+        t = t.rsplit("</think>", 1)[1]
+    return t.lstrip()
+
+
+# ----------------------------------------------------------------------------
+# Live speech-to-text (WebSocket) - used for services such as Deepgram
+# ----------------------------------------------------------------------------
+import base64
+import hashlib
+import select
+import socket
+import ssl
+import struct
+
+try:
+    import certifi
+except Exception:
+    certifi = None
+
+
+def open_tunnel(host, port, proxy, timeout=10):
+    """A TCP connection to host:port - directly, through an HTTP proxy (CONNECT) or a SOCKS5 proxy."""
+    if not proxy:
+        return socket.create_connection((host, port), timeout=timeout)
+    u = urllib.parse.urlsplit(proxy)
+    ph, pp = u.hostname, u.port or (1080 if u.scheme.startswith("socks") else 8080)
+    sock = socket.create_connection((ph, pp), timeout=timeout)
+    try:
+        user = urllib.parse.unquote(u.username or "")
+        pwd = urllib.parse.unquote(u.password or "")
+        if u.scheme.startswith("socks"):
+            sock.sendall(b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")    # no login / user+password
+            reply = _recv_exact(sock, 2)
+            if reply == b"\x05\x02" and user:
+                ub, pb = user.encode()[:255], pwd.encode()[:255]
+                sock.sendall(b"\x01" + bytes([len(ub)]) + ub + bytes([len(pb)]) + pb)
+                if _recv_exact(sock, 2)[1] != 0:
+                    raise APIError("The SOCKS proxy did not accept the user name or password.")
+            elif reply != b"\x05\x00":
+                raise APIError("The SOCKS proxy refused the connection.")
+            h = host.encode()
+            sock.sendall(b"\x05\x01\x00\x03" + bytes([len(h)]) + h + struct.pack(">H", port))
+            head = _recv_exact(sock, 4)
+            if head[1] != 0:
+                raise APIError(f"The SOCKS proxy could not reach {host} (code {head[1]}).")
+            extra = {1: 4, 4: 16}.get(head[3])
+            _recv_exact(sock, (extra if extra else _recv_exact(sock, 1)[0]) + 2)
+        else:
+            auth = ""
+            if user:
+                auth = "Proxy-Authorization: Basic " + base64.b64encode(f"{user}:{pwd}".encode()).decode() + "\r\n"
+            sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{auth}\r\n".encode())
+            resp = b""
+            while b"\r\n\r\n" not in resp and len(resp) < 65536:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                resp += chunk
+            status = resp.split(b"\r\n", 1)[0]
+            if b" 200" not in status:
+                raise APIError("The proxy refused the tunnel: " + status.decode(errors="replace"))
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def _recv_exact(sock, n):
+    data = b""
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise ConnectionError("connection closed")
+        data += chunk
+    return data
+
+
+class WSClient:
+    """Minimal WebSocket client (RFC 6455): enough for live transcription."""
+
+    def __init__(self, url, headers=None, proxy="", timeout=10, ssl_context=None):
+        u = urllib.parse.urlsplit(url)
+        secure = u.scheme == "wss"
+        host, port = u.hostname, u.port or (443 if secure else 80)
+        path = (u.path or "/") + ("?" + u.query if u.query else "")
+        try:
+            sock = open_tunnel(host, port, proxy, timeout)
+        except APIError:
+            raise
+        except OSError as e:
+            raise Transient(f"Cannot connect to {host} — " + ("is your proxy / VPN app running?" if proxy else "check your internet connection.")
+                            + f" ({short(e, 80)})")
+        if secure:
+            ctx = ssl_context or ssl.create_default_context(cafile=certifi.where() if certifi else None)
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+        key = base64.b64encode(os.urandom(16)).decode()
+        extra = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n").encode())
+        resp = b""
+        while b"\r\n\r\n" not in resp and len(resp) < 65536:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            resp += chunk
+        head, _, rest = resp.partition(b"\r\n\r\n")
+        status_line = head.split(b"\r\n", 1)[0].decode(errors="replace")
+        code = int(status_line.split()[1]) if len(status_line.split()) > 1 and status_line.split()[1].isdigit() else 0
+        if code != 101:
+            try:
+                sock.settimeout(2)
+                rest += sock.recv(2000)
+            except Exception:
+                pass
+            sock.close()
+            msg = f"{status_line} {rest.decode(errors='replace')[:200]}".strip()
+            if code in (401, 403):
+                raise AuthError("The live service rejected the API key: " + msg, code)
+            if code == 402:
+                raise AuthError("The live service says there is no credit left: " + msg, code)
+            raise Transient("Live connection refused: " + msg, code)
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        headers = {}
+        for line in head.split(b"\r\n")[1:]:
+            k, sep, v = line.decode("latin-1").partition(":")
+            if sep:
+                headers[k.strip().lower()] = v.strip()
+        if headers.get("sec-websocket-accept") != accept or headers.get("upgrade", "").lower() != "websocket":
+            sock.close()
+            raise Transient("Live connection: unexpected answer from the server.")
+        sock.settimeout(15.0)              # a send may wait for a slow VPN; reads use select() below
+        self.sock = sock
+        self.buf = rest
+        self.lock = threading.Lock()
+        self.closed = False
+        self.deadline = None          # optional: give up waiting after this time
+        self.last_rx = time.time()    # when data last arrived
+        self.idle_check = None        # optional: f(seconds without data) -> True = the connection is dead
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            try:
+                pending = self.sock.pending() if hasattr(self.sock, "pending") else 0
+                if not pending and not select.select([self.sock], [], [], 1.0)[0]:
+                    raise socket.timeout()
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                if self.closed:
+                    raise ConnectionError("closed")
+                if self.deadline and time.time() > self.deadline:
+                    raise TimeoutError("no answer from the live service")
+                if self.idle_check is not None and self.idle_check(time.time() - self.last_rx):
+                    raise TimeoutError("the live service stopped answering")
+                continue
+            if not chunk:
+                raise ConnectionError("the live service closed the connection")
+            self.last_rx = time.time()
+            self.buf += chunk
+        data, self.buf = self.buf[:n], self.buf[n:]
+        return data
+
+    def send(self, payload, text=False):
+        if isinstance(payload, str):
+            payload = payload.encode()
+        n = len(payload)
+        head = bytes([0x80 | (0x1 if text else 0x2)])
+        if n < 126:
+            head += bytes([0x80 | n])
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        mask = os.urandom(4)
+        arr = np.frombuffer(payload, dtype=np.uint8)
+        m = np.frombuffer((mask * (n // 4 + 1))[:n], dtype=np.uint8)
+        with self.lock:
+            self.sock.sendall(head + mask + (arr ^ m).tobytes())
+
+    def recv(self):
+        """Returns (opcode, data) of the next complete message; answers pings itself."""
+        parts, first_op = [], None
+        while True:
+            b1, b2 = self._read(2)
+            fin, op = b1 & 0x80, b1 & 0x0F
+            n = b2 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._read(8))[0]
+            mask = self._read(4) if b2 & 0x80 else None
+            data = self._read(n)
+            if mask:
+                data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+            if op == 0x9:                                   # ping -> pong
+                with self.lock:
+                    data = data[:125]                       # control frames carry at most 125 bytes
+                    mk = os.urandom(4)                      # a client must mask with an unpredictable key
+                    self.sock.sendall(bytes([0x8A, 0x80 | len(data)]) + mk + bytes(b ^ mk[i % 4] for i, b in enumerate(data)))
+                continue
+            if op == 0xA:
+                continue
+            if op == 0x8:
+                return 0x8, data
+            if first_op is None:
+                first_op = op
+            parts.append(data)
+            if fin:
+                return first_op, b"".join(parts)
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            with self.lock:
+                self.sock.sendall(bytes([0x88, 0x80]) + b"\0\0\0\0")
+        except Exception:
+            pass
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+DEEPGRAM_WS = os.environ.get("MA_DEEPGRAM_WS", "wss://api.deepgram.com/v1/listen")
+
+
+def deepgram_url(model, language):
+    lang = language if language in LANGS else "multi"
+    q = {"model": model or "nova-3", "language": lang, "encoding": "linear16", "sample_rate": "16000",
+         "channels": "1", "interim_results": "true", "smart_format": "true", "punctuate": "true",
+         "endpointing": "400", "utterance_end_ms": "1000"}
+    return DEEPGRAM_WS + "?" + urllib.parse.urlencode(q)
+
+
+class DeepgramLive:
+    """Streams one audio source to Deepgram and reports words while they are spoken.
+
+    on_interim(key, t0, text)  - the sentence so far (changes as more words arrive)
+    on_final(key, t0, t_end, text) - the finished sentence
+    on_fail(error)             - the connection broke; the program falls back to Groq
+    """
+
+    def __init__(self, source, key, model, language, proxy, on_interim, on_final, on_fail):
+        self.source, self.key, self.model, self.language, self.proxy = source, key, model, language, proxy
+        self.on_interim, self.on_final, self.on_fail = on_interim, on_final, on_fail
+        self.q = queue.Queue(maxsize=600)
+        self.stop_event = threading.Event()
+        self.ok = True
+        self.ws = None
+        self.t_audio0 = None          # wall-clock time of the first audio sample sent
+        self.sent = 0.0               # seconds of audio sent
+        self.utt = 0
+        self.words = ""
+        self.utt_start = None
+        self.paused_at = None
+        self.dropped = 0.0            # seconds of audio dropped because the connection could not keep up
+        self.drop_told = 0.0
+        self.last_audio = 0.0         # when audio was last sent (the service answers while it gets audio)
+        self.plock = threading.Lock() # pause and feed never interleave: nothing from a pause is sent
+        threading.Thread(target=self._run, daemon=True, name=f"live-{source}").start()
+
+    def pause(self, on):
+        """Paused: no audio is sent (only KeepAlive); afterwards the timeline skips the paused time."""
+        with self.plock:
+            if on and self.paused_at is None:
+                self.paused_at = time.time()
+                self._drain()                             # speech from before the pause is not sent either
+            elif not on and self.paused_at is not None:
+                if self.t_audio0 is not None:
+                    self.t_audio0 += time.time() - self.paused_at
+                self.paused_at = None
+
+    def _drain(self):
+        n = 0
+        while True:
+            try:
+                self.q.get_nowait()
+                n += 1
+            except queue.Empty:
+                break
+        if n:
+            log(f"Live {self.source}: {n * FRAME_SEC:.1f} s of queued audio discarded (paused)", level="debug")
+
+    def feed(self, x, rate):
+        """x = audio frame (float32) or None for a gap of `rate` seconds (nothing was playing)."""
+        if not self.ok or self.paused_at is not None:
+            return
+        with self.plock:
+            if self.paused_at is not None:
+                return
+            self._put(x, rate)
+
+    def _put(self, x, rate):
+        if self.t_audio0 is None:
+            self.t_audio0 = time.time() - (rate if x is None else len(x) / rate)
+        if x is None:
+            pcm = np.zeros(int(16000 * rate), dtype=np.int16).tobytes()
+        else:
+            pcm = (np.clip(resample16k(x, rate), -1, 1) * 32767).astype(np.int16).tobytes()
+        try:
+            self.q.put_nowait(pcm)
+        except queue.Full:
+            self.dropped += len(pcm) / 32000
+            now = time.time()
+            if now - self.drop_told > 10:                  # the connection cannot keep up: say so (not too often)
+                self.drop_told = now
+                log(f"Live {self.source}: the connection is too slow — {self.dropped:.1f} s of audio could not be "
+                    f"sent so far", level="warn")
+
+    def stop(self):
+        if not self.stop_event.is_set():
+            record_usage("Deepgram (live)", requests=0, audio=self.sent)
+        self.stop_event.set()
+
+    def _fail(self, e):
+        if self.ok:
+            self.ok = False
+            if not self.stop_event.is_set():
+                self.on_fail(e)
+
+    def _run(self):
+        try:
+            self.ws = WSClient(deepgram_url(self.model, self.language), {"Authorization": f"Token {self.key}"},
+                               self.proxy)
+        except Exception as e:
+            return self._fail(e)
+        # audio is flowing but nothing came back for 25 s: the connection is dead even if nobody closed it
+        self.ws.idle_check = lambda idle: (idle > 25 and self.paused_at is None
+                                           and time.time() - self.last_audio < 3 and not self.stop_event.is_set())
+        threading.Thread(target=self._receive, daemon=True, name=f"live-rx-{self.source}").start()
+        last_send = time.time()
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    chunk = self.q.get(timeout=0.3)
+                except queue.Empty:
+                    if time.time() - last_send > 4:
+                        self.ws.send('{"type": "KeepAlive"}', text=True)
+                        last_send = time.time()
+                    continue
+                if self.paused_at is not None:
+                    continue                              # paused while this was waiting: never sent
+                parts = [chunk]
+                while len(parts) < 4:                     # send ~100 ms at a time
+                    try:
+                        parts.append(self.q.get_nowait())
+                    except queue.Empty:
+                        break
+                data = b"".join(parts)
+                self.ws.send(data)
+                self.sent += len(data) / 32000
+                last_send = self.last_audio = time.time()
+            try:
+                self.ws.send('{"type": "CloseStream"}', text=True)
+                time.sleep(0.8)                           # let the last words arrive
+            except Exception:
+                pass
+        except Exception as e:
+            self._fail(e)
+        finally:
+            self.ws.close()
+
+    @staticmethod
+    def _cb(fn, *a):
+        """A problem in the program's own handling must not be taken for a broken connection."""
+        try:
+            fn(*a)
+        except Exception:
+            log("live text handling problem:", traceback.format_exc(), level="error")
+
+    def _wall(self, t):
+        return (self.t_audio0 or time.time()) + t
+
+    def _receive(self):
+        try:
+            while not self.ws.closed:
+                op, data = self.ws.recv()
+                if op == 0x8:
+                    if not self.stop_event.is_set():
+                        raise ConnectionError("the live service closed the connection")
+                    break
+                if op != 0x1:
+                    continue
+                try:
+                    m = json.loads(data)
+                except ValueError:
+                    continue
+                typ = m.get("type")
+                if typ == "Results":
+                    alt = ((m.get("channel") or {}).get("alternatives") or [{}])[0]
+                    words = (alt.get("transcript") or "").strip()
+                    start = float(m.get("start") or 0)
+                    end = start + float(m.get("duration") or 0)
+                    if words and self.utt_start is None:
+                        self.utt_start = start
+                    key = f"L{self.source}{self.utt}"
+                    if m.get("is_final"):
+                        if words:
+                            self.words = (self.words + " " + words).strip()
+                        if m.get("speech_final") and self.words:
+                            self._finish(end)
+                        elif self.words:
+                            self._cb(self.on_interim, key, self._wall(self.utt_start or start), self.words)
+                    elif words:
+                        self._cb(self.on_interim, key, self._wall(self.utt_start), (self.words + " " + words).strip())
+                elif typ == "UtteranceEnd" and self.words:
+                    self._finish(float(m.get("last_word_end") or self.sent))
+                elif typ == "Error" or m.get("err_code"):
+                    raise Transient("Live service error: " + short(m.get("description") or m.get("err_msg") or m))
+        except Exception as e:
+            if not self.stop_event.is_set():
+                self._fail(e)
+        if self.words:
+            self._finish(self.sent)
+
+    def _finish(self, end):
+        key = f"L{self.source}{self.utt}"
+        text, start = self.words, self.utt_start or 0.0
+        self.words, self.utt_start = "", None
+        self.utt += 1
+        self._cb(self.on_final, key, self._wall(start), self._wall(end), text)
+
+
+def deepgram_check(key, proxy, model="nova-3", language="auto", seconds=2.0):
+    """Opens a live stream, sends a short test sound and closes it. Returns seconds until connected."""
+    t = time.time()
+    ws = WSClient(deepgram_url(model, language), {"Authorization": f"Token {key}"}, proxy)
+    connected = time.time() - t
+    try:
+        tt = np.arange(int(16000 * seconds)) / 16000
+        pcm = (0.1 * np.sin(2 * np.pi * 200 * tt) * 32767).astype(np.int16).tobytes()
+        for i in range(0, len(pcm), 3200):
+            ws.send(pcm[i:i + 3200])
+        ws.send('{"type": "CloseStream"}', text=True)
+        ws.deadline = time.time() + 3
+        while True:
+            op, data = ws.recv()
+            if op == 0x8:
+                break
+            if op == 0x1 and b'"Error"' in data:
+                raise Transient("Live service error: " + data.decode(errors="replace")[:200])
+    except (ConnectionError, TimeoutError):
+        pass
+    finally:
+        ws.close()
+    return connected
+
+
+# ----------------------------------------------------------------------------
+# Local speech to text: faster-whisper on this computer.
+# The engine is inside the program; the model files are NOT - they are downloaded
+# from the program or chosen from a folder, and can be changed at any time.
+# ----------------------------------------------------------------------------
+LOCAL_CATALOG = [
+    {"id": "tiny", "repo": "Systran/faster-whisper-tiny", "mb": 75,
+     "note": "Fastest, least accurate — only for very weak computers"},
+    {"id": "base", "repo": "Systran/faster-whisper-base", "mb": 145,
+     "note": "Very fast; fine for clear English, weak for German"},
+    {"id": "small", "repo": "Systran/faster-whisper-small", "mb": 484,
+     "note": "Recommended — fast, good for English and German"},
+    {"id": "medium", "repo": "Systran/faster-whisper-medium", "mb": 1530,
+     "note": "More accurate; needs a strong processor"},
+    {"id": "large-v3-turbo", "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "mb": 1620,
+     "note": "Most accurate; needs a strong processor or an NVIDIA graphics card"},
+]
+HF_HOSTS = tuple(h for h in os.environ.get("MA_HF_HOSTS", "https://huggingface.co https://hf-mirror.com").split() if h)
+MODEL_FILE_RE = re.compile(r"^(config\.json|preprocessor_config\.json|model\.bin|tokenizer\.json|vocabulary\.(txt|json))$")
+NEEDED_FILES = ("model.bin", "config.json", "tokenizer.json")
+TEST_SENTENCE = "What is the difference between OSPF and EIGRP?"
+LOCAL_PREVIEW_CHOICES = (500, 1000, 1500, 2000, 3000)
+
+_fw = {"mod": None, "error": "", "tried": False}
+_fw_lock = threading.Lock()
+
+
+def load_faster_whisper():
+    """Imports the engine once. None if this program version does not include it."""
+    with _fw_lock:
+        if _fw["tried"]:
+            return _fw["mod"]
+        try:
+            try:
+                import av  # noqa: F401
+            except Exception:
+                # 'av' is only used by faster-whisper to read audio FILES; we always give it raw audio.
+                # An empty stand-in lets it import. (If a future version needs 'av' for more, this is where
+                # an "AttributeError: module 'av' has no attribute ..." would come from.)
+                sys.modules["av"] = types.ModuleType("av")
+            import faster_whisper
+            _fw["mod"] = faster_whisper
+            log(f"Local model engine: faster-whisper {getattr(faster_whisper, '__version__', '?')}")
+        except Exception as e:
+            _fw["error"] = short(e, 200)
+            log("Local model engine is not available:", _fw["error"], level="warn")
+        _fw["tried"] = True
+        return _fw["mod"]
+
+
+def model_folder(path):
+    """Accepts a model folder or any file in it. Returns (folder, problem)."""
+    p = (path or "").strip().strip('"').strip()
+    if not p:
+        return "", "No model chosen."
+    if os.path.isfile(p):
+        name = os.path.basename(p).lower()
+        if name.endswith(".zip") or name.endswith(".rar") or name.endswith(".7z"):
+            return "", "This is a compressed file. Unzip it first, then choose the model.bin file inside."
+        if name.endswith(".pt"):
+            return "", ("This model is for the 'openai-whisper' program (.pt file). This program needs a "
+                        "faster-whisper model: a folder with model.bin, config.json and tokenizer.json.")
+        if name.endswith(".gguf") or name.startswith("ggml") or (name.endswith(".bin") and name != "model.bin"):
+            return "", ("This is a whisper.cpp model (ggml). This program needs a faster-whisper model: "
+                        "a folder with model.bin, config.json and tokenizer.json — use Download here, or download "
+                        "a model whose name starts with 'faster-whisper'.")
+        folder = os.path.dirname(p)
+    else:
+        folder = p
+    if not os.path.isdir(folder):
+        return "", f"Not found: {folder}"
+    missing = [f for f in NEEDED_FILES if not os.path.isfile(os.path.join(folder, f))]
+    if missing:
+        return "", (f"This folder is missing {', '.join(missing)}. A faster-whisper model folder has "
+                    "model.bin, config.json and tokenizer.json.")
+    return os.path.abspath(folder), ""
+
+
+def model_label(folder):
+    parts = os.path.normpath(folder).split(os.sep)
+    name = parts[-1]
+    for part in reversed(parts):                      # Hugging Face cache: models--Systran--faster-whisper-small
+        if part.startswith("models--"):
+            name = part.split("--")[-1]
+            break
+    name = re.sub(r"^(faster-(distil-)?whisper-)", "", name)
+    return name or folder
+
+
+def folder_mb(folder):
+    total = 0
+    try:
+        for f in os.listdir(folder):
+            fp = os.path.join(folder, f)
+            if os.path.isfile(fp):
+                total += os.path.getsize(fp)
+    except OSError:
+        pass
+    return round(total / 1e6)
+
+
+def find_models(extra=""):
+    """Models in the program's 'models' folder, in the Hugging Face cache, and the chosen one."""
+    found, seen = [], set()
+
+    def add(folder, source):
+        f, _ = model_folder(folder)
+        if not f:
+            return
+        key = os.path.normcase(f)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append({"path": f, "name": model_label(f), "mb": folder_mb(f), "source": source,
+                      "removable": os.path.normcase(os.path.dirname(f)) == os.path.normcase(os.path.abspath(MODELS_DIR))})
+    try:
+        for d in sorted(os.listdir(MODELS_DIR)):
+            if not d.endswith(".part"):
+                add(os.path.join(MODELS_DIR, d), "downloaded")
+    except OSError:
+        pass
+    hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    try:
+        for d in os.listdir(hub):
+            if "whisper" in d.lower():
+                snaps = os.path.join(hub, d, "snapshots")
+                for s_ in os.listdir(snaps):
+                    add(os.path.join(snaps, s_), "Hugging Face cache")
+    except OSError:
+        pass
+    if extra:
+        add(extra, "chosen by you")
+    return found
+
+
+def friendly_local_error(e):
+    t = str(e)
+    low = t.lower()
+    if isinstance(e, MemoryError) or "bad_alloc" in low or "out of memory" in low:
+        return "Not enough memory (RAM) for this model — choose a smaller model."
+    if "cublas" in low or "cudnn" in low or "cuda" in low:
+        return ("The NVIDIA graphics card could not be used (its CUDA libraries are missing): " + short(t, 120)
+                + " — set 'Run on' to Processor only.")
+    if "unsupported model" in low or "model.bin" in low or "config" in low and "json" in low:
+        return "The model files look damaged or are not a faster-whisper model: " + short(t, 140)
+    return short(t, 200)
+
+
+_cores = {}
+
+
+def physical_cores():
+    """Real processor cores (not hyper-threads): the local model is fastest with one thread per real core."""
+    if "n" not in _cores:
+        n = 0
+        if sys.platform == "win32":
+            try:
+                r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                    "(Get-CimInstance Win32_Processor | Measure-Object NumberOfCores -Sum).Sum"],
+                                   capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                n = int((r.stdout.decode().strip() or "0").split()[0])
+            except Exception:
+                n = 0
+        if n <= 0:
+            logical = os.cpu_count() or 4
+            n = logical // 2 if logical >= 4 else logical
+        _cores["n"] = max(1, n)
+    return _cores["n"]
+
+
+class LocalBusy(Exception):
+    """The local model is working on something else (previews are skipped, never queued)."""
+
+
+class LocalLoading(APIError):
+    """The local model is being (re)loaded: the sentence waits or goes to Groq, the model stays in use."""
+
+
+def short_path(path):
+    """8.3 short form of a path (plain English letters) on Windows; the path itself elsewhere."""
+    if sys.platform != "win32" or path.isascii():
+        return path
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(path, buf, 1024)
+        if 0 < n < 1024 and buf.value.isascii():
+            return buf.value
+    except Exception:
+        pass
+    return path
+
+
+def path_problem(e):
+    low = str(e).lower()
+    return any(k in low for k in ("unable to open", "no such file", "cannot open", "not found", "failed to open",
+                                  "config.json", "invalid argument", "illegal byte"))
+
+
+class LocalWhisper:
+    name = "Local model"
+
+    def __init__(self):
+        self.run_lock = threading.Lock()          # one transcription at a time: it uses all cores
+        self.load_lock = threading.Lock()         # one model is loaded at a time (they are big)
+        self.lock = threading.Lock()
+        self.model = None
+        self.path = ""
+        self.want = ("", "")
+        self.device = ""
+        self.state = "off"                        # off | loading | ready | error
+        self.error = ""
+        self.gen = 0
+        self.waiting = 0
+        self.finals = 0                           # sentences given to the local model and not finished yet
+        self.short_ok = False                     # short-window live updates: switched on by the speed test
+        self.last_quick = 0.0
+        self.quick_avg = None
+        self.load_secs = None
+        self.done = threading.Event()
+        self.done.set()
+        self.listeners = []
+
+    # ---- state -------------------------------------------------------------------
+    def info(self):
+        load_faster_whisper()
+        return {"state": self.state, "path": self.path, "name": model_label(self.path) if self.path else "",
+                "device": self.device, "error": self.error, "engine": _fw["mod"] is not None,
+                "engine_error": _fw["error"], "load_secs": self.load_secs,
+                "quick": round(self.quick_avg, 2) if self.quick_avg else None}
+
+    def ready(self):
+        return self.state == "ready" and self.model is not None
+
+    def free_for_final(self):
+        return self.ready() and self.waiting == 0 and self.finals == 0
+
+    def _notify(self):
+        for fn in list(self.listeners):
+            try:
+                fn()
+            except Exception:
+                pass
+
+    # ---- load / unload ---------------------------------------------------------------
+    def load(self, path, device="auto"):
+        folder, why = model_folder(path)
+        with self.lock:
+            if folder and (folder, device) == self.want and self.state in ("loading", "ready"):
+                return
+            self.gen += 1
+            g = self.gen
+            self.model = None
+            self.quick_avg = None
+            if not folder:
+                self.state, self.path, self.error, self.want = ("error" if path else "off"), "", (why if path else ""), ("", "")
+                self.done.set()
+            else:
+                self.state, self.path, self.error, self.want = "loading", folder, "", (folder, device)
+                self.done.clear()
+        self._notify()
+        if folder:
+            threading.Thread(target=self._load, args=(g, folder, device), daemon=True, name="local-load").start()
+
+    def wait(self, timeout=300):
+        return self.done.wait(timeout)
+
+    def unload(self):
+        with self.lock:
+            if self.state == "off":
+                return
+            self.gen += 1
+            self.model, self.state, self.path, self.error, self.want = None, "off", "", "", ("", "")
+            self.done.set()
+        log("Local model closed (memory freed)")
+        self._notify()
+
+    def _load(self, g, folder, device):
+        """Never two big models in memory at once: an older load finishes (and is thrown away) first,
+        and a transcription still running on the old model is allowed to end."""
+        with self.load_lock:
+            if g != self.gen:
+                return                                  # another model was chosen while waiting
+            while not self.run_lock.acquire(timeout=5):     # a transcription on the old model is still running
+                if g != self.gen:
+                    return
+            self.run_lock.release()
+            import gc
+            gc.collect()                                # frees the old model before the new one is read
+            self._load_now(g, folder, device)
+
+    def _load_now(self, g, folder, device):
+        t0 = time.time()
+        fw = load_faster_whisper()
+        err = None
+        if fw is None:
+            err = RuntimeError("The local model engine is not included in this program version "
+                               "(" + (_fw["error"] or "unknown reason") + "). Build the exe again with build_exe.bat.")
+        else:
+            if WIN_TUNE.get("hybrid") and WIN_TUNE.get("fast_cores"):
+                fast, slow = WIN_TUNE["fast_cores"], WIN_TUNE.get("cores", 0) - WIN_TUNE["fast_cores"]
+                threads = fast if fast >= 4 else fast + max(0, slow) // 2   # few fast cores: some slow ones help
+            else:
+                pc = physical_cores()
+                threads = pc - 1 if pc >= 6 else pc       # leave a core for audio and the window
+            threads = max(1, min(8, threads))
+            tries = []
+            try:
+                import ctranslate2
+                if device == "auto" and ctranslate2.get_cuda_device_count() > 0:
+                    ct = ctranslate2.get_supported_compute_types("cuda")
+                    tries.append(("cuda", "int8_float16" if "int8_float16" in ct else "float16"))
+                ct = ctranslate2.get_supported_compute_types("cpu")
+                tries.append(("cpu", "int8" if "int8" in ct else "float32"))
+            except Exception:
+                tries.append(("cpu", "int8"))
+            for dev, ctype in tries:
+                try:
+                    where = short_path(folder)
+                    try:
+                        m = fw.WhisperModel(where, device=dev, compute_type=ctype, cpu_threads=threads, num_workers=1)
+                    except Exception as e1:
+                        if where.isascii() or not path_problem(e1):
+                            raise
+                        # the folder name has non-English letters and cannot be opened: give it the files instead
+                        log("Local model: folder name not readable by the engine, loading the files directly", level="warn")
+                        files = {}
+                        for f in os.listdir(folder):
+                            if MODEL_FILE_RE.match(f):
+                                with open(os.path.join(folder, f), "rb") as fh:
+                                    files[f] = fh.read()
+                        m = fw.WhisperModel("in-memory", device=dev, compute_type=ctype, cpu_threads=threads,
+                                            num_workers=1, files=files)
+                        del files
+                    if g != self.gen:                  # another model was chosen meanwhile: free this one
+                        del m
+                        return
+                    # a first short run loads everything, and fails early if the graphics card libraries are missing
+                    self._run(m, np.zeros(16000, np.float32), "en", None, True, 1)
+                    with self.lock:
+                        if g != self.gen:
+                            del m
+                            return
+                        self.model = m
+                        # on a processor the fast (greedy) search is used for whole sentences too; a graphics card can afford more
+                        self.final_beam = 3 if dev == "cuda" else 1
+                        self.device = "NVIDIA graphics card" if dev == "cuda" else f"processor ({threads} thread{'s' if threads > 1 else ''})"
+                        self.state, self.error = "ready", ""
+                        self.load_secs = round(time.time() - t0, 1)
+                        self.done.set()
+                    log(f"Local model '{model_label(folder)}' ready on the {self.device} ({ctype}), "
+                        f"loaded in {self.load_secs} s")
+                    self._notify()
+                    return
+                except Exception as e:
+                    err = e
+                    log(f"Local model could not start on {dev}: {short(e, 200)}", level="warn")
+        with self.lock:
+            if g != self.gen:
+                return
+            self.model, self.state, self.error = None, "error", friendly_local_error(err)
+            self.done.set()
+        log("Local model failed:", self.error, level="error")
+        self._notify()
+
+    # ---- transcription ----------------------------------------------------------------
+    @staticmethod
+    def _run(m, audio, language, prompt, quick, beam=3):
+        # speech never needs more than ~10-12 tokens per second: a rare "repeating" run is stopped early
+        # instead of writing hundreds of tokens (which takes many seconds on a processor)
+        dur = len(audio) / 16000
+        cpu = beam == 1
+        mnt = None                        # sentences: the normal limit (224 tokens per 30 s window)
+        if quick:
+            cap = min(200, max(30, int(dur * 12)))          # ~12 tokens per second is enough for any speech
+            try:
+                plen = 5 + (len(m.hf_tokenizer.encode(" " + prompt).ids) + 1 if prompt else 0)
+            except Exception:
+                plen = 5 + (len(prompt) // 2 + 1 if prompt else 0)          # rough, on the safe side
+            mnt = max(cap, 2 * cap - plen)                  # CTranslate2 allows (prompt + new) / 2 new tokens
+            mnt = max(8, min(mnt, 440 - min(plen, 230)))
+        segs, info = m.transcribe(audio, language=language, task="transcribe",
+                                  beam_size=1 if quick else beam, best_of=1,
+                                  # on a processor: one decoding pass only (no slow second try)
+                                  temperature=0.0 if (quick or cpu) else [0.0, 0.4],
+                                  log_prob_threshold=None if (quick or cpu) else -1.0,
+                                  condition_on_previous_text=False, initial_prompt=prompt or None,
+                                  without_timestamps=True, vad_filter=False, max_new_tokens=mnt)
+        out = [{"text": s.text, "no_speech_prob": s.no_speech_prob, "avg_logprob": s.avg_logprob,
+                "compression_ratio": s.compression_ratio} for s in segs]
+        return {"text": " ".join(x["text"].strip() for x in out), "language": info.language, "segments": out}
+
+    @staticmethod
+    def _run_short(m, audio, language, prompt, final=False):
+        """Live update with a SHORT encoder window. Whisper normally always works on 30 seconds of audio,
+        even for a 3-second clip; here it gets only the clip (at least 8 s) -> about 3x less work."""
+        import ctranslate2  # noqa: F401
+        from faster_whisper.tokenizer import Tokenizer
+        from faster_whisper.transcribe import get_suppressed_tokens, get_compression_ratio
+        feats = m.feature_extractor(np.asarray(audio, dtype=np.float32))
+        n = feats.shape[-1]
+        want = int(min(3000, max(800, n + 200)))
+        want += want % 2
+        feats = feats[:, :want] if n >= want else np.pad(feats, ((0, 0), (0, want - n)))
+        enc = m.encode(np.ascontiguousarray(feats, dtype=np.float32))
+        tok = Tokenizer(m.hf_tokenizer, m.model.is_multilingual, task="transcribe", language=language or "en")
+        prev = tok.encode(" " + prompt.strip()) if prompt else []
+        p = m.get_prompt(tok, prev, without_timestamps=True)
+        dur = len(audio) / 16000
+        cap = min(200, max(30, int(dur * 12)))
+        # CTranslate2's Whisper gives at most max_length/2 new tokens
+        r = m.model.generate(enc, [p], beam_size=1, max_length=min(448, max(len(p) + cap, 2 * cap + 2)), return_scores=True,
+                             return_no_speech_prob=True, suppress_blank=True,
+                             suppress_tokens=list(get_suppressed_tokens(tok, [-1])))[0]
+        ids = [t for t in r.sequences_ids[0] if t < tok.eot]
+        text = tok.decode(ids).strip()
+        alp = (r.scores[0] * len(ids)) / (len(ids) + 1) if ids and r.scores else 0.0
+        seg = {"text": text, "no_speech_prob": getattr(r, "no_speech_prob", 0.0), "avg_logprob": alp,
+               "compression_ratio": get_compression_ratio(text) if text else 1.0}
+        return {"text": text, "language": language or "en", "segments": [seg] if text else []}
+
+    def transcribe(self, audio16k, model=None, language=None, prompt=None, quick=False, wait=None, track=True,
+                   short=None):
+        """Same answer format as the online services. quick=True (previews): never waits (unless wait=True)."""
+        if wait is None:
+            wait = not quick
+        if not wait:
+            if not self.run_lock.acquire(blocking=False):
+                raise LocalBusy()
+        else:
+            with self.lock:
+                self.waiting += 1
+            got = self.run_lock.acquire(timeout=180)
+            with self.lock:
+                self.waiting -= 1
+            if not got:
+                raise ModelUnavailable("The local model did not answer for 3 minutes.")
+        try:
+            m = self.model
+            if m is None or self.state != "ready":
+                if self.state == "loading":
+                    raise LocalLoading("The local model is still loading.")
+                raise ModelUnavailable("The local model is not loaded" + (f": {self.error}" if self.error else "."))
+            t = time.time()
+            use_short = self.short_ok if short is None else short
+            try:
+                if use_short and language and quick:
+                    try:
+                        res = self._run_short(m, audio16k, language, prompt)
+                    except MemoryError:
+                        raise
+                    except Exception as e:                      # not supported by this engine version
+                        if short:
+                            raise                               # the speed test must see the real result
+                        if short is None:
+                            self.short_ok = False
+                            log("Local model: short live updates not supported here, using the normal way:",
+                                short_err(e), level="warn")
+                        res = self._run(m, np.asarray(audio16k, dtype=np.float32), language, prompt, quick, 1)
+                else:
+                    res = self._run(m, np.asarray(audio16k, dtype=np.float32), language, prompt, quick,
+                                    getattr(self, "final_beam", 3))
+            except MemoryError:
+                raise ModelUnavailable("Not enough memory (RAM) for the local model — choose a smaller model.")
+            except Exception as e:
+                raise Transient("Local model: " + friendly_local_error(e))
+            dt = time.time() - t
+            if quick and track:
+                self.last_quick = time.time()
+                self.quick_avg = dt if self.quick_avg is None else 0.7 * self.quick_avg + 0.3 * dt
+            record_usage(self.name, 1, 0, len(audio16k) / 16000)
+            return res
+        finally:
+            self.run_lock.release()
+
+    # ---- speed test -----------------------------------------------------------------------
+    def bench(self):
+        """How fast is this model on THIS computer? Also checks that it really understands speech."""
+        audio, spoken = test_speech()
+        # wait=True: during a meeting the test waits for its turn instead of failing
+        # the test sentence is English: say so (a language guess would add time the meeting does not have)
+        self.transcribe(audio, language="en", quick=True, wait=True, track=False, short=False)   # warm up
+        t = time.time()
+        normal = self.transcribe(audio, language="en", quick=True, wait=True, track=False, short=False)
+        quick = time.time() - t
+        t = time.time()
+        res = self.transcribe(audio, language="en", short=False)
+        final = time.time() - t
+        heard = (res.get("text") or "").strip()
+        # the short way: faster, but only used if it writes (nearly) the same text
+        self.short_ok, short_note = False, ""
+        try:
+            self.transcribe(audio, language="en", quick=True, wait=True, track=False, short=True)
+            t = time.time()
+            sres = self.transcribe(audio, language="en", quick=True, wait=True, track=False, short=True)
+            qs = time.time() - t
+            same = difflib.SequenceMatcher(None, normalize_words(sres.get("text") or ""),
+                                           normalize_words(normal.get("text") or "")).ratio()
+            if same >= 0.85 and qs < quick * 0.9:
+                self.short_ok, short_note = True, f"short live updates: {qs:.2f} s instead of {quick:.2f} s"
+                quick = qs
+            else:
+                short_note = f"short live updates not used (same text {same:.0%}, {qs:.2f} s)"
+        except Exception as e:
+            short_note = "short live updates not available: " + short_err(e)
+        log("Local model test:", short_note)
+        match = None
+        if spoken:
+            match = round(difflib.SequenceMatcher(None, normalize_words(TEST_SENTENCE), normalize_words(heard)).ratio(), 2)
+        v = local_verdict(quick, final, heard, match, spoken, model_label(self.path))
+        v["short"] = self.short_ok
+        return v
+
+
+SMALLER = {"large-v3-turbo": "small", "turbo": "small", "large-v3": "small", "large-v2": "small",
+           "medium": "small", "small": "base", "base": "tiny"}
+
+
+def local_too_slow():
+    """A live update that takes more than ~3 s only delays everything: then the online preview is used.
+    Every 20 s one local update is tried again (the computer may be faster now)."""
+    return bool(LOCAL.quick_avg and LOCAL.quick_avg > 3.0 and time.time() - LOCAL.last_quick < 20)
+
+
+def short_err(e):
+    return short(e, 120)
+
+
+def local_verdict(quick, final, heard, match, spoken, name=""):
+    every = next((ms for lim, ms in ((0.35, 500), (0.7, 1000), (1.1, 1500), (1.6, 2000), (2.5, 3000)) if quick <= lim), 0)
+    if every and every <= 1000:
+        level, text = "good", f"Fast on this computer — live text about every {every / 1000:g} s."
+    elif every and every <= 2000:
+        level, text = "ok", f"Good on this computer — live text about every {every / 1000:g} s."
+    elif every:
+        level, text = "slow", "Slow on this computer — live text only every 3 s. A smaller model would be faster."
+    else:
+        level, text = "bad", "Too slow on this computer for live text."
+    final_ok = final <= 2.0
+    notes = []
+    smaller = SMALLER.get(re.sub(r"\.en$", "", name or ""))
+    if level in ("slow", "bad"):
+        text += (f" Try the smaller '{smaller}' model (download it above and test again)." if smaller else
+                 " This computer is too slow for a local model — keep Groq (or another service) for speech to text.")
+    if spoken and match is not None and match < 0.6:
+        notes.append("It misheard the English test sentence — this model may be too small for good results.")
+    if not spoken:
+        notes.append("Windows has no English test voice, so only the speed was measured.")
+    return {"quick": round(quick, 2), "final": round(final, 2), "every": every, "level": level, "text": text,
+            "final_ok": final_ok, "heard": heard, "match": match, "notes": notes, "smaller": smaller or ""}
+
+
+_test_audio = {}
+
+
+def test_speech():
+    """A spoken English test sentence made by Windows' own voice (cached). Falls back to a tone."""
+    if "a" not in _test_audio:
+        path = os.path.join(MODELS_DIR, "test-sentence.wav")
+        if not os.path.isfile(path) and sys.platform == "win32":
+            try:
+                os.makedirs(MODELS_DIR, exist_ok=True)
+                ps = ("Add-Type -AssemblyName System.Speech;"
+                      "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+                      "$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'en-*' } | Select-Object -First 1;"
+                      "if (-not $v) { exit 3 };"
+                      "$s.SelectVoice($v.VoiceInfo.Name);"
+                      "$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, "
+                      "[System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono);"
+                      f"$s.SetOutputToWaveFile('{path.replace(chr(39), chr(39) * 2)}', $f);"
+                      f"$s.Speak('{TEST_SENTENCE}'); $s.Dispose()")
+                r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], timeout=30,
+                                   capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if r.returncode != 0:
+                    log(f"test voice not available (code {r.returncode})", level="debug")
+                    if os.path.isfile(path):
+                        os.remove(path)
+            except Exception as e:
+                log("test voice not available:", short(e), level="debug")
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        audio = None
+        if os.path.isfile(path):
+            try:
+                with wave.open(path, "rb") as w:
+                    raw = w.readframes(w.getnframes())
+                    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    if w.getnchannels() > 1:
+                        audio = audio.reshape(-1, w.getnchannels()).mean(axis=1)
+                    audio = resample16k(audio, w.getframerate())
+            except Exception:
+                audio = None
+        if (audio is None or len(audio) <= 8000) and os.path.isfile(path):
+            try:
+                os.remove(path)                     # broken: make it again next time
+            except OSError:
+                pass
+        if audio is not None and len(audio) > 8000:
+            _test_audio["a"] = (np.concatenate([np.zeros(4000, np.float32), audio, np.zeros(4000, np.float32)]), True)
+        else:
+            tt = np.arange(48000) / 16000
+            _test_audio["a"] = ((0.08 * np.sin(2 * np.pi * 180 * tt)).astype(np.float32), False)
+    return _test_audio["a"]
+
+
+LOCAL = LocalWhisper()
+
+
+# ----------------------------------------------------------------------------
+# Local AI model for translation and answers (llama.cpp, a .gguf file) - optional
+# ----------------------------------------------------------------------------
+LLM_CATALOG = [
+    {"id": "gemma3-4b", "repo": "unsloth/gemma-3-4b-it-GGUF", "file": "gemma-3-4b-it-Q4_K_M.gguf", "mb": 2490,
+     "note": "Recommended — good translation in many languages (also Persian); needs about 4 GB of free memory"},
+    {"id": "qwen2.5-1.5b", "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF", "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+     "mb": 1120, "note": "Fastest and smallest; weaker translation, fine for English"},
+    {"id": "qwen2.5-3b", "repo": "Qwen/Qwen2.5-3B-Instruct-GGUF", "file": "qwen2.5-3b-instruct-q4_k_m.gguf",
+     "mb": 1930, "note": "Fast; good for English, German and other European languages"},
+    {"id": "gemma3-12b", "repo": "unsloth/gemma-3-12b-it-GGUF", "file": "gemma-3-12b-it-Q4_K_M.gguf", "mb": 7300,
+     "note": "Best answers; needs a strong computer (16 GB memory) — slow on most laptops"},
+]
+LLM_CTX = 4096                     # words the model can see at once (translation and answers need far less)
+_llama = {"mod": None, "error": "", "tried": False}
+_llama_lock = threading.Lock()
+
+
+def load_llama():
+    """Imports llama.cpp once. None if this program version does not include it."""
+    with _llama_lock:
+        if not _llama["tried"]:
+            _llama["tried"] = True
+            try:
+                import llama_cpp
+                _llama["mod"] = llama_cpp
+                log(f"Local AI engine: llama.cpp {getattr(llama_cpp, '__version__', '?')}")
+            except Exception as e:
+                _llama["error"] = short(e, 200)
+                log("Local AI engine is not available:", _llama["error"], level="warn")
+        return _llama["mod"]
+
+
+def llm_label(path):
+    return os.path.splitext(os.path.basename(path or ""))[0]
+
+
+def find_llm_models(extra=""):
+    """.gguf models in the program's models folder (one level of sub-folders) plus the chosen one."""
+    out, seen = [], set()
+    cands = []
+    try:
+        for n in os.listdir(MODELS_DIR):
+            p = os.path.join(MODELS_DIR, n)
+            if os.path.isdir(p) and not n.endswith(".part"):
+                cands += [os.path.join(p, f) for f in os.listdir(p) if f.lower().endswith(".gguf")]
+            elif n.lower().endswith(".gguf"):
+                cands.append(p)
+    except OSError:
+        pass
+    if extra and os.path.isfile(extra):
+        cands.append(extra)
+    for p in cands:
+        key = os.path.normcase(os.path.abspath(p))
+        if key in seen or "mmproj" in os.path.basename(p).lower():
+            continue
+        seen.add(key)
+        try:
+            mb = round(os.path.getsize(p) / 1e6)
+        except OSError:
+            continue
+        inside = os.path.normcase(os.path.abspath(p)).startswith(os.path.normcase(os.path.abspath(MODELS_DIR)) + os.sep)
+        out.append({"path": p, "name": llm_label(p), "mb": mb, "removable": inside})
+    return sorted(out, key=lambda m: m["mb"])
+
+
+class LocalChat:
+    """A chat model on this computer (llama.cpp). It speaks like the online services (chat_stream),
+    so translation and answers use it exactly like any other service."""
+    name = "Local AI"
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.run_lock = threading.Lock()          # one reply at a time (it uses all cores)
+        self.model = None
+        self.path = ""
+        self.state = "off"                         # off | loading | ready | error
+        self.error = ""
+        self.gen = 0
+        self.load_secs = None
+        self.speed = None                          # words (tokens) per second of the last reply
+        self.compat = {}
+        self.limits = {}
+        self.on_change = None
+
+    def info(self):
+        load_llama()
+        return {"state": self.state, "path": self.path, "name": llm_label(self.path), "error": self.error,
+                "engine": _llama["mod"] is not None, "engine_error": _llama["error"],
+                "load_secs": self.load_secs, "speed": self.speed}
+
+    def _notify(self):
+        if self.on_change:
+            try:
+                self.on_change()
+            except Exception:
+                pass
+
+    def ready(self):
+        return self.state == "ready" and self.model is not None
+
+    def load(self, path):
+        with self.lock:
+            if path and path == self.path and self.state in ("loading", "ready"):
+                return
+            self.gen += 1
+            g = self.gen
+            self.model = None
+            if not path or not os.path.isfile(path):
+                self.state, self.path = ("error" if path else "off"), ""
+                self.error = f"Model file not found: {path}" if path else ""
+            else:
+                self.state, self.path, self.error = "loading", path, ""
+        self._notify()
+        if self.state == "loading":
+            threading.Thread(target=self._load, args=(g, path), daemon=True, name="llm-load").start()
+
+    def unload(self):
+        with self.lock:
+            if self.state == "off":
+                return
+            self.gen += 1
+            self.model, self.state, self.path, self.error = None, "off", "", ""
+        log("Local AI model closed (memory freed)")
+        self._notify()
+
+    def _load(self, g, path):
+        t0 = time.time()
+        mod = load_llama()
+        try:
+            if mod is None:
+                raise RuntimeError("The local AI engine is not included in this program version ("
+                                   + (_llama["error"] or "unknown reason") + "). Build the exe again with build_exe.bat.")
+            while not self.run_lock.acquire(timeout=5):          # a reply on the old model is still running
+                if g != self.gen:
+                    return
+            self.run_lock.release()
+            if g != self.gen:
+                return
+            import gc
+            gc.collect()
+            pc = physical_cores()
+            threads = max(1, min(8, pc - 1 if pc >= 6 else pc))
+            m = mod.Llama(model_path=short_path(path), n_ctx=LLM_CTX, n_threads=threads, n_batch=256,
+                          n_gpu_layers=0, verbose=False)
+            with self.lock:
+                if g != self.gen:
+                    del m
+                    return
+                self.model, self.state, self.error = m, "ready", ""
+                self.load_secs = round(time.time() - t0, 1)
+            log(f"Local AI model '{llm_label(path)}' ready ({threads} threads), loaded in {self.load_secs} s")
+        except Exception as e:
+            with self.lock:
+                if g != self.gen:
+                    return
+                self.model, self.state = None, "error"
+                self.error = friendly_local_error(e)
+            log("Local AI model failed:", short(e, 300), level="error")
+        self._notify()
+
+    def chat_stream(self, model, messages, max_tokens, temperature, effort, on_text, old_style=False):
+        if self.state == "loading":
+            raise LocalLoading("The local AI model is still loading.")
+        m = self.model
+        if m is None or self.state != "ready":
+            raise ModelUnavailable("The local AI model is not loaded" + (f": {self.error}" if self.error else "."))
+        if not self.run_lock.acquire(timeout=120):
+            raise Transient("The local AI model is busy with another reply.")
+        raw, n, t0 = "", 0, time.time()
+        try:
+            try:
+                stream = m.create_chat_completion(messages=messages, max_tokens=max_tokens,
+                                                  temperature=max(0.0, float(temperature)), stream=True)
+                for chunk in stream:
+                    piece = ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content")
+                    if piece:
+                        raw += piece
+                        n += 1
+                        if on_text(strip_think(raw)) is False:
+                            break
+            except ValueError as e:                              # e.g. the text is longer than the model can see
+                raise BadRequest(f"Local AI model: {short(e, 160)}", 400)
+            el = time.time() - t0
+            if n >= 8 and el > 0:
+                self.speed = round(n / el, 1)
+        finally:
+            self.run_lock.release()
+        return strip_think(raw)
+
+
+LLM = LocalChat()
+
+
+class DownloadError(Exception):
+    pass
+
+
+class ModelDownload:
+    """Downloads a model into the 'models' folder. Resumes after a break, checks every file,
+    and tries a second site (mirror) and a direct connection if the first way does not work."""
+
+    def __init__(self, item, proxy, on_progress):
+        self.item = item
+        self.proxy = proxy
+        self.on_progress = on_progress
+        self.cancel = threading.Event()
+        self.kind = "llm" if item.get("file") else "stt"      # a single .gguf file, or a faster-whisper folder
+        self.state = {"id": item["id"], "kind": self.kind, "state": "starting", "done": 0,
+                      "total": item["mb"] * 1_000_000, "speed": 0, "error": "", "via": ""}
+        self.dest = os.path.join(MODELS_DIR, item["id"])
+        self.part = self.dest + ".part"
+        self._last = 0.0
+        self.thread = threading.Thread(target=self.run, daemon=True, name="model-download")
+
+    def _emit(self, force=False, **kw):
+        self.state.update(kw)
+        now = time.time()
+        if force or now - self._last > 0.3:
+            self._last = now
+            self.on_progress(dict(self.state))
+
+    def run(self):
+        try:
+            os.makedirs(self.part, exist_ok=True)
+            free = shutil.disk_usage(MODELS_DIR).free + self._on_disk()
+            if free < self.item["mb"] * 1_000_000 * 1.1:
+                raise DownloadError(f"Not enough free disk space: {self.item['mb']} MB needed, "
+                                    f"{round(free / 1e6)} MB free.")
+            routes = [(h, p) for h in HF_HOSTS for p in ([self.proxy, ""] if self.proxy else [""])]
+            last, ok = None, False
+            resumed = 0
+            for host, proxy in routes:
+                while not self.cancel.is_set():
+                    before = self._on_disk()
+                    try:
+                        self._fetch(host, proxy)
+                        ok = True
+                        break
+                    except DownloadError as e:
+                        last = e
+                        log(f"Model download via {host}{' + proxy' if proxy else ' (direct)'} failed: {e}", level="warn")
+                        # the connection broke after some progress: continue where it stopped (a few times)
+                        if self._on_disk() > before and resumed < 12:
+                            resumed += 1
+                            self._emit(True, state="downloading", error="")
+                            time.sleep(2)
+                            continue
+                        break
+                if ok or self.cancel.is_set():
+                    break
+            if not ok and not self.cancel.is_set():
+                raise last or DownloadError("Download failed.")
+            if self.cancel.is_set():
+                self._emit(True, state="cancelled")
+                log("Model download cancelled (what was downloaded is kept; Download continues it)")
+                return
+            if os.path.isdir(self.dest):
+                shutil.rmtree(self.dest, ignore_errors=True)
+                if os.path.exists(self.dest):
+                    raise DownloadError(f"The old folder {self.dest} is in use. Close the program, delete that "
+                                        "folder, open the program and press Download again.")
+            for i in range(15):                 # antivirus often keeps a new big file open for a few seconds
+                try:
+                    os.replace(self.part, self.dest)
+                    break
+                except PermissionError:
+                    if i == 14:
+                        raise DownloadError("Windows did not allow finishing the download (the file is still in use, "
+                                            "maybe by the antivirus). Press Download again in a minute.")
+                    time.sleep(1)
+            if self.kind == "llm":
+                done_path = os.path.join(self.dest, self.item["file"])
+                if not os.path.isfile(done_path):
+                    raise DownloadError(f"{self.item['file']} is missing after the download")
+            else:
+                done_path, why = model_folder(self.dest)
+                if not done_path:
+                    raise DownloadError(why)
+                done_path = self.dest
+            log(f"Model '{self.item['id']}' downloaded to {self.dest}")
+            self._emit(True, state="done", path=done_path, done=self.state["total"])
+        except DownloadError as e:
+            self._emit(True, state="error", error=str(e))
+        except Exception as e:
+            log("model download:", traceback.format_exc())
+            self._emit(True, state="error", error=short(e, 200))
+
+    def _on_disk(self):
+        try:
+            return sum(os.path.getsize(os.path.join(self.part, f)) for f in os.listdir(self.part))
+        except OSError:
+            return 0
+
+    def _client(self, proxy):
+        kw = dict(timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True, trust_env=False,
+                  headers={"User-Agent": f"MeetingAssistant/{VERSION}"})
+        if proxy:
+            kw["proxy"] = proxy
+        try:
+            return httpx.Client(**kw)
+        except Exception as e:
+            raise DownloadError(f"proxy problem: {short(e, 100)}")
+
+    def _fetch(self, host, proxy):
+        repo = self.item["repo"]
+        self._emit(True, state="listing", via=host.split("//")[-1] + (" through the proxy" if proxy else " (direct)"))
+        with self._client(proxy) as client:
+            files = None
+            try:
+                r = client.get(f"{host}/api/models/{repo}", params={"blobs": "true"})
+                if r.status_code == 200:
+                    files = []
+                    for s_ in r.json().get("siblings", []):
+                        name = s_.get("rfilename", "")
+                        if (name == self.item["file"]) if self.kind == "llm" else MODEL_FILE_RE.match(name):
+                            lfs = s_.get("lfs") or {}
+                            files.append((name, s_.get("size") or lfs.get("size"), lfs.get("sha256")))
+            except httpx.HTTPError as e:
+                raise DownloadError(dl_error(e))
+            except ValueError:
+                files = None
+            if not files:
+                files = [(f, None, None) for f in (
+                    (self.item["file"],) if self.kind == "llm" else
+                    ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "vocabulary.json",
+                     "preprocessor_config.json"))]
+            needed = (self.item["file"],) if self.kind == "llm" else NEEDED_FILES
+            known = [f for f in files if f[1]]
+            if len(known) == len(files):
+                self.state["total"] = sum(f[1] for f in files)
+            have_total = sum(os.path.getsize(os.path.join(self.part, f[0])) for f in files
+                             if os.path.isfile(os.path.join(self.part, f[0])))
+            self._emit(True, state="downloading", done=have_total)
+            t_start, got_now = time.time(), 0
+            for name, size, sha in files:
+                path = os.path.join(self.part, name)
+                have = os.path.getsize(path) if os.path.isfile(path) else 0
+                if size and have == size:
+                    continue
+                if size and have > size:
+                    os.remove(path)
+                    have_total -= have
+                    have = 0
+                headers = {"Range": f"bytes={have}-"} if have else {}
+                try:
+                    with client.stream("GET", f"{host}/{repo}/resolve/main/{name}", headers=headers) as r:
+                        if r.status_code == 404 and name not in needed:
+                            continue
+                        if r.status_code == 416:
+                            if size and have == size:
+                                continue                          # 'nothing left to send': the file is complete
+                            try:                                  # the piece on disk does not fit this file: start it over
+                                os.remove(path)
+                                have_total -= have
+                            except OSError:
+                                pass
+                            raise DownloadError(f"{name}: the piece on disk did not match — starting that file over")
+                        if r.status_code in (401, 403):
+                            raise DownloadError(f"the site refused the download ({r.status_code})")
+                        if r.status_code >= 400:
+                            raise DownloadError(f"{name}: HTTP {r.status_code}")
+                        if r.status_code == 200 and have:
+                            have_total -= have                    # the site ignored 'continue from': start over
+                            have = 0
+                        with open(path, "ab" if have else "wb") as f:
+                            for chunk in r.iter_bytes(1 << 20):
+                                if self.cancel.is_set():
+                                    return
+                                f.write(chunk)
+                                got_now += len(chunk)
+                                el = max(0.5, time.time() - t_start)
+                                self._emit(done=have_total + got_now, speed=round(got_now / el))
+                except httpx.HTTPError as e:
+                    raise DownloadError(f"{name}: {dl_error(e)}")
+            self._emit(True, state="checking")
+            for name, size, sha in files:
+                path = os.path.join(self.part, name)
+                if not os.path.isfile(path):
+                    if name in needed:
+                        raise DownloadError(f"{name} is missing on the site")
+                    continue
+                if size and os.path.getsize(path) != size:
+                    raise DownloadError(f"{name} is incomplete — press Download again to continue")
+                if sha:
+                    h = hashlib.sha256()
+                    with open(path, "rb") as f:
+                        for block in iter(lambda: f.read(1 << 22), b""):
+                            if self.cancel.is_set():
+                                return
+                            h.update(block)
+                    if h.hexdigest() != sha:
+                        os.remove(path)
+                        raise DownloadError(f"{name} arrived damaged and was deleted — press Download again")
+
+
+def dl_error(e):
+    if isinstance(e, httpx.ProxyError):
+        return "cannot connect through the proxy — is your proxy / VPN app running?"
+    if isinstance(e, (httpx.ConnectTimeout, httpx.ConnectError)):
+        return "cannot reach the site"
+    if isinstance(e, (httpx.ReadTimeout, httpx.WriteTimeout)):
+        return "the connection stopped (timeout)"
+    return short(e, 140) or type(e).__name__
+
+
+def platform_node():
+    try:
+        import platform
+        return platform.node() or "this computer"
+    except Exception:
+        return "this computer"
+
+
+def pick_file_dialog(initial="", title="Choose model.bin inside the model folder",
+                     filt="Whisper model (model.bin)|model.bin|All files (*.*)|*.*"):
+    """Windows 'Open' dialog (runs PowerShell, so no extra library is needed)."""
+    if sys.platform != "win32":
+        raise APIError("Choosing a file works on Windows only — type the path instead.")
+    init = (initial or MODELS_DIR).replace("'", "''")
+    title, filt = title.replace("'", "''"), filt.replace("'", "''")
+    ps = ("Add-Type -AssemblyName System.Windows.Forms;"
+          "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false;"
+          "$d = New-Object System.Windows.Forms.OpenFileDialog;"
+          f"$d.Title = '{title}';"
+          f"$d.Filter = '{filt}';"
+          f"if (Test-Path -LiteralPath '{init}') {{ $d.InitialDirectory = '{init}' }};"
+          "$w = New-Object System.Windows.Forms.Form -Property @{TopMost = $true};"
+          "if ($d.ShowDialog($w) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.FileName }")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-STA", "-Command", ps],
+                       capture_output=True, timeout=900, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return r.stdout.decode("utf-8-sig", "replace").strip().lstrip("\ufeff").strip()
+
+
+class ModelBoard:
+    """Remembers which chat models are cooling down (rate limit) or unavailable."""
+
+    def __init__(self):
+        self.cool = {}
+        self.dead = set()
+        self.lock = threading.Lock()
+
+    def ok(self, m):
+        with self.lock:
+            return m not in self.dead and time.time() >= self.cool.get(m, 0)
+
+    def cooldown(self, m, secs):
+        with self.lock:
+            self.cool[m] = time.time() + max(1.0, min(60.0, 5.0 if secs is None else secs))
+
+    def kill(self, m):
+        with self.lock:
+            self.dead.add(m)
+
+    def soonest(self, models):
+        with self.lock:
+            waits = [self.cool.get(m, 0) - time.time() for m in models if m not in self.dead]
+        waits = [w for w in waits if w > 0]
+        return min(waits) if waits else None
+
+    def cooling(self):
+        now = time.time()
+        with self.lock:
+            return sorted(m for m, t in self.cool.items() if t > now)
+
+
+class SttQuota:
+    """Free-plan limits of one Groq model. Every method takes its own lock (several workers share it)."""
+    def __init__(self, name):
+        self.name = name
+        self.req = collections.deque()
+        self.billed = collections.deque()
+        self.billed_sum = 0.0
+        self.cool_until = 0.0
+        self.dead = False
+        self.lock = threading.RLock()
+
+    def _prune(self, now):
+        while self.req and now - self.req[0][0] > 60:
+            self.req.popleft()
+        while self.billed and now - self.billed[0][0] > 3600:
+            self.billed_sum -= self.billed.popleft()[1]
+
+    def can_send(self, now, dur):
+        with self.lock:
+            self._prune(now)
+            return (not self.dead and now >= self.cool_until and len(self.req) < STT_RPM
+                    and self.billed_sum + max(MIN_BILLED, dur) <= STT_HOUR_BUDGET)
+
+    def record(self, now, dur):
+        """Counts one request; returns a handle that refund() takes back."""
+        with self.lock:
+            b = max(MIN_BILLED, dur)
+            h = [now, b]                                   # a list: every handle is its own object
+            self.req.append(h)
+            self.billed.append(h)
+            self.billed_sum += b
+            return h
+
+    def refund(self, h):
+        """The request never reached the service (connection broken, rate limit): it does not count."""
+        if not h:
+            return
+        with self.lock:
+            for d in (self.req, self.billed):
+                for i, x in enumerate(d):
+                    if x is h:
+                        del d[i]
+                        if d is self.billed:
+                            self.billed_sum -= h[1]
+                        break
+
+    def recent(self):
+        with self.lock:
+            return len(self.req)
+
+    def left_fraction(self, now):
+        with self.lock:
+            self._prune(now)
+            return 0.0 if self.dead else max(0.0, 1 - self.billed_sum / STT_HOUR_BUDGET)
+
+
+# ----------------------------------------------------------------------------
+# Prompts
+# ----------------------------------------------------------------------------
+TRANSLATE_SYSTEM = (
+    "You are a live interpreter. Translate the line after 'Translate:' into fluent, natural "
+    "{lang}. Keep technical terms, product names, protocols and commands as they are. "
+    "Output only the {lang} translation — no quotes, no notes.{topic}")
+
+
+def translate_system(cfg, topic=""):
+    return TRANSLATE_SYSTEM.format(lang=lang_full(cfg["my_language"]), topic=topic)
+
+
+def lang_full(code):
+    return "Persian (Farsi)" if code == "fa" else lang_name(code)
+
+ANSWER_SYSTEM = """You are a live meeting copilot. The user reads your suggestion on screen and says it out loud.
+Meeting (what it is about, the role, the company, the topics — tailor every answer to it): {context}
+Reply style: {style}
+About the user: {about}
+
+Rules:
+{first_rule}
+- Otherwise output only the words the user should say: first person, {answer_lang}, natural spoken style. No preface, no quotes, no markdown.
+- Personal facts (name, age, education, employers, years, projects, numbers, certificates, salary, locations) come ONLY from "About the user". Never invent or guess one; if it is needed and not given, write a short placeholder such as [your name] or [years] instead.
+- Technical content must be correct. State only what you are sure is right; if a detail (a number, version, command or limit) is uncertain, say it in general terms instead of guessing. Never make up products, features or experience.
+- Stay on the meeting's topic and role. Do not pad the answer with generic filler.
+- If the question repeats or rephrases one already answered (see "Answered earlier"), keep the same facts and stay consistent; you may briefly say you mentioned it and add something new.{fa_rule}"""
+
+RULE_DECIDE = ("- If the NEW line needs no reply from the user (a plain statement, filler, small talk that "
+               "needs no answer, or an unfinished sentence), output exactly NO_REPLY and nothing else.")
+RULE_FORCE = ("- The user pressed the Answer button: always reply to the most recent question or topic, "
+              "even if it is unclear or unfinished. Never output NO_REPLY.")
+RULE_FA = ("\n- After the reply output a line containing only ### and then a short {lang} "
+           "translation of your reply.")
+
+
+def answer_lang_rule(cfg):
+    a = cfg["answer_language"]
+    if a != "same":
+        return f"in {lang_name(a)} (whatever language the NEW line is in)"
+    names = " or ".join(lang_name(c) for c in meeting_langs(cfg))
+    return f"in the same language as the NEW line ({names})"
+
+
+def meaning_rule(cfg, line_lang):
+    """The answer's meaning in my language — not needed when the answer is already in it."""
+    if not cfg["answer_fa"]:
+        return ""
+    a = cfg["answer_language"]
+    ans_lang = line_lang if a == "same" else a
+    if ans_lang == cfg["my_language"] or (a == "same" and not line_lang and fixed_lang(cfg) == cfg["my_language"]):
+        return ""
+    return RULE_FA.format(lang=lang_full(cfg["my_language"]))
+DEFAULT_STYLE = "Clear, confident and concise (2-4 sentences). Technical questions get correct, specific technical answers."
+
+
+def split_answer(t):
+    parts = re.split(r"\n?[ \t]*#{3,}[ \t]*\n?", t, maxsplit=1)
+    ans = parts[0].strip().strip('"')
+    fa = parts[1].strip() if len(parts) > 1 else ""
+    return ans, fa
+
+
+FILLERS = {"okay", "ok", "okay great", "great", "good", "alright", "all right", "right", "yes", "yeah", "yep",
+           "no", "sure", "fine", "perfect", "i see", "uh huh", "mm hmm", "mhm", "hmm", "um", "uh", "thanks",
+           "thank you", "nice", "cool", "wow", "really", "exactly", "correct", "got it", "understood",
+           "ja", "nein", "gut", "genau", "richtig", "super", "prima", "alles klar", "okay gut", "danke", "aha"}
+
+
+FILLER_WORDS = {w for f in FILLERS for w in f.split()} - {"i", "see", "all", "got", "it", "thank", "you", "really"}
+
+
+def is_filler(text):
+    """Very short acknowledgements need no suggested answer. A question mark always gets one."""
+    if "?" in text:
+        return False
+    n = normalize_words(text)
+    words = n.split()
+    return n in FILLERS or (0 < len(words) <= 3 and all(w in FILLER_WORDS for w in words))
+
+
+def _norm_word(w):
+    return re.sub(r"[^\w]+", "", w.lower())
+
+
+def stable_words(st, text):
+    """How many words at the start of a live hypothesis are settled: words two updates in a row agree on
+    stay fixed (the end of an unfinished sentence still changes while the person speaks)."""
+    words = text.split()
+    prev = st.get("prev_words") or []
+    n = 0
+    while n < min(len(prev), len(words)) and _norm_word(prev[n]) == _norm_word(words[n]):
+        n += 1
+    old = st.get("stable", 0)
+    if old and len(words) >= old and [_norm_word(w) for w in words[:old]] == st.get("stable_norm"):
+        n = max(n, old)                     # what was settled stays settled
+    n = min(n, max(0, len(words) - 1)) if len(words) > 1 else n
+    st["prev_words"], st["stable"] = words, n
+    st["stable_norm"] = [_norm_word(w) for w in words[:n]]
+    return n
+
+
+def normalize_words(t):
+    return " ".join(re.findall(r"\w+", t.lower()))
+
+
+def is_hallucination(text):
+    n = normalize_words(text)
+    return not n or n in HALLUCINATIONS
+
+
+def clean_transcript(res):
+    segs = res.get("segments") or []
+    unsure = not segs                      # no confidence data -> treat the famous phrases with care
+    if segs:
+        keep = []
+        for s in segs:
+            nsp = s.get("no_speech_prob") or 0.0
+            alp = s.get("avg_logprob") or 0.0
+            cr = s.get("compression_ratio") or 1.0
+            if (nsp > 0.6 and alp < -0.5) or alp < -1.5 or cr > 2.6:
+                continue
+            if nsp > 0.3 or alp < -0.7:
+                unsure = True
+            keep.append((s.get("text") or "").strip())
+        text = " ".join(keep)
+    else:
+        text = (res.get("text") or "").strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    if not normalize_words(text):
+        return ""
+    # "Thank you" / "Vielen Dank" are also said for real (e.g. at the end of an interview)
+    return "" if (unsure and is_hallucination(text)) else text
+
+
+# ----------------------------------------------------------------------------
+# Meeting session (transcript + autosave)
+# ----------------------------------------------------------------------------
+class Session:
+    def __init__(self, cfg, recording=""):
+        self.cfg = cfg
+        self.lock = threading.RLock()
+        self.entries = {}
+        self.started = datetime.datetime.now()
+        self.recording = recording                  # file name when a recording is transcribed
+        self.summary = ""
+        os.makedirs(MEETINGS_DIR, exist_ok=True)
+        if recording:
+            stem = re.sub(r"[^\w\-. ]+", "_", os.path.splitext(os.path.basename(recording))[0])[:60].strip() or "audio"
+            name = self.started.strftime(f"recording_{stem}_%Y-%m-%d_%H-%M-%S.md")
+        else:
+            name = self.started.strftime("meeting_%Y-%m-%d_%H-%M-%S.md")
+        self.path = os.path.join(MEETINGS_DIR, name)
+        n = 2
+        while os.path.exists(self.path):                # two meetings in the same second never share a file
+            self.path = os.path.join(MEETINGS_DIR, f"{os.path.splitext(name)[0]}-{n}.md")
+            n += 1
+        self.dirty = True
+        self.save_lock = threading.Lock()
+        self.resumes = []                           # times the meeting was continued after a stop
+
+    FIELDS = ("source", "t0", "t_end", "t_text", "text", "lang", "translation", "tr_state", "answer", "answer_fa",
+              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing")
+
+    def state(self):
+        with self.lock:
+            rows = [{k: e.get(k) for k in self.FIELDS} for e in self.entries.values()]
+            return {"path": self.path, "started": self.started.timestamp(), "summary": self.summary,
+                    "resumes": list(self.resumes), "entries": rows}
+
+    @classmethod
+    def load_last(cls, cfg):
+        """The last meeting, as it was saved (None if there is none or its file was deleted)."""
+        try:
+            with open(LAST_MEETING, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if not os.path.isfile(d["path"]) or not d["entries"]:
+                return None
+            s = cls(cfg)
+            s.path, s.summary, s.resumes = d["path"], d.get("summary") or "", list(d.get("resumes") or [])
+            s.started = datetime.datetime.fromtimestamp(float(d["started"]))
+            for row in d["entries"]:
+                eid = next(_entry_ids)
+                e = {**{k: row.get(k) for k in cls.FIELDS}, "id": eid, "seg_ids": []}
+                for k in ("tr_state", "ans_state", "ex_state"):     # anything unfinished stays unfinished
+                    if e[k] in ("pending", "streaming", "thinking"):
+                        e[k] = "error" if k == "tr_state" else "none"
+                s.entries[eid] = e
+            s.dirty = False
+            return s
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def add(self, source, t0, t_end, text, lang, seg_ids):
+        with self.lock:
+            eid = next(_entry_ids)
+            e = {"id": eid, "source": source, "t0": t0, "t_end": t_end, "t_text": time.time(),
+                 "text": text, "lang": lang, "seg_ids": seg_ids,
+                 "translation": "", "tr_state": "pending",
+                 "answer": "", "answer_fa": "", "ans_state": "none", "forced": False, "question": "",
+                 "explain": "", "explain_q": "", "ex_state": "none", "edited": False}
+            self.entries[eid] = e
+            self.dirty = True
+            return dict(e)
+
+    def get(self, eid):
+        with self.lock:
+            e = self.entries.get(eid)
+            return dict(e) if e else None
+
+    def set_summary(self, text):
+        with self.lock:
+            self.summary = text
+            self.dirty = True
+
+    def update(self, eid, **fields):
+        with self.lock:
+            e = self.entries.get(eid)
+            if not e:
+                return None
+            e.update(fields)
+            self.dirty = True
+            return dict(e)
+
+    def remove(self, eid):
+        with self.lock:
+            self.entries.pop(eid, None)
+            self.dirty = True
+
+    def ordered(self):
+        with self.lock:
+            return sorted((dict(e) for e in self.entries.values()), key=lambda e: e["t0"])
+
+    def history(self, before_t0, n, exclude=None):
+        rows = [e for e in self.ordered() if e["t0"] < before_t0 and e["id"] != exclude]
+        return [(self.label(e), e["text"]) for e in rows[-n:]]
+
+    def answered_before(self, before_t0, n, exclude=None):
+        """(question, answer) pairs suggested earlier in this meeting, oldest first."""
+        rows = [e for e in self.ordered() if e["t0"] < before_t0 and e["id"] != exclude and e.get("answer")
+                and e.get("ans_state") == "done"]
+        return [((e.get("question") or e["text"]), e["answer"]) for e in rows[-n:]]
+
+    def recent(self, source, since):
+        return [e for e in self.ordered() if e["source"] == source and e["t0"] >= since]
+
+    def label(self, e):
+        return self.cfg["me_label"] if e["source"] == "me" else self.cfg["them_label"]
+
+    def save_if_dirty(self):
+        with self.save_lock:
+            self._save()
+
+    def _save(self):
+        with self.lock:
+            if not self.dirty:
+                return
+            self.dirty = False
+            rows = self.ordered()
+            marks = sorted(self.resumes)
+        c = self.cfg
+        if self.recording:
+            out = [f"# Recording — {os.path.basename(self.recording)}", "",
+                   f"Transcribed {self.started:%Y-%m-%d %H:%M}. Times are positions in the recording.", ""]
+        else:
+            out = [f"# Meeting — {self.started:%Y-%m-%d %H:%M}", ""]
+        if c["context"]:
+            out += [f"**Meeting:** {c['context']}", ""]
+        if c["answer_style"]:
+            out += [f"**Answer style:** {c['answer_style']}", ""]
+        out += ["---", ""]
+        for e in rows:
+            while marks and e["t0"] >= marks[0]:
+                out += [f"*— continued at {datetime.datetime.fromtimestamp(marks.pop(0)):%H:%M} —*", ""]
+            t = datetime.datetime.fromtimestamp(e["t0"]).strftime("%H:%M:%S")
+            out.append(f"**[{t}] {self.label(e)}:** {e['text']}")
+            if e["translation"]:
+                out += ["", f"> {e['translation']}"]
+            if e["answer"]:
+                out += ["", f"> 💡 {e['answer']}"]
+                if e["answer_fa"]:
+                    out += [f"> {e['answer_fa']}"]
+            if e.get("explain"):
+                out += ["", f"> ❓ «{e.get('explain_q', '')}»: {e['explain']}"]
+            out.append("")
+        if self.summary:
+            out += ["---", "", "## Summary / خلاصه", "", self.summary, ""]
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(out))
+            os.replace(tmp, self.path)
+        except OSError as e:
+            self.dirty = True
+            log("save failed:", e)
+            return
+        if not self.recording and rows:
+            try:
+                tmp = LAST_MEETING + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self.state(), f, ensure_ascii=False)
+                os.replace(tmp, LAST_MEETING)
+            except (OSError, TypeError, ValueError) as e:
+                log("could not keep the meeting for 'Continue':", short(e), level="debug")
+
+
+# ----------------------------------------------------------------------------
+# Engine: speech-to-text scheduling, translation, answers
+# ----------------------------------------------------------------------------
+class Stats:
+    def __init__(self):
+        self.d = {k: collections.deque(maxlen=5) for k in ("text", "translation", "answer")}
+        self.lock = threading.Lock()
+
+    def add(self, k, v):
+        if v is not None and 0 <= v < 120:
+            with self.lock:
+                self.d[k].append(v)
+
+    def summary(self):
+        with self.lock:
+            return {k: (round(sum(v) / len(v), 1) if v else None) for k, v in self.d.items()}
+
+
+class Engine:
+    @property
+    def api(self):
+        # always the current connection (the key or the Windows proxy may change mid-meeting)
+        return self.app.get_api()
+
+    def __init__(self, app, session, workers=True, file_mode=False):
+        self.app = app
+        self.file_mode = file_mode     # a recording: no answers, no previews, patient with free limits
+        self.paused = False
+        self.tr_inflight = 0           # translations queued or running (a recording waits for them)
+        self.tr_lock = threading.Lock()
+        self.tr_gen = collections.Counter()
+        self.cfg = app.cfg
+        self.hub = app.hub
+        self.session = session
+        self.stats = app.stats
+        self.models = ModelBoard()
+        self.quota = {m: SttQuota(m) for m in ("whisper-large-v3-turbo", "whisper-large-v3")}
+        self.qlock = threading.Lock()
+        self.stt_cool = {}            # (service, model) -> time until usable again
+        self.stt_dead = set()
+        self.warned = set()
+        self.pending = []
+        self.inflight = {}
+        self.cv = threading.Condition()
+        self.stop_event = threading.Event()
+        self.busy = 0
+        self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="llm")
+        self.lang_guess = meeting_langs(self.cfg)[0]
+        self.lang_sure = 0
+        self.last_text = {"me": "", "them": ""}
+        self.echo_warned = False
+        self.fatal = None
+        self.ans_gen = collections.Counter()
+        self.live = {}                 # source -> DeepgramLive
+        self.live_dead = set()         # sources whose live service failed (tried again after a device change)
+        self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
+        self.done_segs = set()         # sentences that already have their final text
+        self.done_order = collections.deque()
+        self.previews = {}             # seg -> preview state
+        self.pv_lock = threading.Lock()  # guards the busy / waiting-update hand-over of a preview
+        self.pv_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="preview")
+        self.spec_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-update")
+        self.workers = [threading.Thread(target=self._stt_worker, daemon=True, name=f"stt{i}")
+                        for i in range(STT_WORKERS if workers else 0)]
+        for w in self.workers:
+            w.start()
+
+    # ---- audio events -------------------------------------------------------
+    def live_mode(self, source):
+        lv = self.live.get(source)
+        return lv is not None and lv.ok
+
+    def speech_mode(self):
+        """What the window shows: how text is produced for the other side."""
+        if self.live_mode("them"):
+            return {"mode": "live", "service": self.app.provider(self.cfg["stt_provider"])["name"]}
+        t = self.stt_targets("them")
+        name = (self.app.provider(t[0][0]) or {}).get("name", "Groq") if t else "Groq"
+        if self.local_preview_on():
+            final = "the local model" if t and t[0][0] == "local" else name
+            return {"mode": "local", "every": self.cfg["local_preview_ms"] / 1000,
+                    "service": f"Local model ({LOCAL.info()['name']})", "final": final}
+        if self.cfg["live_preview"]:
+            return {"mode": "preview", "every": preview_seconds(self.cfg), "service": name}
+        return {"mode": "sentence", "service": name}
+
+    def local_preview_on(self):
+        c = self.cfg
+        return LOCAL.ready() and (c["local_preview"] or c["stt_provider"] == "local") and not local_too_slow()
+
+    def start_live(self, captures, retry_dead=False):
+        """Starts live streaming for the sources, if the speech-to-text service is a live one.
+        retry_dead: after a device change, a stream that broke (not one refused for good) gets a new try."""
+        pid = self.cfg["stt_provider"]
+        prov = self.app.provider(pid)
+        if not prov or prov.get("kind") != "live" or not prov.get("api_key"):
+            return
+        proxy = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
+        for cap in captures:
+            src = cap.source
+            if src in self.live_dead:
+                if not retry_dead or src in self.live_fatal:
+                    continue
+                self.live_dead.discard(src)
+            box = []
+            lv = DeepgramLive(src, prov["api_key"], self.cfg["stt_model"] or "nova-3", fixed_lang(self.cfg) or "auto", proxy,
+                              on_interim=lambda k, t0, text, s=src: self.live_interim(s, k, t0, text),
+                              on_final=lambda k, t0, t1, text, s=src: self._submit(self.live_final, s, k, t0, t1, text),
+                              on_fail=lambda e, s=src, b=box: self.live_failed(s, e, b[0] if b else None))
+            box.append(lv)
+            self.live[src] = lv
+            cap.tap = lv.feed
+            cap.preview_every = 0.0
+            if cap.seg:
+                cap.seg.preview_every = 0.0
+        if self.live:
+            log(f"Live speech-to-text with {prov['name']} for: " + ", ".join(self.live))
+        self.hub.publish("speech_mode", **self.speech_mode())
+
+    def live_failed(self, source, err, which=None):
+        if which is not None and self.live.get(source) is not which:
+            return                                          # an older stream (before a device change)
+        lv = self.live.pop(source, None)
+        self.live_dead.add(source)
+        if isinstance(err, AuthError):
+            self.live_fatal.add(source)
+        for cap in self.app.captures:
+            if cap.source == source and (lv is None or cap.tap == lv.feed):
+                cap.tap = None
+                if source == "them":
+                    self.app.apply_preview()
+        what = "the other side" if source == "them" else "your microphone"
+        log(f"Live speech-to-text stopped for {what}: {err}", level="error")
+        targets = self.stt_targets(source)
+        if targets:
+            by = "the local model" if targets[0][0] == "local" else self.app.provider(targets[0][0])["name"]
+            self.hub.toast("error", f"Live text stopped ({short(err, 120)}). Continuing with {by} for {what}.")
+        else:
+            self.hub.toast("error", f"Live text stopped ({short(err, 120)}). Nothing else can write {what} now: "
+                                    "add Groq (free) or a local model in Setup › Services.")
+        self.hub.publish("speech_mode", **self.speech_mode())
+
+    def live_interim(self, source, key, t0, text):
+        if key in self.done_segs or self.paused:
+            return
+        self.hub.publish("speaking", seg=key, source=source, t0=t0, phase="speaking", text=text, live=True)
+        words = self.cfg["live_tr_words"]
+        if words > 0:                                   # 0 = translate only the finished sentence (fewest tokens)
+            self._preview_translate(key, source, text, min_new=words)
+
+    def live_final(self, source, key, t0, t_end, text):
+        text = re.sub(r"\s+", " ", text).strip()
+        if self.paused:
+            self.done_segs.add(key)
+            return self.hub.publish("speaking", seg=key, source=source, phase="discard")
+        if not normalize_words(text):
+            self.done_segs.add(key)
+            return self.hub.publish("speaking", seg=key, source=source, phase="discard")
+        self.accept_text(source, text, "", t0, t_end, [key],
+                         {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "live", "model": "live"})
+
+    # ---- previews (services without a live mode) -----------------------------------
+    def _on_preview(self, source, seg_id, audio, t0, spec=False):
+        local = self.local_preview_on()
+        if spec and (not local or (not fixed_lang(self.cfg) and self.lang_sure < 2)):
+            return
+        if source != "them" or not (local or self.cfg["live_preview"]) or self.live_mode(source) or seg_id in self.done_segs:
+            return
+        st = self.previews.setdefault(seg_id, {"busy": False, "tr_busy": False, "tr_words": 0, "text": ""})
+        with self.pv_lock:
+            if st["busy"]:
+                if spec:
+                    st["spec_audio"] = (audio, t0)         # runs as soon as the current update is done
+                    st["spec_pending"] = True
+                return                                      # the previous preview is still on its way
+            st["busy"] = True                               # claimed here, so no second one can start
+
+        def release():
+            with self.pv_lock:
+                st["busy"] = False
+                st["spec_pending"] = False
+        now = time.time()
+        if local:
+            # free and offline; skipped (never queued) while the model is busy with a finished sentence.
+            # On a slow computer the previews automatically come less often.
+            gap = max(self.cfg["local_preview_ms"] / 1000, (LOCAL.quick_avg or 0) * 1.4)
+            if (not spec and now - st.get("local_t", 0) < gap - 0.05) or LOCAL.waiting or LOCAL.finals:
+                return release()
+            if self.cfg["stt_provider"] == "local" and any(
+                    j["source"] == "them" or not self.cfg["api_key"] for j in self.pending):
+                return release()                            # a finished sentence is waiting for the model
+            st["local_t"] = now
+            if spec:
+                st["spec_pending"] = True
+            try:
+                self.spec_pool.submit(self._run_preview, source, seg_id, audio, t0, ("local", ""), spec)
+            except RuntimeError:
+                release()
+            return
+        with self.cv:
+            if self.pending:
+                return release()                            # finished sentences always go first
+            target = None
+            for t in self.stt_targets(source):
+                if t[0] == "groq":
+                    q = self._q(t[1])
+                    # previews only use spare free quota: they never starve the real transcription
+                    if (q.can_send(now, len(audio) / 16000) and q.left_fraction(now) > 0.35
+                            and q.recent() < STT_RPM // 2 and self.busy < STT_WORKERS - 1):
+                        target = t
+                        break
+                elif self._usable(t, len(audio) / 16000, now):
+                    target = t
+                    break
+            if target is None:
+                return release()
+            h = self._record(target, now, len(audio) / 16000)
+        try:
+            self.pv_pool.submit(self._run_preview, source, seg_id, audio, t0, target, False, h)
+        except RuntimeError:
+            self._refund(target, h)
+            release()
+
+    def _run_preview(self, source, seg_id, audio, t0, target, spec=False, qh=None):
+        st = self.previews.get(seg_id)
+        if st is None:                                      # the sentence was dropped meanwhile
+            self._refund(target, qh)
+            return
+        try:
+            lang = fixed_lang(self.cfg)
+            if target[0] == "local":
+                # the language of the meeting so far: no detection pass, and no jumping between languages
+                # (a pause-update may become the final text: it uses the full, most accurate window)
+                res = LOCAL.transcribe(audio, "", lang or self.lang_guess, self._stt_prompt(source), quick=True,
+                                       short=False if spec else None, track=not spec)
+            else:
+                res = self.app.get_api(target[0]).transcribe(audio, target[1], lang, self._stt_prompt(source))
+            text = clean_transcript(res)
+            if text and seg_id not in self.done_segs:
+                st["text"] = text
+                st["covered"] = len(audio) / 16000
+                st["by"] = target[0]
+                segs_ = res.get("segments") or []
+                sure = all((g.get("avg_logprob") or 0) > -0.6 and (g.get("no_speech_prob") or 0) < 0.3
+                           and (g.get("compression_ratio") or 1) < 2.2 for g in segs_) and bool(segs_)
+                st["spec"] = spec and sure                  # only a confident result may become the final text
+                stable = stable_words(st, text)
+                self.hub.publish("speaking", seg=seg_id, source=source, t0=t0, phase="speaking",
+                                 text=text, stable=stable, live=False)
+                if target[0] != "local":
+                    self._preview_translate(seg_id, source, text, min_new=1)
+                elif self.cfg["live_tr_words"] > 0 and stable:
+                    # the local model updates very often: translate only words that two updates in a row
+                    # agree on (they do not change any more), and only every few new words (saves tokens)
+                    self._preview_translate(seg_id, source, " ".join(text.split()[:stable]),
+                                            min_new=self.cfg["live_tr_words"])
+        except LocalBusy:
+            pass
+        except (Transient, RateLimited) as e:
+            self._refund(target, qh)                        # it never got an answer: it does not count
+            log("preview skipped:", short(e, 120), level="debug")
+        except Exception as e:
+            log("preview skipped:", short(e, 120), level="debug")
+        finally:
+            if st:
+                with self.pv_lock:
+                    st["busy"] = False
+                    nxt = st.pop("spec_audio", None)
+                    go = nxt is not None and seg_id not in self.done_segs and self.previews.get(seg_id) is st
+                    if go:
+                        st["busy"] = True
+                    else:
+                        st["spec_pending"] = False
+                if go:
+                    try:
+                        self.spec_pool.submit(self._run_preview, source, seg_id, nxt[0], nxt[1], ("local", ""), True)
+                    except RuntimeError:
+                        st["busy"] = False
+                        st["spec_pending"] = False
+            self._check_local_speed()
+
+    def _check_local_speed(self):
+        """If the local model became too slow (or fast again), switch the live text source accordingly."""
+        slow = local_too_slow()
+        if slow != getattr(self, "_was_slow", None):
+            self._was_slow = slow
+            try:
+                self.app.apply_preview()
+                self.hub.publish("speech_mode", **self.speech_mode())
+            except Exception:
+                pass
+
+    def _preview_translate(self, key, source, text, min_new=3):
+        """Translation of the unfinished sentence - refreshed whenever a few new words arrived."""
+        if source != "them" and not (self.cfg["translate_me"] or self.cfg["answer_me"]):
+            return
+        if self.cfg["tr_provider"] == "llm" or key in self.done_segs:
+            return          # the local AI model translates finished sentences only (it is too slow for more)
+        st = self.previews.setdefault(key, {"busy": False, "tr_busy": False, "tr_words": 0, "text": ""})
+        n = len(text.split())
+        with self.pv_lock:
+            st["latest"] = text
+            st["min_new"] = min_new
+            if st["tr_busy"] or (n - st["tr_words"] < min_new and st["tr_words"]):
+                return
+            st["tr_busy"], st["tr_words"] = True, n
+        try:
+            self.pv_pool.submit(self._run_preview_translate, key, source, text)
+        except RuntimeError:
+            st["tr_busy"] = False
+
+    def _run_preview_translate(self, key, source, text):
+        st = self.previews.get(key) or {}
+        messages = [{"role": "system", "content": translate_system(self.cfg)
+                     + " The sentence may be unfinished: translate what is there."},
+                    {"role": "user", "content": "Translate:\n" + text}]
+        last = [0.0]
+
+        def on_text(t):
+            if key in self.done_segs:
+                return False
+            now = time.time()
+            if now - last[0] > 0.08:
+                last[0] = now
+                self.hub.publish("speaking", seg=key, source=source, phase="speaking", translation=t.strip())
+            return None
+        try:
+            out = self.run_chat(self.chat_targets("tr"), messages, 300, 0.2, on_text)
+            if key not in self.done_segs:
+                self.hub.publish("speaking", seg=key, source=source, phase="speaking", translation=out.strip())
+        except Exception as e:
+            log("preview translation skipped:", short(e, 120), level="debug")
+        finally:
+            with self.pv_lock:
+                st["tr_busy"] = False
+            latest = st.get("latest", "")
+            mn = st.get("min_new", 3)
+            if latest and len(latest.split()) - st.get("tr_words", 0) >= mn and key not in self.done_segs:
+                self._preview_translate(key, source, latest, mn)
+
+    def on_audio(self, kind, source, seg_id, **kw):
+        if self.live_mode(source):
+            return                                          # the live service does this source
+        if self.file_mode:
+            if kind == "segment":                           # a recording: no "speaking…" rows, just the lines
+                job = {"segs": [seg_id], "source": source, "audio": kw["audio"], "t0": kw["t0"],
+                       "t_end": kw["t_end"], "dur": kw["dur"], "tries": 0, "t_queued": time.time()}
+                with self.cv:
+                    self.pending.append(job)
+                    self.cv.notify()
+            return
+        if self.paused:
+            if kind in ("segment", "discard"):
+                self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")
+            return                                          # paused: nothing is sent anywhere
+        if kind == "preview":
+            return self._on_preview(source, seg_id, kw["audio"], kw["t0"], kw.get("spec", False))
+        if kind == "start":
+            self.hub.publish("speaking", seg=seg_id, source=source, t0=kw["t0"], phase="speaking")
+        elif kind == "discard":
+            self._mark_done([seg_id])
+            self.previews.pop(seg_id, None)
+            self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")
+        elif kind == "segment":
+            st = self.previews.get(seg_id)
+            if (st and st.get("text") and st.get("by") == "local" and st.get("spec") and not st.get("busy")
+                    and self.cfg["stt_provider"] == "local" and st.get("covered", 0) >= kw["dur"] - 0.3
+                    and (fixed_lang(self.cfg) or self.lang_sure >= 2)):
+                # the last live update already heard the whole sentence: it IS the final text (no waiting)
+                return self.accept_text(source, st["text"], self.lang_guess, kw["t0"], kw["t_end"], [seg_id],
+                                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "local", "model": "live"})
+            self.hub.publish("speaking", seg=seg_id, source=source, t0=kw["t0"], phase="transcribing")
+            job = {"segs": [seg_id], "source": source, "audio": kw["audio"], "t0": kw["t0"],
+                   "t_end": kw["t_end"], "dur": kw["dur"], "tries": 0, "t_queued": time.time()}
+            with self.cv:
+                self.pending.append(job)
+                self.cv.notify()
+
+    # ---- speech to text --------------------------------------------------------
+    def waiting(self):
+        with self.cv:
+            return len(self.pending)
+
+    def stt_targets(self, source):
+        """(service, model) pairs for speech-to-text, in order of preference."""
+        c = self.cfg
+        pid, model = c["stt_provider"], c["stt_model"]
+        out = []
+        prov = self.app.provider(pid)
+        if prov and prov.get("kind") == "live":
+            # sentences go elsewhere only if the live service fails: the local model if it is there, else Groq
+            pid, model = ("local", "") if LOCAL.state in ("ready", "loading") else ("groq", "")
+        if pid == "local":
+            if source == "me" and c["api_key"]:
+                out += [("groq", m) for m in WHISPER_MODELS["me"]]    # keeps the local model free for the other side
+            if LOCAL.state in ("ready", "loading"):
+                out.append(("local", ""))
+        elif pid != "groq" and model and prov:
+            out.append((pid, model))
+        elif pid == "groq" and model:
+            out.append(("groq", model))
+        if c["api_key"] and (pid == "groq" or c["use_backup"] or not out):
+            out += [("groq", m) for m in WHISPER_MODELS[source] if ("groq", m) not in out]
+        return out
+
+    def _usable(self, target, dur, now):
+        pid, model = target
+        if pid == "local":
+            # busy with another sentence -> Groq helps (if it is allowed as backup), otherwise wait a moment
+            return target not in self.stt_dead and LOCAL.free_for_final()
+        if pid == "groq":
+            q = self._q(model)
+            return q.can_send(now, dur)
+        return target not in self.stt_dead and now >= self.stt_cool.get(target, 0)
+
+    def _pick_model(self, source, dur, now):
+        for t in self.stt_targets(source):
+            if self._usable(t, dur, now):
+                return t
+        return None
+
+    def _q(self, model):
+        """The free-plan counter of one Groq model (created under a lock: several threads ask)."""
+        with self.qlock:
+            q = self.quota.get(model)
+            if q is None:
+                q = self.quota[model] = SttQuota(model)
+            return q
+
+    def _quotas(self):
+        with self.qlock:
+            return list(self.quota.items())
+
+    def _record(self, target, now, dur):
+        """Counts a request against the free Groq limits; returns a handle for _refund (None otherwise)."""
+        return self._q(target[1]).record(now, dur) if target[0] == "groq" else None
+
+    def _refund(self, target, handle):
+        if target and target[0] == "groq" and handle:
+            self._q(target[1]).refund(handle)
+
+    def warn_service(self, pid, msg):
+        name = (self.app.provider(pid) or {}).get("name", pid)
+        key = (pid, msg[:60])
+        if key not in self.warned:
+            self.warned.add(key)
+            backup = " Groq is used instead." if self.cfg["use_backup"] and self.cfg["api_key"] else ""
+            self.hub.toast("error", f"{name}: {short(msg, 160).rstrip('.')}.{backup}")
+
+    def _take_job(self):
+        with self.cv:
+            while not self.stop_event.is_set():
+                now = time.time()
+                self.pending.sort(key=lambda j: (0 if j["source"] == "them" else 1, j["t0"]))
+                stale = [j for j in self.pending if now - j.get("t_try", j["t_queued"]) > 300]
+                if stale:                                           # no service could take them for 5 minutes
+                    gone = {id(j) for j in stale}
+                    self.pending = [j for j in self.pending if id(j) not in gone]
+                    for j in stale:
+                        for sg in j["segs"]:
+                            self.hub.publish("speaking", seg=sg, source=j["source"], phase="discard")
+                    log(f"{len(stale)} sentence(s) dropped: waited or failed for 5 minutes without a working speech-to-text service",
+                        level="error")
+                    self.hub.toast("error", "No speech-to-text service is working — some sentences were not written. "
+                                            "Check Setup › Services.")
+                for i, job in enumerate(self.pending):
+                    if job.get("not_before", 0) > now:
+                        continue                                    # waiting before a retry
+                    # never let my own lines take the last free slot: the other side must never wait
+                    if job["source"] == "me" and self.busy >= STT_WORKERS - 1:
+                        continue
+                    model = self._pick_model(job["source"], job["dur"], now)
+                    if model is None:
+                        continue
+                    self.pending.pop(i)
+                    # pieces of the same speaker that are already waiting are sent together
+                    k = 0
+                    while k < len(self.pending):
+                        o = self.pending[k]
+                        if (o["source"] == job["source"] and job["dur"] + o["dur"] <= MAX_MERGED
+                                and self._usable(model, job["dur"] + o["dur"], now)):
+                            gap = np.zeros(4000, dtype=np.float32)          # 0.25 s pause
+                            job = {**job, "segs": job["segs"] + o["segs"],
+                                   "audio": np.concatenate([job["audio"], gap, o["audio"]]),
+                                   "t_end": max(job["t_end"], o["t_end"]),
+                                   "dur": job["dur"] + o["dur"] + 0.25}
+                            self.pending.pop(k)
+                            continue
+                        k += 1
+                    job["qh"], job["qt"] = self._record(model, now, job["dur"]), model
+                    if model[0] == "local":
+                        LOCAL.finals += 1
+                    self.busy += 1
+                    self.inflight[id(job)] = job
+                    return job, model
+                self.cv.wait(0.2)
+        return None, None
+
+    def _requeue(self, job, failed=True):
+        job["t_try"] = time.time()                          # "no service for 5 minutes" counts from here
+        if failed:
+            job["tries"] += 1
+        with self.cv:
+            self.pending.append(job)
+            self.cv.notify()
+
+    def _stt_prompt(self, source):
+        # The meeting topic teaches Whisper the right technical words (OSPF, RMAN ...).
+        # Earlier sentences are NOT used as prompt: Whisper sometimes repeats them.
+        first = self.cfg["context"].strip().split("\n", 1)[0]
+        return first[:220] or None                         # only the first line: a long text would mislead it
+
+    def _stt_worker(self):
+        while True:
+            try:
+                job, model = self._take_job()
+            except Exception:
+                log("stt scheduling error:", traceback.format_exc(), level="error")
+                time.sleep(0.5)                             # never let a worker die: it would slow everything
+                continue
+            if job is None:
+                return
+            try:
+                self._process(job, model)
+            except Exception as e:
+                log("stt worker error:", traceback.format_exc())
+                self.hub.toast("error", "Speech-to-text problem: " + short(e, 140))
+                self._drop(job)
+            finally:
+                with self.cv:
+                    if model[0] == "local":
+                        LOCAL.finals = max(0, LOCAL.finals - 1)
+                    self.busy -= 1
+                    self.inflight.pop(id(job), None)
+                    self.cv.notify_all()
+
+    def _no_stt_left(self, source):
+        now = time.time()
+        if any(t[0] == "local" for t in self.stt_targets(source)) and LOCAL.state == "loading":
+            return False
+        return not any(t[0] != "groq" and t not in self.stt_dead or
+                       t[0] == "groq" and not self._q(t[1]).dead
+                       for t in self.stt_targets(source))
+
+    def _process(self, job, target):
+        source = job["source"]
+        pid, model = target
+        lang = fixed_lang(self.cfg)
+        t_sent = time.time()
+        if pid == "local" and len(job["segs"]) == 1 and (lang or self.lang_sure >= 2):
+            st = self.previews.get(job["segs"][0])
+            end = time.time() + max(2.0, 2.5 * (LOCAL.quick_avg or 1.0))
+            while st and st.get("spec_pending") and (st.get("busy") or st.get("spec_audio") is not None) \
+                    and time.time() < end:
+                time.sleep(0.03)
+            if st and st.get("spec") and st.get("text") and st.get("covered", 0) >= job["dur"] - 0.3:
+                job["timing"] = {"pause": job["t_queued"] - job["t_end"], "queue": time.time() - job["t_queued"],
+                                 "stt": 0.0, "service": "local", "model": "pause-update"}
+                return self.accept_text(source, st["text"], self.lang_guess, job["t0"], job["t_end"], job["segs"],
+                                        job["timing"])
+        try:
+            if pid == "local":
+                self.local_finals_n = getattr(self, "local_finals_n", 0) + 1
+                pinned = self.lang_sure >= 2 and self.local_finals_n % 10
+                lg = lang or (self.lang_guess if pinned else None)
+                res = LOCAL.transcribe(job["audio"], "", lg, self._stt_prompt(source))
+            else:
+                res = self.app.get_api(pid).transcribe(job["audio"], model, lang, self._stt_prompt(source))
+            job["timing"] = {"pause": job["t_queued"] - job["t_end"], "queue": t_sent - job["t_queued"],
+                             "stt": time.time() - t_sent, "service": pid, "model": model}
+            self.app.note_request()
+        except RateLimited as e:
+            self._refund(target, job.pop("qh", None))
+            if pid == "groq":
+                self._q(model).cool_until = time.time() + (e.retry_after or 5)
+            else:
+                self.stt_cool[target] = time.time() + (e.retry_after or 5)
+            job.pop("not_before", None)                 # the cooldown above already makes it wait
+            return self._requeue(job, failed=False)
+        except LocalLoading:
+            job["not_before"] = time.time() + 1.0           # the model is still loading: look again in a second
+            return self._requeue(job, failed=False)
+        except (ModelUnavailable, AuthError) as e:
+            if pid == "groq":
+                if isinstance(e, AuthError):
+                    self._fatal(str(e))
+                    return self._drop(job)
+                self._q(model).dead = True
+            else:
+                self.stt_dead.add(target)
+                self.warn_service(pid, f"speech-to-text with '{model}' failed — {e}")
+            if self._no_stt_left(source):
+                self.hub.toast("error", "No speech-to-text service is working. Check Setup › Services.")
+                return self._drop(job)
+            return self._requeue(job, failed=False)
+        except BadRequest as e:
+            if job["tries"] < 1:
+                return self._requeue(job)
+            self.hub.toast("error", "Speech-to-text failed: " + short(e, 160))
+            return self._drop(job)
+        except Transient as e:
+            self._refund(target, job.pop("qh", None))    # not answered (connection / server trouble): does not count
+            age = time.time() - job.setdefault("t_first_fail", time.time())
+            if age < 120 and not self.stop_event.is_set():
+                job["not_before"] = time.time() + min(2 ** job["tries"], 8)
+                if job["tries"] == 0:                           # the first failure (tries is counted below)
+                    self.hub.toast("warn", "Connection problem — retrying, nothing is lost yet. " + short(e, 100))
+                return self._requeue(job)
+            self.hub.toast("error", "Speech-to-text failed for 2 minutes: " + short(e, 140))
+            return self._drop(job)
+
+        text = clean_transcript(res)
+        detected = LANG_CODES.get((res.get("language") or "").lower())
+        if detected not in meeting_langs(self.cfg):
+            detected = None                             # not one of the meeting's languages: a misdetection
+        if not lang and text and res.get("language") and detected is None:
+            # misdetected language (e.g. "welsh" for short English) -> once more with the meeting language
+            h2 = None
+            with self.cv:
+                m2 = self._pick_model(source, job["dur"], time.time())
+                if m2:
+                    h2 = self._record(m2, time.time(), job["dur"])
+                    if m2[0] == "local":
+                        LOCAL.finals += 1                   # the local model is busy with this sentence
+            if m2:
+                try:
+                    api2 = LOCAL if m2[0] == "local" else self.app.get_api(m2[0])
+                    res2 = api2.transcribe(job["audio"], m2[1], self.lang_guess, self._stt_prompt(source))
+                    text = clean_transcript(res2) or text
+                    detected = self.lang_guess
+                except Exception:
+                    self._refund(m2, h2)
+                finally:
+                    if m2[0] == "local":
+                        with self.cv:
+                            LOCAL.finals = max(0, LOCAL.finals - 1)
+        elif detected:
+            self.lang_sure = self.lang_sure + 1 if detected == self.lang_guess else 1
+            self.lang_guess = detected
+
+        if not text:
+            return self._drop(job)
+        self.accept_text(source, text, detected or "", job["t0"], job["t_end"], job["segs"], job.get("timing", {}))
+
+    def accept_text(self, source, text, lang, t0, t_end, segs, timing):
+        """A finished sentence (from any service): show it, translate it, maybe answer it."""
+        job = {"source": source, "t0": t0, "t_end": t_end, "segs": segs}
+        self._mark_done(segs)
+        for s_ in segs:
+            self.previews.pop(s_, None)
+        if source == "me":
+            self._wait_for_other_side(job)
+        if source == "me" and self._is_echo(text, job):
+            if not self.echo_warned:
+                self.echo_warned = True
+                self.hub.toast("warn", "Your microphone is hearing the other person's voice. "
+                                       "Use headphones for a clean transcript.")
+            return self._drop(job)
+
+        self.last_text[source] = text
+        c = self.cfg
+        lang = lang or fixed_lang(c) or ""
+        e = self.session.add(source, t0, t_end, text, lang, segs)
+        tr_on = source == "them" or c["translate_me"] or c["answer_me"]     # test mode: my lines are the questions
+        if lang and lang == c["my_language"]:
+            tr_on = False                                   # already in my language: nothing to translate
+        ans_on = (source == "them" or c["answer_me"]) and not self.file_mode
+        e = self.session.update(e["id"], tr_state="pending" if tr_on else "off",
+                                ans_state="thinking" if ans_on else "off", timing=timing)
+        self.hub.publish("entry", entry=e)
+        if not self.file_mode:
+            self.stats.add("text", e["t_text"] - t_end)
+        if tr_on and not self._submit_tr(e["id"]):
+            self._publish(e["id"], tr_state="error")
+        if ans_on and is_filler(text):
+            self._publish(e["id"], ans_state="none")          # saves quota for the real questions
+        elif ans_on and not self._submit(self._answer, e["id"]):
+            self._publish(e["id"], ans_state="none")
+
+    def _mark_done(self, segs):
+        """These sentences are finished (or thrown away): no preview may bring them back."""
+        for s_ in segs:
+            if s_ not in self.done_segs:
+                self.done_segs.add(s_)
+                self.done_order.append(s_)
+        while len(self.done_order) > 3000:                  # a very long meeting: forget the oldest ids
+            self.done_segs.discard(self.done_order.popleft())
+
+    def _submit(self, fn, *args):
+        try:
+            self.pool.submit(fn, *args)
+            return True
+        except RuntimeError:          # engine already closed
+            return False
+
+    def _submit_tr(self, eid):
+        with self.tr_lock:
+            self.tr_inflight += 1
+            self.tr_gen[eid] += 1
+            gen = self.tr_gen[eid]
+        if self._submit(self._translate, eid, gen):
+            return True
+        with self.tr_lock:
+            self.tr_inflight -= 1
+        return False
+
+    def _drop(self, job):
+        """A sentence that will not be written: its row disappears and its free-plan request is given back."""
+        if job.get("qh"):
+            self._refund(job.get("qt"), job.pop("qh"))
+        self._mark_done(job["segs"])
+        for s in job["segs"]:
+            self.previews.pop(s, None)
+            self.hub.publish("speaking", seg=s, source=job["source"], phase="discard")
+
+    def _wait_for_other_side(self, job, limit=2.0):
+        """Before judging an echo, let overlapping lines of the other side finish (max 2 s)."""
+        end = time.time() + limit
+        with self.cv:
+            while time.time() < end:
+                busy = [j for j in list(self.inflight.values()) + list(self.pending)
+                        if j["source"] == "them" and j["t0"] < job["t_end"] + 1 and j["t_end"] > job["t0"] - 1]
+                if not busy:
+                    return
+                self.cv.wait(0.1)
+
+    def _is_echo(self, text, job):
+        """My microphone heard the other side (no headphones)? Only if it happened at the same time
+        and is (nearly) the same words — repeating a question back is NOT an echo."""
+        a = normalize_words(text).split()
+        if len(a) < 3:
+            return False
+        for e in self.session.recent("them", job["t0"] - 20):
+            if not (e["t0"] < job["t_end"] + 0.8 and e["t_end"] > job["t0"] - 0.8):
+                continue                                           # not at the same time
+            b = normalize_words(e["text"]).split()
+            if len(b) < 3 or not (0.6 <= len(a) / len(b) <= 1.4):
+                continue
+            if difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.8:
+                return True
+        return False
+
+    def _fatal(self, msg):
+        if not self.fatal:
+            self.fatal = msg
+            self.hub.toast("error", msg + " — open Setup › Services.")
+
+    # ---- chat with automatic fallback -------------------------------------------
+    def chat_targets(self, task):
+        """(service, model, thinking) for 'tr' (translation) or 'ans' (answers)."""
+        c = self.cfg
+        pid, model = c[f"{task}_provider"], c[f"{task}_model"]
+        out = []
+        if pid == "llm":
+            if c["llm_model"]:
+                out.append(("llm", "local", None))
+        elif pid != "groq" and model and self.app.provider(pid):
+            out.append((pid, model, effort_for(model)))
+        elif pid == "groq" and model:
+            out.append(("groq", model, effort_for(model)))
+        if c["api_key"] and (pid == "groq" or c["use_backup"] or not out):
+            auto = TRANSLATE_CHAIN if task == "tr" else ANSWER_CHAINS[c["answer_mode"]]
+            out += [("groq", m, e) for m, e in auto if not any(o[:2] == ("groq", m) for o in out)]
+        return out
+
+    def run_chat(self, chain, messages, max_tokens, temperature, on_text):
+        last = None
+        for rnd in range(2):
+            for pid, model, effort in chain:
+                key = f"{pid}|{model}"
+                if not self.models.ok(key):
+                    continue
+                for attempt in range(2):
+                    if self.stop_event.is_set() and last is not None:
+                        raise last
+                    try:
+                        client = self.app.get_api(pid)
+                        text = chat_compat(client, model, messages, max_tokens, temperature, effort, on_text)
+                        self.app.note_request()
+                        return text
+                    except RateLimited as e:
+                        self.models.cooldown(key, e.retry_after)
+                        last = e
+                        break
+                    except (ModelUnavailable, AuthError, BadRequest) as e:
+                        if isinstance(e, AuthError) and pid == "groq":
+                            raise
+                        self.models.kill(key)
+                        if pid != "groq":
+                            self.warn_service(pid, f"'{model}' failed — {e}")
+                        last = e
+                        break
+                    except LocalLoading as e:
+                        last = e
+                        if self.stop_event.wait(1.5):            # the local AI model is still loading
+                            break
+                        continue
+                    except Transient as e:
+                        last = e
+                        continue                             # one quick retry on the same model
+            if rnd == 0:
+                wait = self.models.soonest([f"{p}|{m}" for p, m, _ in chain])
+                if wait is None or wait > 8 or self.stop_event.wait(wait):
+                    break
+        raise last or APIError("No model available right now. Check Setup › Services.")
+
+    def _publish(self, eid, **fields):
+        e = self.session.update(eid, **fields)
+        if e:
+            self.hub.publish("entry", entry=e)
+
+    def _translate(self, eid, gen=None):
+        try:
+            self._translate_one(eid, gen)
+        finally:
+            with self.tr_lock:
+                self.tr_inflight -= 1
+
+    def _translate_one(self, eid, gen):
+        e = self.session.get(eid)
+        if not e:
+            return
+        current = lambda: gen is None or self.tr_gen[eid] == gen      # a hand-corrected line replaces this one
+        c = self.cfg
+        topic = f"\nMeeting topic (for terminology): {c['context'][:300]}" if c["context"] else ""
+        hist = self.session.history(e["t0"], TRANSLATE_HISTORY, exclude=eid)
+        user = ""
+        if hist:
+            user = "Earlier lines (context only, do not translate):\n" + "\n".join(f"{s}: {t}" for s, t in hist) + "\n\n"
+        user += "Translate:\n" + e["text"]
+        messages = [{"role": "system", "content": translate_system(c, topic)},
+                    {"role": "user", "content": user}]
+        state = {"first": None, "last": 0.0}
+
+        def on_text(t):
+            now = time.time()
+            if state["first"] is None and t.strip():
+                state["first"] = now
+                if not self.file_mode and not e.get("edited"):
+                    self.stats.add("translation", now - e["t_text"])
+            if not current():
+                return False
+            if now - state["last"] >= 0.06:
+                state["last"] = now
+                self._publish(eid, translation=t.strip(), tr_state="streaming")
+
+        try:
+            if self.file_mode:
+                text = self.chat_patient(self.chat_targets("tr"), messages, 500, 0.2, on_text)
+            else:
+                text = self.run_chat(self.chat_targets("tr"), messages, 500, 0.2, on_text)
+            if not current():
+                return
+            self._publish(eid, translation=text.strip().strip('"«»').strip(), tr_state="done")
+            t = e.get("timing") or {}
+            if t and state["first"]:
+                log(f"Timing · {self.session.label(e)}: waited for the pause {t['pause']:.2f}s · "
+                    f"queue {t['queue']:.2f}s · speech-to-text {t['stt']:.2f}s ({t['model']}) · "
+                    f"translation first words +{state['first'] - e['t_text']:.2f}s", level="debug")
+        except AuthError as ex:
+            self._fatal(str(ex))
+            self._publish(eid, tr_state="error")
+        except Exception as ex:
+            log("translate error:", short(ex))
+            if current():
+                self._publish(eid, tr_state="error")
+                if not self.stop_event.is_set():
+                    self.hub.toast("error", "Translation failed: " + short(ex, 140))
+
+    def _answer(self, eid, force=False, question=None):
+        e = self.session.get(eid)
+        if not e:
+            return
+        c = self.cfg
+        with self.tr_lock:                                  # two answers for one line: only the newest streams
+            self.ans_gen[eid] += 1
+            gen = self.ans_gen[eid]
+        current = lambda: self.ans_gen[eid] == gen
+        self._publish(eid, ans_state="thinking", forced=force,
+                      question=(question if force and question and question != e["text"] else ""))
+        hist = self.session.history(e["t0"], ANSWER_HISTORY, exclude=eid)
+        system = ANSWER_SYSTEM.format(
+            context=c["context"] or "(not given)",
+            style=c["answer_style"] or DEFAULT_STYLE,
+            about=c["about_me"] or "(not given)",
+            first_rule=RULE_FORCE if force else RULE_DECIDE,
+            answer_lang=answer_lang_rule(c),
+            fa_rule=meaning_rule(c, e.get("lang")))
+        convo = "\n".join(f"{s}: {t}" for s, t in hist) or "(start of meeting)"
+        earlier = self.session.answered_before(e["t0"], ANSWERED_EARLIER, exclude=eid)
+        done = "\n".join(f"- Q: {short(q, 220)}\n  A: {short(a, 320)}" for q, a in earlier)
+        # everything that changes stays at the END, so the long system text is reused from Groq's cache
+        user = ((f"Answered earlier in this meeting (oldest first):\n{done}\n\n" if done else "")
+                + f"Conversation so far (oldest first):\n{convo}\n\n"
+                f"Now: {datetime.datetime.now():%A, %d %B %Y, %H:%M}\n"
+                f"NEW line from {self.session.label(e)}: {question or e['text']}")
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        chain = self.chat_targets("ans")
+        state = {"decided": None, "first": None, "last": 0.0}
+
+        def on_text(t):
+            if not current():
+                return False                                     # a newer request replaced this one
+            s = re.sub(r"[\s\-]+", "_", t.lstrip().upper().strip("*`\"'"))   # "NO REPLY", "no_reply", ...
+            if state["decided"] is None:
+                if s.startswith("NO_REPLY") and not force:
+                    state["decided"] = False
+                    return False                                 # stop streaming early
+                if len(s) >= 8 or not "NO_REPLY".startswith(s):
+                    state["decided"] = True
+                else:
+                    return None
+            now = time.time()
+            if state["first"] is None:
+                state["first"] = now
+                if not force:
+                    self.stats.add("answer", now - e["t_text"])
+            if now - state["last"] >= 0.06:
+                state["last"] = now
+                ans, fa = split_answer(t)
+                self._publish(eid, answer=ans, answer_fa=fa, ans_state="streaming")
+            return None
+
+        try:
+            text = self.run_chat(chain, messages, 1200, 0.4, on_text)
+            if not current():
+                return
+            nr = re.sub(r"[\s\-]+", "_", text.strip().upper().strip("*`\"'")).startswith("NO_REPLY")
+            if state["decided"] is False or (not force and nr) or not text.strip():
+                self._publish(eid, ans_state="none", answer="", answer_fa="")
+            else:
+                ans, fa = split_answer(text)
+                self._publish(eid, answer=ans, answer_fa=fa, ans_state="done")
+        except AuthError as ex:
+            self._fatal(str(ex))
+            if current():
+                self._publish(eid, ans_state="error")
+        except Exception as ex:
+            log("answer error:", short(ex))
+            if current() and not self.stop_event.is_set():
+                self._publish(eid, ans_state="error")
+                self.hub.toast("error", "Answer failed: " + short(ex, 140))
+
+    def answer_now(self, eid=None, text=None):
+        """Answer button: answer the latest question (or a chosen line, or selected words) even if unsure."""
+        rows = self.session.ordered()
+        if eid is not None:
+            target = next((r for r in rows if r["id"] == eid), None)
+            question = (text or target["text"]) if target else None
+        else:
+            src = "them"
+            cand = [r for r in rows if r["source"] == "them"]
+            if not cand and self.cfg["answer_me"]:
+                cand, src = [r for r in rows if r["source"] == "me"], "me"
+            if not cand:
+                return False
+            target = cand[-1]
+            # A question can be split over several lines: use the other side's lines since
+            # the user last spoke or since the last line that already got an answer (max 3).
+            last_me = max((r["t0"] for r in rows if r["source"] == "me"), default=0) if src == "them" else 0
+            answered = [r["t0"] for r in cand if r["answer"] and r["id"] != target["id"]]
+            since = max([last_me] + answered)
+            parts = [r["text"] for r in cand if r["t0"] > since and r["t0"] > target["t0"] - 90][-3:]
+            question = " ".join(parts) or target["text"]
+        if not target:
+            return False
+        return self._submit(self._answer, target["id"], True, question)
+
+    # ---- patient chat (recordings, summaries): waits for the free limit instead of failing ----
+    def chat_patient(self, chain, messages, max_tokens, temperature, on_text, tries=8, on_wait=None):
+        keys = [f"{p}|{m}" for p, m, _ in chain]
+        for i in range(tries):
+            try:
+                return self.run_chat(chain, messages, max_tokens, temperature, on_text)
+            except AuthError:
+                raise
+            except APIError as e:
+                wait = self.models.soonest(keys)
+                # a request the service refuses will be refused again; other errors wait only if a model is cooling down
+                if isinstance(e, BadRequest) or (not isinstance(e, RateLimited) and wait is None) or i == tries - 1:
+                    raise
+                if isinstance(e, Transient) and not wait:
+                    wait = 3.0                                  # a connection hiccup: try again soon
+                wait = max(3.0, min(65.0, wait or getattr(e, "retry_after", None) or 20.0))
+                if on_wait:
+                    on_wait(wait)
+                if self.app.closing.wait(wait) or (self.file_mode and self.stop_event.is_set()):
+                    raise
+        raise APIError("No model available right now.")
+
+    # ---- explain selected words in my language --------------------------------------------
+    def explain(self, eid, text):
+        e = self.session.get(eid)
+        if not e:
+            return False
+        return self._submit(self._explain, eid, (text or e["text"]).strip()[:600])
+
+    def _explain(self, eid, text):
+        e = self.session.get(eid)
+        if not e:
+            return
+        c = self.cfg
+        self._publish(eid, ex_state="thinking", explain="", explain_q=text)
+        hist = self.session.history(e["t0"], 3, exclude=eid)
+        convo = "\n".join(f"{s}: {t}" for s, t in hist)
+        my = lang_full(c["my_language"])
+        meet = " or ".join(lang_name(x) for x in meeting_langs(c))
+        system = (f"You help a {lang_name(c['my_language'])} speaker follow a conversation in {meet}. Explain the SELECTED "
+                  f"words in {my}: what they mean here and, if it is a question, what exactly is being asked. "
+                  "1-3 short sentences. Keep technical terms, product names and abbreviations as they are "
+                  f"(with a short {lang_name(c['my_language'])} explanation of what they are). No introduction, no quotes."
+                  + (f"\nMeeting topic: {c['context'][:300]}" if c["context"] else ""))
+        user = ((f"Earlier lines:\n{convo}\n\n" if convo else "")
+                + f"Line ({self.session.label(e)}): {e['text']}\n\nSELECTED: {text}")
+        last = [0.0]
+
+        def on_text(t):
+            now = time.time()
+            if now - last[0] > 0.06:
+                last[0] = now
+                self._publish(eid, explain=t.strip(), ex_state="streaming")
+        try:
+            out = self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                           {"role": "user", "content": user}], 400, 0.3, on_text)
+            self._publish(eid, explain=out.strip(), ex_state="done")
+        except Exception as ex:
+            log("explain error:", short(ex))
+            self._publish(eid, ex_state="error")
+            self.hub.toast("error", "Explanation failed: " + short(ex, 140))
+
+    # ---- a line was corrected by hand --------------------------------------------------------
+    def edit(self, eid, text):
+        e = self.session.get(eid)
+        text = re.sub(r"\s+", " ", text or "").strip()
+        if not e or not text or text == e["text"]:
+            return False
+        tr_on = e["tr_state"] != "off"
+        e = self.session.update(eid, text=text, edited=True, t_text=time.time(), translation="",
+                                tr_state="pending" if tr_on else "off",
+                                explain="", explain_q="", ex_state="none")
+        self.hub.publish("entry", entry=e)
+        log(f"Line corrected by hand: \"{short(text, 80)}\"")
+        if tr_on:
+            self._submit_tr(eid)
+        if e["answer"] or e["ans_state"] in ("done", "error"):
+            self._submit(self._answer, eid, True, None)          # the answer followed the old words
+        return True
+
+    # ---- summary of the whole meeting ------------------------------------------------------
+    def summary(self):
+        rows = [r for r in self.session.ordered() if r["text"].strip()]
+        if len(rows) < 2:
+            return False
+        return self._submit(self._summary, rows)
+
+    def _summary(self, rows):
+        c = self.cfg
+        pub = lambda **kw: self.hub.publish("summary", session_file=self.session.path, **kw)
+        lines = [f"{self.session.label(r)}: {r['text']}" for r in rows]
+        chain = self.chat_targets("ans")
+        waiting = lambda w: pub(state="working", text="", note=f"Waiting {round(w)} s for the free limit…")
+        try:
+            # long meetings: short notes per part first (the free plan has a per-minute token limit)
+            parts, cur = [], []
+            for ln in lines:
+                if cur and sum(len(x) for x in cur) + len(ln) > 9000:
+                    parts.append(cur)
+                    cur = []
+                cur.append(ln)
+            parts.append(cur)
+            if len(parts) > 1:
+                notes = []
+                for i, part in enumerate(parts, 1):
+                    pub(state="working", text="", note=f"Reading part {i} of {len(parts)}…")
+                    msg = [{"role": "system", "content": "Write compact notes (in English) of this part of a meeting "
+                            "transcript: topics, every question asked and the gist of the reply, facts, names, numbers, "
+                            "follow-ups. Max 12 bullet points. Only what is in the text."},
+                           {"role": "user", "content": "\n".join(part)}]
+                    notes.append(self.chat_patient(chain, msg, 500, 0.2, lambda t: None, on_wait=waiting))
+                source = "Notes of the meeting, part by part:\n\n" + "\n\n".join(notes)
+            else:
+                source = "Transcript:\n" + "\n".join(lines)
+            me, them = c["me_label"], c["them_label"]
+            ml = c["my_language"]
+            meet = " or ".join(lang_name(x) for x in meeting_langs(c))
+            if ml == "fa":
+                heads = ("## خلاصه", "## سؤال‌هایی که پرسیده شد", "## نکات مهم", "## کارهای بعدی",
+                         "«جواب داده نشد»", "«موردی ذکر نشد»")
+                how = "Use exactly these headings"
+            else:
+                heads = ("## Summary", "## Questions that were asked", "## Key points", "## Next steps",
+                         "'not answered'", "'none mentioned'")
+                how = f"Use these four headings, translated into {lang_name(ml)}"
+            system = (f"You write a meeting summary for {me}, a {lang_name(ml)} speaker. The meeting was in {meet}. "
+                      f"Write in {lang_full(ml)}. Keep technical terms, product names and exact numbers as they are. "
+                      f"{how} (markdown ##) and bullet points (- ):\n"
+                      f"{heads[0]}\n2-4 sentences: what the meeting was about and how it went.\n"
+                      f"{heads[1]}\n- each question {them} asked, then briefly how {me} answered "
+                      f"(or {heads[4]}).\n"
+                      f"{heads[2]}\n- important facts, names, numbers, dates, requirements.\n"
+                      f"{heads[3]}\n- follow-ups and things to prepare or send; if none: {heads[5]}.\n"
+                      "Only use what is in the text. No introduction."
+                      + (f"\nMeeting topic: {c['context'][:300]}" if c["context"] else ""))
+            last = [0.0]
+
+            def on_text(t):
+                now = time.time()
+                if now - last[0] > 0.1:
+                    last[0] = now
+                    pub(state="streaming", text=t.strip())
+            pub(state="working", text="", note="Writing the summary…")
+            out = self.chat_patient(chain, [{"role": "system", "content": system},
+                                            {"role": "user", "content": source}], 1500, 0.3, on_text,
+                                    on_wait=waiting).strip()
+            self.session.set_summary(out)
+            self.session.save_if_dirty()
+            pub(state="done", text=out)
+            log(f"Summary written ({len(rows)} lines)")
+        except Exception as ex:
+            log("summary error:", short(ex))
+            pub(state="error", text="", note="The summary failed: " + short(ex, 160))
+
+    # ---- quota / lifecycle ---------------------------------------------------------
+    def quota_info(self):
+        now = time.time()
+        with self.cv:
+            fr = [q.left_fraction(now) for _m, q in self._quotas()]
+            blocked = bool(self.pending) and all(
+                not q.can_send(now, 1.0) for _m, q in self._quotas())
+            waiting = len(self.pending)
+        return {"speech_left": int(round(100 * sum(fr) / len(fr))), "waiting": waiting,
+                "blocked": blocked, "cooling": [m.split("|")[-1].split("/")[-1] for m in self.models.cooling()]}
+
+    def warm(self):
+        """Opens the connections before the first sentence, and learns which models exist."""
+        for pid in self.app.used_services():
+            if pid != "groq":
+                name = self.app.provider(pid)["name"]
+                try:
+                    ms, _ = self.app.get_api(pid).ping()
+                    log(f"{name} connected, {round(ms)} ms")
+                    if not self.cfg["api_key"]:
+                        self.app.set_net(True, ms, name=name)
+                except APIError as e:
+                    if e.status != 404:
+                        self.warn_service(pid, str(e))
+                        if not self.cfg["api_key"]:
+                            self.app.set_net(False, None, str(e), name=name)
+                continue
+            try:
+                ms, ids = self.api.ping()
+                if ids:
+                    for m, _ in TRANSLATE_CHAIN + ANSWER_CHAINS["smart"]:
+                        if m not in ids:
+                            self.models.kill(f"groq|{m}")
+                    for m, q in self._quotas():
+                        if m not in ids:
+                            q.dead = True
+                self.app.set_net(True, ms)
+            except AuthError as e:
+                self.app.set_net(False, None, str(e))
+                self._fatal(str(e))
+            except APIError as e:
+                self.app.set_net(False, None, str(e))
+
+    def finish(self, timeout=25):
+        """Called on Stop: lets the last sentences finish, then closes."""
+        end = time.time() + timeout
+        if self.live:
+            for lv in list(self.live.values()):
+                lv.stop()
+            time.sleep(1.2)                                 # the last words of a live stream
+        with self.cv:
+            while (self.pending or self.busy) and time.time() < end:
+                self.cv.wait(0.3)
+            left = list(self.pending)
+            if left:
+                log(f"{len(left)} sentence(s) could not be written before the end "
+                    f"({sum(j['dur'] for j in left):.0f} s of speech)", level="warn")
+            self.pending = []
+            self.stop_event.set()
+            self.cv.notify_all()
+        for j in left:
+            self._drop(j)                                   # their rows do not stay on "writing…"
+        # lines already being translated/answered keep going in the background
+        self.close(cancel=False)
+
+    def close(self, cancel=True):
+        """Frees all of this engine's threads (queued work is dropped when cancel is True)."""
+        self.stop_event.set()
+        for p in (self.pool, self.pv_pool, self.spec_pool):
+            try:
+                p.shutdown(wait=False, cancel_futures=cancel or p is not self.pool)
+            except Exception:
+                pass
+
+
+# ----------------------------------------------------------------------------
+# Transcribing a recording (audio file)
+# ----------------------------------------------------------------------------
+AUDIO_EXT = (".mp3", ".wav", ".m4a", ".ogg", ".opus", ".flac", ".aac", ".wma", ".webm", ".mp4", ".mkv", ".mov")
+AUDIO_TYPES = "Audio files|*.mp3;*.wav;*.m4a;*.ogg;*.opus;*.flac;*.aac;*.wma;*.webm;*.mp4;*.mkv;*.mov|All files (*.*)|*.*"
+
+
+STOPPED = {}
+OPEN_READERS = {}                  # generator id -> function that stops its reader at once
+
+
+def open_recording(path):
+    """(blocks of 16 kHz mono audio, length in seconds or None). mp3/wav/flac/ogg are read directly;
+    other types (m4a, mp4, ...) need ffmpeg installed on the computer."""
+    if not os.path.isfile(path):
+        raise APIError(f"File not found: {path}")
+    err = ""
+    if sf is not None:
+        try:
+            with sf.SoundFile(path) as f0:                      # can it be read? how long is it?
+                total = f0.frames / f0.samplerate if f0.frames > 0 else None
+
+            def gen():
+                with sf.SoundFile(path) as f:
+                    for block in f.blocks(blocksize=f.samplerate * 10, dtype="float32", always_2d=True):
+                        yield resample16k(block.mean(axis=1), f.samplerate)
+            return gen(), total
+        except Exception as e:
+            err = short(e, 120)
+    ff = shutil.which("ffmpeg") or next((p for p in (os.path.join(APP_DIR, "ffmpeg.exe"),) if os.path.isfile(p)), None)
+    if ff:
+        total = None
+        probe = shutil.which("ffprobe")
+        if probe:
+            try:
+                r = subprocess.run([probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                   capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                total = float(r.stdout.decode().strip() or 0) or None
+            except Exception:
+                total = None
+        import tempfile
+        errf = tempfile.TemporaryFile()
+        proc = subprocess.Popen([ff, "-nostdin", "-v", "error", "-i", path, "-vn", "-f", "f32le", "-ac", "1",
+                                 "-ar", "16000", "-"], stdout=subprocess.PIPE, stderr=errf,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+        def gen_ff():
+            got = 0
+            rest = b""
+            try:
+                while True:
+                    raw = proc.stdout.read(16000 * 4 * 10)
+                    if not raw:
+                        break
+                    raw = rest + raw
+                    cut = len(raw) // 4 * 4
+                    raw, rest = raw[:cut], raw[cut:]              # a split sample waits for the next piece
+                    got += len(raw)
+                    if raw:
+                        yield np.frombuffer(raw, dtype=np.float32).copy()
+                code = proc.wait(timeout=10)
+                if code != 0 and not STOPPED.get(id(proc)):
+                    errf.seek(0)
+                    msg = errf.read().decode("utf-8", "replace").strip().splitlines()
+                    why = short(msg[-1] if msg else f"code {code}", 160)
+                    if got < 16000 * 4:
+                        raise APIError("ffmpeg could not read this file: " + why)
+                    raise APIError(f"ffmpeg stopped reading the file after {got / 64000:.0f} s ({why}). "
+                                   "The transcript so far is saved, but it is INCOMPLETE.")
+            finally:
+                STOPPED.pop(id(proc), None)
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        pass
+                errf.close()
+
+        def stop():
+            STOPPED[id(proc)] = True
+            try:
+                proc.kill()                       # a blocked read ends at once
+            except Exception:
+                pass
+        g = gen_ff()
+        OPEN_READERS[id(g)] = stop
+        return g, total
+    ext = os.path.splitext(path)[1].lower() or "this"
+    raise APIError(f"The program cannot read {ext} files by itself ({err or 'unknown format'}). Convert the file to "
+                   "mp3 or wav first — or install ffmpeg (then every audio and video type works).")
+
+
+class RecordingJob:
+    """Feeds a recording through the same pipeline as a live meeting (sentences, speech to text,
+    translation) as fast as the services allow. No answers are suggested."""
+
+    def __init__(self, app, path):
+        self.app = app
+        self.path = path
+        self.name = os.path.basename(path)
+        self.cancel = threading.Event()
+        self.session = Session(app.cfg, recording=path)
+        self.engine = Engine(app, self.session, file_mode=True)
+        self.state = {"state": "starting", "name": self.name, "pos": 0.0, "total": None, "lines": 0, "error": ""}
+        self.thread = threading.Thread(target=self.run, daemon=True, name="recording")
+        self._last = 0.0
+        self.blocks = None
+
+    def _emit(self, force=False, **kw):
+        self.state.update(kw)
+        now = time.time()
+        if force or now - self._last > 0.4:
+            self._last = now
+            self.state["lines"] = len(self.session.entries)
+            self.app.hub.publish("recording", job=dict(self.state))
+
+    def run(self):
+        eng = self.engine
+        blocks = None
+        try:
+            blocks, total = open_recording(self.path)
+            self.blocks = blocks
+            self._emit(True, state="reading", total=total)
+            log(f"Transcribing the recording '{self.name}'" + (f" ({total / 60:.1f} min)" if total else ""))
+            # times shown are positions in the recording (00:00:00 = its start)
+            base = datetime.datetime.combine(datetime.date.today(), datetime.time()).timestamp()
+            pos = [0.0]
+            seg = Segmenter("them", 16000, self.app.cfg["sensitivity"], eng.on_audio, clock=lambda: base + pos[0])
+            step = int(16000 * FRAME_SEC)
+            for block in blocks:
+                for i in range(0, len(block), step):
+                    fr = block[i:i + step]
+                    seg.feed(fr)
+                    pos[0] += len(fr) / 16000
+                self._emit(pos=pos[0])
+                # do not read far ahead: the services work at their own speed (free limits)
+                while not self.cancel.is_set() and (len(eng.pending) >= 6 or eng.tr_inflight >= 4):
+                    self._emit(pos=pos[0], state="reading")
+                    time.sleep(0.2)
+                if self.cancel.is_set():
+                    break
+            seg.flush()
+            blocks.close()
+            self._emit(True, state="finishing", pos=pos[0])
+            last_change, seen = time.time(), None
+            while not self.cancel.is_set() and (eng.pending or eng.busy or eng.tr_inflight):
+                now_state = (len(eng.pending), eng.busy, eng.tr_inflight, len(self.session.entries))
+                if now_state != seen:
+                    seen, last_change = now_state, time.time()
+                elif time.time() - last_change > 600 or eng.fatal or (eng.pending and eng._no_stt_left("them")):
+                    log("Recording: the last parts could not be finished (no progress)", level="warn")
+                    break
+                self._emit(pos=pos[0])
+                time.sleep(0.3)
+            if self.cancel.is_set():
+                eng.stop_event.set()
+                eng.pool.shutdown(wait=False, cancel_futures=True)   # queued translations are not needed any more
+            eng.finish(timeout=1 if self.cancel.is_set() else 30)
+            self.session.save_if_dirty()
+            if self.cancel.is_set():
+                self._emit(True, state="cancelled")
+                log(f"Recording transcription stopped at {pos[0] / 60:.1f} min (what was done is saved)")
+            else:
+                self._emit(True, state="done", pos=total or pos[0])
+                log(f"Recording transcribed: {len(self.session.entries)} lines, saved to {self.session.path}")
+                self.app.hub.toast("ok", f"Recording transcribed and saved ({len(self.session.entries)} lines).")
+        except APIError as e:
+            self._emit(True, state="error", error=str(e))
+            self.app.hub.toast("error", str(e))
+            # what was read is still written and saved
+            end = time.time() + 120
+            while (eng.pending or eng.busy or eng.tr_inflight) and time.time() < end and not self.cancel.is_set():
+                time.sleep(0.3)
+            eng.finish(timeout=5)
+            self.session.save_if_dirty()
+        except Exception as e:
+            log("recording:", traceback.format_exc())
+            self._emit(True, state="error", error=short(e, 200))
+            self.app.hub.toast("error", "Could not transcribe the recording: " + short(e, 160))
+            eng.finish(timeout=1)
+        finally:
+            if blocks is not None:
+                OPEN_READERS.pop(id(blocks), None)
+                try:
+                    blocks.close()
+                except Exception:
+                    pass
+            self.app.recording_finished(self)
+
+
+# ----------------------------------------------------------------------------
+# Live events to the window (Server-Sent Events)
+# ----------------------------------------------------------------------------
+class Hub:
+    def __init__(self):
+        self.clients = set()
+        self.lock = threading.Lock()
+        self.ever = False
+        self.empty_since = None
+        self.recent_toasts = {}
+
+    def subscribe(self):
+        q = queue.Queue(maxsize=5000)
+        q.stale = False
+        with self.lock:
+            self.clients.add(q)
+            self.ever = True
+            self.empty_since = None
+        return q
+
+    def unsubscribe(self, q):
+        with self.lock:
+            self.clients.discard(q)
+            if not self.clients:
+                self.empty_since = time.time()
+
+    def publish(self, type_, **data):
+        msg = json.dumps({"type": type_, **data}, ensure_ascii=False, default=float)
+        with self.lock:
+            clients = list(self.clients)
+        for q in clients:
+            try:
+                q.put_nowait(msg)
+            except queue.Full:
+                q.stale = True               # the window stopped reading: it is reconnected and gets everything again
+
+    def toast(self, level, text):
+        now = time.time()
+        key = re.sub(r"[\d.]+", "#", text)[:80]
+        with self.lock:
+            last = self.recent_toasts.get(key, 0)
+            self.recent_toasts[key] = now
+            if len(self.recent_toasts) > 200:
+                self.recent_toasts = {k: v for k, v in self.recent_toasts.items() if now - v < 60}
+        if now - last < 15:
+            return                           # the same problem again: already shown
+        log(text, level={"error": "error", "warn": "warn"}.get(level, "info"))
+        self.publish("toast", level=level, text=text)
+
+
+# ----------------------------------------------------------------------------
+# Application controller
+# ----------------------------------------------------------------------------
+class App:
+    def __init__(self):
+        self.cfg = load_config()
+        if TIDIED:
+            try:
+                save_config(self.cfg)                  # paths that moved into the Data folder are stored
+            except OSError:
+                pass
+        self.hub = Hub()
+        LOG_LISTENERS.append(lambda entry: self.hub.publish("log", entry=entry))
+        self.stats = Stats()
+        self.resumable = Session.load_last(self.cfg)   # the last meeting: "Continue" goes on with it
+        self.lock = threading.RLock()
+        self.token = secrets.token_urlsafe(24)
+        self.url = ""
+        self.closing = threading.Event()
+        self.running = False
+        self.stopping = False
+        self.monitor_until = 0.0
+        self.started_at = None
+        self.pa = None
+        self.captures = []
+        self.engine = None
+        self.session = None
+        self.last_session = None
+        self.net = {"ok": None, "ms": None, "error": ""}
+        self.reported = set()
+        self.apis = {}               # service id -> (signature, client)
+        self.last_ping = 0.0
+        self.download = None
+        self.review = None           # after a meeting: summary, explanations and answers still work
+        self.api_lock = threading.Lock()      # service connections (never waits for audio work)
+        self.pa_zombies = []
+        self.restart_lock = threading.Lock()
+        self.recording = None        # a recording being transcribed
+        LOCAL.listeners.append(self._local_changed)
+        LLM.on_change = lambda: self.hub.publish("llm", llm=LLM.info())
+        threading.Thread(target=self._ticker, daemon=True, name="ticker").start()
+        threading.Thread(target=self.sync_local, daemon=True, name="local-sync").start()
+
+    # ---- state for the window ------------------------------------------------------
+    def public_config(self):
+        c = dict(self.cfg)
+        key = c.pop("api_key")
+        c["has_key"] = bool(key)
+        c["key_hint"] = ("…" + key[-4:]) if len(key) >= 8 else ""
+        provs = []
+        for p in self.cfg["providers"]:
+            q = {k: v for k, v in p.items() if k != "api_key"}
+            q["has_key"] = bool(p["api_key"])
+            q["key_hint"] = ("…" + p["api_key"][-4:]) if len(p["api_key"]) >= 8 else ""
+            provs.append(q)
+        c["providers"] = provs
+        c["presets"] = PRESETS
+        c["langs"] = LANGS
+        c["tasks"] = self.task_status()
+        c["ready"] = all(v["ok"] for v in c["tasks"].values())
+        return c
+
+    def shown_proxy(self):
+        """(proxy, where it came from) for the window — a password in it is hidden."""
+        p, src = detect_proxy(self.cfg["proxy"])
+        return mask_proxy(p), src
+
+    def resume_info(self):
+        r = self.resumable
+        if r is None or self.running or not os.path.isfile(r.path):
+            return None
+        with r.lock:
+            n = len(r.entries)
+        return {"file": os.path.basename(r.path), "lines": n, "started": r.started.timestamp(),
+                "shown": r is self.last_session} if n else None
+
+    def hello(self):
+        s = self.session or self.last_session
+        return {"type": "hello", "version": VERSION, "log": list(LOG_LINES)[-300:], "log_path": LOG_PATH, "config": self.public_config(),
+                "running": self.running, "stopping": self.stopping,
+                "monitoring": self.monitor_until > time.time(),
+                "started_at": self.started_at, "entries": s.ordered() if s else [],
+                "session_file": s.path if s else "", "meetings_dir": MEETINGS_DIR,
+                "proxy": self.shown_proxy(), "net": self.net,
+                "stats": self.stats.summary(), "quota": self.engine.quota_info() if self.engine else None,
+                "audio_ok": pyaudio is not None,
+                "speech_mode": self.engine.speech_mode() if self.engine else None,
+                "usage": usage_copy(),
+                "local": LOCAL.info(), "llm": LLM.info(),
+                "download": self.download.state if self.download else None,
+                "paused": bool(self.engine and self.engine.paused), "summary": s.summary if s else "",
+                "resume": self.resume_info(),
+                "recording": self.recording.state if self.recording else None}
+
+    def set_net(self, ok, ms, error="", name="Groq"):
+        if ok != self.net.get("ok") or name != self.net.get("name") or (not ok and error != self.net.get("error")):
+            p, src = detect_proxy(self.cfg["proxy"])
+            via = f" via {src} proxy {mask_proxy(p)}" if p else " (no proxy)"
+            log(f"{name} connected{via}, {round(ms or 0)} ms" if ok else f"{name} connection failed{via}: {error}",
+                level="info" if ok else "error")
+        self.net = {"ok": ok, "ms": round(ms) if ms else None, "error": error, "name": name}
+        self.hub.publish("net", net=self.net)
+
+    def publish_running(self):
+        s = self.session or self.last_session
+        self.hub.publish("running", running=self.running, stopping=self.stopping,
+                         monitoring=self.monitor_until > time.time(), started_at=self.started_at,
+                         session_file=s.path if s else "", resume=self.resume_info())
+
+    # ---- actions called from the window --------------------------------------------------
+    def call(self, name, body):
+        fn = getattr(self, "api_" + name, None)
+        if fn is None:
+            return {"ok": False, "error": "unknown action"}
+        try:
+            return fn(**body) or {"ok": True}
+        except TypeError as e:
+            return {"ok": False, "error": short(e)}
+        except Exception as e:
+            log("action", name, "failed:", traceback.format_exc())
+            return {"ok": False, "error": short(e)}
+
+    def api_state(self):
+        return {"ok": True, **self.hello()}
+
+    def api_save_config(self, **values):
+        with self.lock:
+            new = dict(self.cfg)
+            for k, v in values.items():
+                if k == "api_key":
+                    if isinstance(v, str) and v.strip():
+                        new["api_key"] = v.strip()
+                elif k == "clear_api_key":
+                    if v:
+                        new["api_key"] = ""
+                elif k in DEFAULTS and k not in ("config_version", "providers"):
+                    new[k] = v
+            new = sanitize(new)
+            changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
+            changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
+            pass                                   # (update only: other threads read cfg at the same time)
+            self.cfg.update(new)          # the engine reads the same dict -> live changes
+            save_config(self.cfg)
+            if changed_sens:
+                for c in self.captures:
+                    c.set_sensitivity(self.cfg["sensitivity"])
+        self.sync_local()
+        self.apply_preview()
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        if self.engine:
+            self.hub.publish("speech_mode", **self.engine.speech_mode())
+        if changed_net:
+            self.warm_async()
+        return {"ok": True, "config": self.public_config()}
+
+    def api_devices(self):
+        try:
+            return {"ok": True, **list_devices()}
+        except Exception as e:
+            return {"ok": False, "error": friendly_audio_error(e)}
+
+    def api_test_connection(self, api_key="", proxy=None):
+        key = (api_key or "").strip() or self.cfg["api_key"]
+        if not key:
+            return {"ok": False, "error": "Paste your Groq API key first."}
+        p, src = detect_proxy(self.cfg["proxy"] if proxy is None else proxy)
+        shared = (key, p) == (self.cfg["api_key"], detect_proxy(self.cfg["proxy"])[0])
+        try:
+            api = self.get_api() if shared else GroqAPI(key, p)
+        except APIError as e:
+            return {"ok": False, "error": str(e)}
+        try:
+            api.ping()                     # first call opens the connection
+            ms, ids = api.ping()           # second one shows the real speed
+            chat = [m for m, _ in (QWEN, OSS_20, OSS_120) if m in ids]
+            stt = [m for m in ("whisper-large-v3-turbo", "whisper-large-v3") if m in ids]
+            self.set_net(True, ms)
+            return {"ok": True, "ms": round(ms), "chat_models": len(chat), "stt_models": len(stt),
+                    "proxy": mask_proxy(p), "proxy_source": src, "http2": HTTP2}
+        except APIError as e:
+            self.set_net(False, None, str(e))
+            return {"ok": False, "error": str(e), "proxy": mask_proxy(p)}
+        finally:
+            if not shared:
+                api.close()
+
+    def provider(self, pid):
+        if pid == "llm":
+            return {"id": "llm", "name": "Local AI model", "kind": "llm", "base_url": "", "api_key": "",
+                    "use_proxy": False}
+        if pid == "local":
+            return {"id": "local", "name": "Local model", "kind": "local", "base_url": "", "api_key": "",
+                    "use_proxy": False}
+        if pid == "groq":
+            return {"id": "groq", "name": "Groq", "base_url": BASE_URL, "api_key": self.cfg["api_key"],
+                    "use_proxy": True}
+        return next((p for p in self.cfg["providers"] if p["id"] == pid), None)
+
+    def task_status(self):
+        """For each task: which service does it, is it ready, and what is missing (shown at the top of Services)."""
+        c, out = self.cfg, {}
+        for t in TASKS:
+            pid, model = c[f"{t}_provider"], c[f"{t}_model"]
+            p = self.provider(pid)
+            name = p["name"] if p else "(removed service)"
+            why = ""
+            if pid == "groq":
+                ok = bool(c["api_key"])
+                why = "" if ok else "Groq has no API key"
+            elif pid == "local":
+                ok = bool(c["local_model"])
+                why = "" if ok else "no local model chosen"
+            elif pid == "llm":
+                ok = t != "stt" and bool(c["llm_model"])
+                why = "" if ok else "no local AI model chosen"
+            elif not p:
+                ok, why = False, "the chosen service was removed"
+            elif not p["api_key"]:
+                ok, why = False, f"{name} has no API key"
+            elif p.get("kind") == "live":
+                ok = t == "stt"
+                why = "" if ok else f"{name} only does speech to text"
+            elif not model:
+                ok, why = False, f"choose a model for {name} (press its Test, then 'Use it for…')"
+            else:
+                ok = True
+            fallback = not ok and bool(c["api_key"])        # Groq takes over automatically
+            out[t] = {"label": TASKS[t], "service": "Groq" if fallback else name, "model": "" if fallback else model,
+                      "ok": ok or fallback, "fallback": fallback, "why": why,
+                      "backup": ok and pid != "groq" and c["use_backup"] and bool(c["api_key"])}
+        return out
+
+    def missing_tasks(self, tasks=TASKS):
+        st = self.task_status()
+        return [st[t]["label"] + (f" ({st[t]['why']})" if st[t]["why"] else "") for t in tasks if not st[t]["ok"]]
+
+    def used_services(self):
+        c = self.cfg
+        used = []
+        for t in TASKS:
+            pid = c[f"{t}_provider"]
+            if (self.provider(pid) or {}).get("kind") in ("live", "local", "llm"):
+                continue
+            if pid != "groq" and c[f"{t}_model"] and self.provider(pid) and pid not in used:
+                used.append(pid)
+        if c["api_key"]:
+            used.insert(0, "groq")
+        return used
+
+    def get_api(self, pid="groq"):
+        """One shared, warm connection per service; re-created only when its settings change."""
+        if pid == "local":
+            return LOCAL
+        if pid == "llm":
+            return LLM
+        prov = self.provider(pid)
+        if not prov:
+            raise APIError(f"The service '{pid}' is not set up any more.")
+        if not prov["base_url"]:
+            raise APIError(f"{prov['name']}: the address (base URL) is empty.")
+        p = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
+        sig = (prov["base_url"], prov["api_key"], p)
+        with self.api_lock:
+            cached = self.apis.get(pid)
+            if cached is None or cached[0] != sig:
+                client = GroqAPI(prov["api_key"], p, prov["base_url"], prov["name"])
+                self.apis[pid] = (sig, client)
+                if cached:
+                    t = threading.Timer(180, cached[1].close)       # let running requests finish first
+                    t.daemon = True
+                    t.start()
+            return self.apis[pid][1]
+
+    def warm_async(self):
+        with self.api_lock:
+            if time.time() - getattr(self, "warm_at", 0) < 5:
+                return                                      # two windows connecting at once: one warm-up
+            self.warm_at = time.time()
+        if self.used_services():
+            threading.Thread(target=self._keepalive, daemon=True).start()
+
+    def _open_pa(self):
+        for z in list(self.pa_zombies):                   # stuck captures that have ended by now
+            if not any(t.is_alive() for t in z[1]):
+                self.pa_zombies.remove(z)
+                close_pa(z[0])
+        if self.pa is None:
+            self.pa = new_pa()
+        return self.pa
+
+    def _stop_captures(self):
+        for c in self.captures:
+            c.stop_event.set()
+        for c in self.captures:
+            c.join(timeout=3)
+        alive = [c for c in self.captures if c.is_alive()]
+        self.captures = []
+        if alive:
+            log("a capture thread did not stop in time; keeping the audio system open", level="warn")
+            if self.pa is not None:
+                self.pa_zombies.append((self.pa, alive))      # closed as soon as those threads end
+            self.pa = None
+            return
+        if self.pa is not None:
+            close_pa(self.pa)
+            self.pa = None
+
+    def _start_captures(self, sink, want_mic, preview=False):
+        pa = self._open_pa()
+        mic, loop = resolve_devices(pa, self.cfg, want_mic)
+        problems = []
+        if want_mic and mic is None:
+            problems.append("No microphone found.")
+        if loop is None:
+            problems.append("Could not capture the computer's sound — check the speaker device in Setup › Audio.")
+        for dev, src in ((mic, "me"), (loop, "them")):
+            if dev is not None and (src == "them" or want_mic):
+                c = AudioCapture(pa, dev, src, self.cfg["sensitivity"], sink)
+                if preview and src == "them":
+                    c.preview_every, c.preview_min = self.preview_plan()
+                    c.spec_final = self.spec_plan()
+                self.captures.append(c)
+                c.start()
+        return problems, (mic["name"] if mic else ""), (loop["name"].replace(" [Loopback]", "") if loop else "")
+
+    def api_start(self, resume=False):
+        """resume=True: go on with the last meeting (same file, same transcript) instead of a new one."""
+        with self.lock:
+            if self.running:
+                return {"ok": True}
+            c = self.cfg
+            missing = self.missing_tasks()
+            if missing:
+                return {"ok": False, "error": "setup", "missing": missing}
+            if pyaudio is None:
+                return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+            if self.stopping:
+                return {"ok": False, "error": "Still finishing the previous meeting — try again in a moment."}
+            if self.recording:
+                return {"ok": False, "error": "A recording is being transcribed. Wait for it, or stop it first."}
+            self._stop_captures()
+            self.monitor_until = 0.0
+            try:
+                self.get_api()                    # checks the settings once; the connection is kept and reused
+            except APIError as e:
+                return {"ok": False, "error": str(e)}
+            prev_last = self.last_session
+            old = self.resumable if resume else None
+            if resume and (old is None or not os.path.isfile(old.path)):
+                return {"ok": False, "error": "There is no earlier meeting to continue."}
+
+            def undo(msg):
+                self._stop_captures()
+                if self.engine is not None:
+                    self.engine.close()
+                self.engine = None
+                self.session = None
+                self.last_session = prev_last
+                USAGE_ON[0] = False
+                if old is not None:
+                    with old.lock:
+                        if old.resumes:
+                            old.resumes.pop()
+                    return {"ok": False, "error": msg}
+                try:
+                    if os.path.isfile(s_path) and os.path.getsize(s_path) < 400:
+                        os.remove(s_path)                  # an empty meeting file is not kept
+                except (OSError, NameError):
+                    pass
+                return {"ok": False, "error": msg}
+            try:
+                if old is not None:
+                    self.session = old
+                    with old.lock:
+                        old.resumes.append(time.time())
+                        old.dirty = True
+                else:
+                    self.session = Session(self.cfg)
+                    self.stats = Stats()                   # delays shown are per meeting
+                    with _usage_lock:
+                        USAGE.clear()                      # counts are per meeting
+                s_path = self.session.path
+                self.last_session = None
+                USAGE_ON[0] = True
+                self.engine = Engine(self, self.session)
+                self.reported.clear()
+                problems, mic, spk = self._start_captures(self.engine.on_audio, self.cfg["transcribe_me"], preview=True)
+                self.engine.start_live(self.captures)
+            except Exception as e:
+                log("start failed:", traceback.format_exc(), level="error")
+                return undo(friendly_audio_error(e))
+            if not self.captures:
+                return undo(" ".join(problems) or "No audio device found.")
+            self._set_review(None)
+            self.running = True
+            self.started_at = time.time()
+            self.session.save_if_dirty()
+            self.hub.publish("session", session_file=self.session.path,
+                             entries=self.session.ordered() if old is not None else [],
+                             summary=self.session.summary if old is not None else "")
+            threading.Thread(target=self.engine.warm, daemon=True).start()
+        log(f"Meeting started · microphone: {mic or '(off)'} · computer sound: {spk or '(none)'} · "
+            f"languages {'+'.join(meeting_langs(self.cfg))} -> {self.cfg['my_language']} · answers {self.cfg['answer_mode']}")
+        for p_ in problems:
+            self.hub.toast("warn", p_)
+        self.publish_running()
+        self.hub.publish("devices_in_use", mic=mic, speaker=spk)
+        self.hub.publish("speech_mode", **self.engine.speech_mode())
+        threading.Thread(target=self._watch_devices, args=(self.engine,), daemon=True, name="device-watch").start()
+        return {"ok": True}
+
+    def _watch_devices(self, engine):
+        """During a meeting: if Windows switches the default speaker or microphone (headphones plugged in,
+        Bluetooth connected), follow it — only when Setup › Audio is on 'Windows default'."""
+        com = com_init()
+        try:
+            try:
+                last = default_endpoint_ids()
+            except Exception as e:
+                log("device watch not available:", short(e, 100), level="debug")
+                return
+            if not last:
+                return
+            retry = False
+            while self.running and self.engine is engine and not self.closing.wait(3):
+                try:
+                    now_ids = default_endpoint_ids()
+                    if not now_ids or (now_ids == last and not retry):
+                        continue
+                    spk_changed = retry or (now_ids[0] != last[0] and not self.cfg["speaker_device"])
+                    mic_changed = retry or (now_ids[1] != last[1] and not self.cfg["mic_device"]
+                                            and self.cfg["transcribe_me"])
+                    last = now_ids
+                    if spk_changed or mic_changed:
+                        time.sleep(1.0)                       # let Windows finish switching
+                        retry = not self._restart_captures(engine)
+                except Exception as e:
+                    log("device watch problem (still watching):", short(e, 120), level="warn")
+                    retry = True
+        finally:
+            com_uninit(com)
+
+    def _restart_captures(self, engine):
+        with self.restart_lock:
+            with self.lock:
+                if not self.running or self.engine is not engine:
+                    return True
+                for lv in list(engine.live.values()):
+                    lv.stop()
+                engine.live.clear()
+                self._stop_captures()                        # the unfinished sentence is still written
+            err, mic, spk = None, "", ""
+            for attempt in range(3):                         # a new Bluetooth device needs a moment
+                try:
+                    with self.lock:
+                        if not self.running or self.engine is not engine:
+                            return True
+                        problems, mic, spk = self._start_captures(engine.on_audio, self.cfg["transcribe_me"],
+                                                                  preview=True)
+                    time.sleep(1.2)                          # (outside the lock: the meeting keeps working)
+                    with self.lock:
+                        if not self.running or self.engine is not engine:
+                            return True
+                        them_ok = any(c.source == "them" and c.is_alive() and not c.error for c in self.captures)
+                        if not them_ok:
+                            raise OSError((problems and problems[0]) or "the speaker device did not start")
+                        engine.start_live(self.captures, retry_dead=True)
+                        if engine.paused:                    # still paused: nothing may be sent
+                            for lv in engine.live.values():
+                                lv.pause(True)
+                    err = None
+                    break
+                except Exception as e:
+                    err = e
+                    with self.lock:
+                        if self.running and self.engine is engine:
+                            self._stop_captures()
+                    time.sleep(1.5)
+            if err is not None:
+                if not getattr(engine, "device_retry_told", False):
+                    engine.device_retry_told = True
+                    self.hub.toast("error", "The new audio device could not be opened yet — the program keeps trying: "
+                                   + friendly_audio_error(err))
+                else:
+                    log("audio device still not available:", friendly_audio_error(err), level="warn")
+                return False
+            engine.device_retry_told = False
+        log(f"Audio device changed — now: microphone {mic or '(off)'} · computer sound {spk or '(none)'}")
+        self.hub.toast("ok", f"Audio device changed — now listening to: {spk or 'no speaker'}"
+                             + (f" and {mic}" if mic else ""))
+        self.hub.publish("devices_in_use", mic=mic, speaker=spk)
+        return True
+
+    def api_stop(self):
+        with self.lock:
+            if not self.running:
+                return {"ok": True}
+            self.running = False
+            self.stopping = True
+            log("Meeting stopped")
+            self._stop_captures()                  # flushes the last sentence into the queue
+            engine, session = self.engine, self.session
+        self.publish_running()
+
+        def finish():
+            try:
+                engine.finish()
+            finally:
+                session.save_if_dirty()
+                USAGE_ON[0] = False
+                with self.lock:
+                    self.stopping = False
+                    self.engine = None
+                    self.last_session = session
+                    self.resumable = session if session.ordered() else self.resumable
+                    self.session = None
+                    self._set_review(Engine(self, session, workers=False))
+                self.publish_running()
+                self.hub.toast("ok", "Meeting saved.")
+        threading.Thread(target=finish, daemon=True).start()
+        return {"ok": True}
+
+    def api_monitor(self, on=True):
+        """Test audio: shows the level meters for 30 s without sending anything."""
+        with self.lock:
+            if self.running or self.stopping:
+                return {"ok": False, "error": "Stop the meeting first."}
+            self._stop_captures()
+            self.monitor_until = 0.0
+            if on:
+                if pyaudio is None:
+                    return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                try:
+                    problems, mic, spk = self._start_captures(lambda *a, **k: None, True)
+                except Exception as e:
+                    self._stop_captures()
+                    return {"ok": False, "error": friendly_audio_error(e)}
+                self.monitor_until = time.time() + 30
+                self.hub.publish("devices_in_use", mic=mic, speaker=spk)
+        self.publish_running()
+        return {"ok": True}
+
+    def _set_review(self, eng):
+        old, self.review = self.review, eng
+        if old:
+            old.close(cancel=False)
+
+    def helper(self):
+        """The engine that works on the transcript on screen (the meeting, a recording, or the last one)."""
+        e = self.engine
+        if e and not e.stop_event.is_set():
+            return e
+        r = self.recording
+        if r and not r.engine.stop_event.is_set():
+            return r.engine
+        return self.review
+
+    def api_answer_now(self, entry_id=None, text=""):
+        eng = self.helper()
+        if not eng:
+            return {"ok": False, "error": "Start the meeting first."}
+        if not eng.answer_now(entry_id, (text or "").strip()[:600] or None):
+            return {"ok": False, "error": "Nothing has been said yet."}
+        return {"ok": True}
+
+    def api_explain(self, entry_id=None, text=""):
+        eng = self.helper()
+        if not eng or entry_id is None:
+            return {"ok": False, "error": "There is no transcript yet."}
+        if not eng.explain(entry_id, text):
+            return {"ok": False, "error": "That line is not in the transcript any more."}
+        return {"ok": True}
+
+    def api_edit_entry(self, entry_id=None, text=""):
+        eng = self.helper()
+        if not eng or entry_id is None:
+            return {"ok": False, "error": "There is no transcript yet."}
+        return {"ok": True, "changed": bool(eng.edit(entry_id, text))}
+
+    def api_summary(self):
+        eng = self.helper()
+        if not eng:
+            return {"ok": False, "error": "There is no meeting to summarize yet."}
+        if len([r for r in eng.session.ordered() if r["text"].strip()]) < 2:
+            return {"ok": False, "error": "The meeting is too short to summarize."}
+        if not eng.summary():
+            return {"ok": False, "error": "Please try again in a moment."}
+        return {"ok": True}
+
+    def api_pause(self, on=None):
+        eng = self.engine
+        if not eng or not self.running:
+            return {"ok": False, "error": "Start the meeting first."}
+        eng.paused = (not eng.paused) if on is None else bool(on)
+        for c in list(self.captures):
+            if c.seg:
+                c.seg.drop_req = True          # the sentence around the pause is not sent (not even partly)
+        for lv in list(eng.live.values()):
+            lv.pause(eng.paused)
+        log("Listening paused — nothing is sent" if eng.paused else "Listening again")
+        self.hub.publish("paused", paused=eng.paused)
+        return {"ok": True, "paused": eng.paused}
+
+    def api_browse(self, path="", kind="model"):
+        """Folder browser shown inside the window (a Windows dialog would often open behind it).
+        kind: 'model' (folders; those with model.bin are models) or 'audio' (audio and video files)."""
+        home = os.path.expanduser("~")
+        places = [{"name": "Models (this program)", "path": MODELS_DIR}] if kind in ("model", "gguf") else []
+        for label, sub in (("Downloads", "Downloads"), ("Desktop", "Desktop"), ("Documents", "Documents")):
+            p = os.path.join(home, sub)
+            if os.path.isdir(p):
+                places.append({"name": label, "path": p})
+        places.append({"name": "Home", "path": home})
+        if sys.platform == "win32":
+            import string
+            places += [{"name": f"{d}:", "path": f"{d}:\\"} for d in string.ascii_uppercase if os.path.isdir(f"{d}:\\")]
+        else:
+            places.append({"name": "/", "path": "/"})
+        if not path:
+            if kind == "gguf":
+                lm = self.cfg["llm_model"]
+                path = os.path.dirname(lm) if lm and os.path.isdir(os.path.dirname(lm)) else MODELS_DIR
+                os.makedirs(MODELS_DIR, exist_ok=True)
+            elif kind == "model":
+                lm = self.cfg["local_model"]
+                path = os.path.dirname(lm) if lm and os.path.isdir(os.path.dirname(lm)) else MODELS_DIR
+                os.makedirs(MODELS_DIR, exist_ok=True)
+            else:
+                path = self.cfg.get("last_recording_dir") or ""
+                path = path if path and os.path.isdir(path) else (places[0]["path"] if places else home)
+        path = os.path.abspath(os.path.expanduser(str(path).strip().strip('"')))
+        if os.path.isfile(path):
+            path = os.path.dirname(path)
+        if not os.path.isdir(path):
+            return {"ok": False, "error": f"Folder not found: {path}", "places": places}
+        dirs, files, more = [], [], False
+        try:
+            names = sorted(os.listdir(path), key=str.lower)
+        except OSError as e:
+            return {"ok": False, "error": f"This folder cannot be opened: {short(e, 120)}", "places": places,
+                    "path": path, "parent": os.path.dirname(path) if os.path.dirname(path) != path else ""}
+        for n in names:
+            if n.startswith((".", "$")) or n in ("System Volume Information",):
+                continue
+            full = os.path.join(path, n)
+            try:
+                if os.path.isdir(full):
+                    if len(dirs) < 400:
+                        dirs.append({"name": n, "path": full,
+                                     "model": kind == "model" and os.path.isfile(os.path.join(full, "model.bin"))})
+                    else:
+                        more = True
+                elif (kind == "audio" and n.lower().endswith(AUDIO_EXT)) or \
+                        (kind == "gguf" and n.lower().endswith(".gguf") and "mmproj" not in n.lower()):
+                    if len(files) < 400:
+                        files.append({"name": n, "path": full, "mb": round(os.path.getsize(full) / 1e6, 1)})
+                    else:
+                        more = True
+            except OSError:
+                continue
+        parent = os.path.dirname(path)
+        return {"ok": True, "path": path, "parent": parent if parent != path else "", "dirs": dirs, "files": files,
+                "more": more, "places": places,
+                "is_model": kind == "model" and os.path.isfile(os.path.join(path, "model.bin"))}
+
+    def api_recording(self, path="", browse=False, cancel=False):
+        """Transcribe (and translate) an audio or video file."""
+        if cancel:
+            rec = self.recording
+            if rec:
+                rec.cancel.set()
+                stop = OPEN_READERS.get(id(rec.blocks)) if rec.blocks is not None else None
+                if stop:
+                    stop()
+            return {"ok": True}
+        with self.lock:
+            if self.running or self.stopping:
+                return {"ok": False, "error": "Stop the meeting first."}
+            if self.recording:
+                return {"ok": False, "error": "A recording is already being transcribed."}
+            c = self.cfg
+            missing = self.missing_tasks(("stt", "tr"))
+            if missing:
+                return {"ok": False, "error": "setup", "missing": missing}
+        if browse:
+            try:
+                path = pick_file_dialog(self.cfg.get("last_recording_dir") or os.path.expanduser("~"),
+                                        "Choose a recording to transcribe", AUDIO_TYPES)
+            except APIError as e:
+                return {"ok": False, "error": str(e)}
+            except Exception as e:
+                return {"ok": False, "error": "Could not open the file dialog: " + short(e)}
+            if not path:
+                return {"ok": True, "cancelled": True}
+        path = (path or "").strip().strip('"')
+        if not os.path.isfile(path):
+            return {"ok": False, "error": f"File not found: {path}"}
+        with self.lock:
+            if self.running or self.stopping or self.recording:     # something started while the dialog was open
+                return {"ok": False, "error": "A meeting or another recording is running — stop it first."}
+            self.cfg["last_recording_dir"] = os.path.dirname(path)
+            save_config(self.cfg)
+            self._stop_captures()
+            self.monitor_until = 0.0
+            self._set_review(None)
+            job = RecordingJob(self, path)
+            self.recording = job
+            self.last_session = job.session
+            with _usage_lock:
+                USAGE.clear()
+            USAGE_ON[0] = True
+        self.hub.publish("session", session_file=job.session.path, recording=job.name)
+        self.publish_running()
+        job.thread.start()
+        return {"ok": True, "job": job.state}
+
+    def recording_finished(self, job):
+        with self.lock:
+            if self.recording is job:
+                self.recording = None
+            USAGE_ON[0] = False
+            self._set_review(Engine(self, job.session, workers=False))
+        self.publish_running()
+
+    @staticmethod
+    def _reveal(path, select=False):
+        """Shows a folder (or a file, selected in its folder) in Windows Explorer."""
+        if sys.platform != "win32":
+            return {"ok": False, "error": f"Opening files and folders works on Windows only. The path is: {path}"}
+        try:
+            if select:
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                os.startfile(path)
+            return {"ok": True}
+        except OSError as e:
+            return {"ok": False, "error": f"Could not open {path}: {short(e, 100)}"}
+
+    def api_open_folder(self):
+        os.makedirs(MEETINGS_DIR, exist_ok=True)
+        s = self.session or self.last_session
+        if s and os.path.exists(s.path):
+            return self._reveal(s.path, select=True)
+        return self._reveal(MEETINGS_DIR)
+
+    # ---- other services -------------------------------------------------------------
+    def _save_and_publish(self):
+        self.cfg.update(sanitize(self.cfg))
+        save_config(self.cfg)
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return {"ok": True, "config": self.public_config()}
+
+    def api_save_provider(self, id="", preset="custom", name=None, base_url=None, api_key="", use_proxy=None):
+        with self.lock:
+            provs = self.cfg["providers"]
+            p = next((x for x in provs if x["id"] == id), None) if id else None
+            if p is None:
+                pre = PRESETS.get(preset, PRESETS["custom"])
+                base = re.sub(r"[^a-z0-9]", "", preset.lower()) or "svc"
+                n, pid = 1, base
+                while any(x["id"] == pid for x in provs):
+                    n += 1
+                    pid = f"{base}{n}"
+                name0, k = pre["name"], 2
+                while any(x["name"] == name0 for x in provs):     # "My service 2", "My service 3", ...
+                    name0, k = f"{pre['name']} {k}", k + 1
+                p = {"id": pid, "preset": preset, "name": name0, "base_url": pre["base_url"],
+                     "api_key": "", "use_proxy": pre["use_proxy"], "models": []}
+                provs.append(p)
+                log(f"Service added: {p['name']} ({p['base_url'] or 'no address yet'})")
+            if name is not None:
+                p["name"] = str(name).strip()[:40] or p["name"]
+            if base_url is not None:
+                u = str(base_url).strip().rstrip("/")
+                if u and not re.match(r"^https?://", u):
+                    u = "https://" + u
+                if u != p["base_url"]:
+                    p["models"] = []
+                p["base_url"] = u
+            if isinstance(api_key, str) and api_key.strip():
+                p["api_key"] = api_key.strip()
+            if use_proxy is not None:
+                p["use_proxy"] = bool(use_proxy)
+            res = self._save_and_publish()
+            res["id"] = p["id"]
+            return res
+
+    def api_remove_provider(self, id=""):
+        with self.lock:
+            p = self.provider(id)
+            self.cfg["providers"] = [x for x in self.cfg["providers"] if x["id"] != id]
+            for t in TASKS:
+                if self.cfg[f"{t}_provider"] == id:
+                    self.cfg[f"{t}_provider"], self.cfg[f"{t}_model"] = "groq", ""
+            with self.api_lock:
+                old = self.apis.pop(id, None)
+            if old:
+                t = threading.Timer(60, old[1].close)          # its HTTP connection is closed after running calls
+                t.daemon = True
+                t.start()
+            if p:
+                log(f"Service removed: {p['name']}")
+            return self._save_and_publish()
+
+    def api_provider_test(self, id=""):
+        """Checks the address and key, and loads the service's model list."""
+        prov = self.provider(id)
+        if not prov:
+            return {"ok": False, "error": "Service not found."}
+        if not prov["base_url"]:
+            return {"ok": False, "error": "Enter the service address (base URL) first."}
+        if not prov["api_key"]:
+            return {"ok": False, "error": "Paste the API key first."}
+        if prov.get("kind") == "live":
+            try:
+                proxy = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
+                secs = deepgram_check(prov["api_key"], proxy, seconds=0.5)
+            except APIError as e:
+                log(f"{prov['name']} test failed: {e}", level="error")
+                return {"ok": False, "error": str(e)}
+            except Exception as e:
+                return {"ok": False, "error": short(e)}
+            with self.lock:
+                p = next((x for x in self.cfg["providers"] if x["id"] == id), None)
+                if p is not None:
+                    p["models"] = ["nova-3", "nova-2"]
+                    p["caps"] = {"stt": {"ok": True, "model": "nova-3", "mode": "live", "secs": round(secs, 2)},
+                                 "chat": {"ok": False, "why": "Speech-to-text only — translation and answers need another service (e.g. Groq)."},
+                                 "at": time.time()}
+                self._save_and_publish()
+            log(f"{prov['name']}: live connection works ({secs:.1f} s to connect)")
+            return {"ok": True, "ms": round(secs * 1000), "models": 2,
+                    "note": f"Live connection works ({round(secs * 1000)} ms). Words will appear while they are spoken."}
+        try:
+            client = self.get_api(id)
+            client.ping()
+            ms, ids = client.ping()
+        except APIError as e:
+            if e.status == 404:
+                log(f"{prov['name']}: connected, but it does not publish a model list")
+                return {"ok": True, "ms": None, "models": 0,
+                        "note": "Connected, but this service does not publish its model list — type the model names yourself."}
+            log(f"{prov['name']} test failed: {e}", level="error")
+            return {"ok": False, "error": str(e)}
+        with self.lock:
+            p = next((x for x in self.cfg["providers"] if x["id"] == id), None)
+            if p is not None and ids:
+                p["models"] = sorted(set(ids))[:500]
+            self._save_and_publish()
+        log(f"{prov['name']}: connected, {round(ms)} ms, {len(ids)} models")
+        caps = self.check_capabilities(id, ids)
+        return {"ok": True, "ms": round(ms), "models": len(ids), "caps": caps}
+
+    def check_capabilities(self, id, ids):
+        """Tries the service for real: can it write speech as text? can it translate and answer?"""
+        prov = self.provider(id)
+        client = self.get_api(id)
+        stt_models = [m for m in ids if re.search(r"whisper|transcri|voxtral|speech-to|stt", m, re.I)]
+        chat_models = [m for m in ids if m not in stt_models and not re.search(
+            r"embed|tts|dall|image|moderation|rerank|guard|realtime|search|audio|vision|ocr|codex", m, re.I)]
+
+        def rank(models, prefs):
+            for p_ in prefs:
+                hit = next((m for m in models if re.search(p_, m, re.I)), None)
+                if hit:
+                    return hit
+            return models[0] if models else None
+
+        caps = {"at": time.time()}
+        # translation + answers (the same model does both)
+        chat_model = rank(chat_models, [r"gpt-4\.1-mini|gpt-4o-mini", r"flash-lite|flash", r"mini", r"instant|fast|lite|small",
+                                        r"gpt|claude|gemini|qwen|llama|mistral|deepseek"])
+        if chat_model:
+            t = time.time()
+            first = [None]
+
+            def on_text(x):
+                if first[0] is None and x.strip():
+                    first[0] = time.time() - t
+            try:
+                out = chat_compat(client, chat_model, [
+                    {"role": "system", "content": translate_system(self.cfg)},
+                    {"role": "user", "content": "Translate:\nCan you briefly introduce yourself?"}],
+                    200, 0.2, effort_for(chat_model), on_text)
+                ok = in_language(out, self.cfg["my_language"])
+                caps["chat"] = {"ok": ok, "model": chat_model, "secs": round(first[0] or time.time() - t, 2),
+                                "why": "" if ok else f"The reply was not in {lang_name(self.cfg['my_language'])}."}
+            except APIError as e:
+                caps["chat"] = {"ok": False, "model": chat_model, "why": short(e, 160)}
+        else:
+            caps["chat"] = {"ok": False, "why": "No chat model found in its model list." if ids
+                            else "The service does not list its models — type a model name and use Test all parts."}
+        # speech to text
+        stt_model = rank(stt_models, [r"gpt-4o-mini-transcribe", r"transcribe", r"whisper-large-v3-turbo", r"whisper", r"voxtral"])
+        if stt_model:
+            tt = np.arange(24000) / 16000
+            audio = (0.08 * np.sin(2 * np.pi * 180 * tt)).astype(np.float32)
+            t = time.time()
+            try:
+                client.transcribe(audio, stt_model, None, None)
+                caps["stt"] = {"ok": True, "model": stt_model, "mode": "preview", "secs": round(time.time() - t, 2)}
+            except APIError as e:
+                caps["stt"] = {"ok": False, "model": stt_model, "why": short(e, 160)}
+        else:
+            caps["stt"] = {"ok": False, "why": "No speech-to-text model in its list (Groq can keep doing that part)."}
+        with self.lock:
+            p = next((x for x in self.cfg["providers"] if x["id"] == id), None)
+            if p is not None:
+                p["caps"] = caps
+            self._save_and_publish()
+        log(f"{prov['name']} can do: speech-to-text {'yes' if caps['stt']['ok'] else 'no'}, "
+            f"translation & answers {'yes' if caps['chat']['ok'] else 'no'}")
+        return caps
+
+    def api_use_provider(self, id="", tasks=None):
+        """'Use it for ...' buttons: assigns the service (and the model that passed the test)."""
+        prov = self.provider(id)
+        if not prov:
+            return {"ok": False, "error": "Service not found."}
+        caps = prov.get("caps") or {}
+        with self.lock:
+            if isinstance(tasks, str):
+                tasks = [tasks]
+            tasks = [t for t in (tasks or ["stt", "tr", "ans"]) if t in ("stt", "tr", "ans")]
+            for t in tasks:
+                cap = caps.get("stt" if t == "stt" else "chat") or {}
+                if cap.get("ok"):
+                    self.cfg[f"{t}_provider"] = id
+                    self.cfg[f"{t}_model"] = cap.get("model", "")
+            return self._save_and_publish()
+
+    def api_credit(self):
+        """What is left with each service in use: credit where the service reports it, otherwise its limits."""
+        rows = []
+        pids = (["groq"] if self.cfg["api_key"] else []) + [p["id"] for p in self.cfg["providers"] if p["api_key"]]
+        for pid in pids:
+            prov = self.provider(pid) or {}
+            name, preset = prov.get("name", pid), ("groq" if pid == "groq" else prov.get("preset", "custom"))
+            row = {"id": pid, "name": name, "lines": [], "link": BILLING_PAGES.get(preset, ""), "ok": True}
+            try:
+                self._credit_of(pid, prov, preset, row)
+            except APIError as e:
+                row["ok"] = False
+                row["lines"].append(short(str(e), 160))
+            except Exception as e:
+                row["ok"] = False
+                row["lines"].append("Could not ask: " + short(e, 140))
+            if not row["lines"]:
+                row["lines"].append("This service does not report its credit through the API — open its website.")
+            rows.append(row)
+        return {"ok": True, "services": rows}
+
+    def _credit_of(self, pid, prov, preset, row):
+        lines = row["lines"]
+        base = (prov.get("base_url") or "").rstrip("/")
+        if prov.get("kind") == "live":                       # Deepgram: real balance in dollars
+            api = GroqAPI(prov["api_key"], detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else "",
+                          base or "https://api.deepgram.com/v1", prov["name"])
+            try:
+                auth = {"Authorization": f"Token {prov['api_key']}"}
+                r = api.request("GET", "/projects", headers=auth, timeout=httpx.Timeout(12.0, connect=8.0))
+                for p in (r.json().get("projects") or [])[:3]:
+                    b = api.request("GET", f"/projects/{p['project_id']}/balances", headers=auth,
+                                    timeout=httpx.Timeout(12.0, connect=8.0)).json().get("balances") or []
+                    total = sum(float(x.get("amount") or 0) for x in b)
+                    unit = (b[0].get("units") if b else "USD") or "USD"
+                    lines.append(f"Balance{' of ' + p.get('name') if len(r.json().get('projects')) > 1 else ''}: "
+                                 f"{total:,.2f} {unit}")
+            finally:
+                api.close()
+            return
+        api = self.get_api(pid)
+        if preset == "openrouter" or "openrouter.ai" in base:
+            d = api.request("GET", "/key", timeout=httpx.Timeout(12.0, connect=8.0)).json().get("data") or {}
+            try:
+                c = api.request("GET", "/credits", timeout=httpx.Timeout(12.0, connect=8.0)).json().get("data") or {}
+                if c.get("total_credits") is not None:
+                    lines.append(f"Account credit left: ${float(c['total_credits']) - float(c.get('total_usage') or 0):,.2f}")
+            except APIError:
+                pass
+            if d.get("limit_remaining") is not None:
+                lines.append(f"Left on this key: ${float(d['limit_remaining']):,.2f} (limit ${float(d.get('limit') or 0):,.2f})")
+            if d.get("usage") is not None:
+                lines.append(f"Used with this key so far: ${float(d['usage']):,.2f}")
+            return
+        # everyone else: one tiny request, then read the limits the service sends back
+        model = (self.cfg["tr_model"] if self.cfg["tr_provider"] == pid and self.cfg["tr_model"] else "") or \
+                (self.cfg["ans_model"] if self.cfg["ans_provider"] == pid and self.cfg["ans_model"] else "") or \
+                ((prov.get("caps") or {}).get("chat") or {}).get("model") or (QWEN[0] if pid == "groq" else "")
+        if model:
+            try:
+                chat_compat(api, model, [{"role": "user", "content": "Hi"}], 1, 0, None, lambda t: None)
+            except APIError as e:
+                if isinstance(e, (AuthError,)):
+                    raise
+        chat = (api.limits.get("chat") or {}).get("h") or {}
+        for ln in describe_limits(chat, groq=pid == "groq"):
+            lines.append("Chat (translation, answers): " + ln)
+        audio = (api.limits.get("audio") or {}).get("h") or {}
+        for ln in describe_limits(audio, groq=pid == "groq"):
+            lines.append("Speech to text: " + ln)
+        if pid == "groq":
+            eng = self.engine
+            if eng is not None:
+                fr = [q.left_fraction(time.time()) for _m, q in eng._quotas()]
+                if fr:
+                    lines.append(f"Free speech-to-text time this hour: about {round(max(fr) * 100)}% left")
+            if chat or audio:
+                lines.append("Groq's free plan has no credit — only these limits, which refill by themselves.")
+
+    def api_test_services(self):
+        """Really runs each part once with the chosen service (no backup) and times it."""
+        c = self.cfg
+        results = []
+
+        def service_and_model(task):
+            pid, model = c[f"{task}_provider"], c[f"{task}_model"]
+            if pid != "groq" and (self.provider(pid) or {}).get("kind") == "live" and not model:
+                model = "nova-3"
+            if pid == "groq" and not model:
+                model = {"stt": "whisper-large-v3-turbo", "tr": TRANSLATE_CHAIN[0][0],
+                         "ans": ANSWER_CHAINS[c["answer_mode"]][0][0]}[task]
+            if pid == "llm":
+                model = "local"
+            return pid, model
+
+        def run(task, fn):
+            pid, model = service_and_model(task)
+            prov = self.provider(pid)
+            row = {"task": task, "label": TASKS[task], "service": prov["name"] if prov else pid, "model": model}
+            if pid == "local":
+                row["model"] = LOCAL.info()["name"] or ""
+                t = time.time()
+                if not c["local_model"]:
+                    row.update(ok=False, error="Choose or download a local model first.")
+                else:
+                    self.sync_local()
+                    LOCAL.wait(600)
+                    if not LOCAL.ready():
+                        row.update(ok=False, error=LOCAL.error or "The local model could not be loaded.")
+                    else:
+                        try:
+                            audio, spoken = test_speech()
+                            res = LOCAL.transcribe(audio, "", "en" if spoken else None, None)
+                            heard = (res.get("text") or "").strip()
+                            row.update(ok=True, detail=f"answered in {time.time() - t:.1f} s on the {LOCAL.device}"
+                                       + (f' (heard: "{short(heard, 50)}")' if heard else ""))
+                        except Exception as e:
+                            row.update(ok=False, error=friendly_local_error(e))
+                row["seconds"] = round(time.time() - t, 2)
+                log(f"Test {row['label']} · Local model: " + ("OK " + row.get("detail", "") if row.get("ok") else "FAILED — " + row.get("error", "")),
+                    level="info" if row.get("ok") else "error")
+                results.append(row)
+                return
+            if pid == "llm":
+                row["model"] = llm_label(c["llm_model"])
+                if not c["llm_model"]:
+                    row.update(ok=False, error="Choose or download a local AI model first.")
+                else:
+                    self.sync_local()
+                    end = time.time() + 300
+                    while LLM.state == "loading" and time.time() < end:
+                        time.sleep(0.2)
+                    if not LLM.ready():
+                        row.update(ok=False, error=LLM.error or "The local AI model could not be loaded.")
+                        prov = None
+                if prov and "ok" not in row:
+                    t = time.time()
+                    try:
+                        row.update(fn(LLM, "local", t))
+                        row.setdefault("ok", True)
+                    except APIError as e:
+                        row.update(ok=False, error=str(e))
+                    row["seconds"] = round(time.time() - t, 2)
+                log(f"Test {row['label']} · Local AI: " + ("OK " + row.get("detail", "") if row.get("ok") else "FAILED — " + row.get("error", "")),
+                    level="info" if row.get("ok") else "error")
+                results.append(row)
+                return
+            if not prov or not model:
+                row.update(ok=False, error="Choose a model for this part.")
+            elif not prov["api_key"]:
+                row.update(ok=False, error="This service has no API key yet.")
+            else:
+                t = time.time()
+                try:
+                    if task == "stt" and prov.get("kind") == "live":
+                        row.update(stt_live(prov, model))
+                    else:
+                        row.update(fn(self.get_api(pid), model, t))
+                    row.setdefault("ok", True)
+                except APIError as e:
+                    row.update(ok=False, error=str(e))
+                except Exception as e:
+                    row.update(ok=False, error=short(e))
+                row["seconds"] = round(time.time() - t, 2)
+            log(f"Test {row['label']} · {row['service']} · {row['model']}: " +
+                ("OK " + row.get("detail", "") if row["ok"] else "FAILED — " + row.get("error", "")),
+                level="info" if row["ok"] else "error")
+            results.append(row)
+
+        def stt_live(prov, model):
+            proxy = detect_proxy(c["proxy"])[0] if prov.get("use_proxy", True) else ""
+            secs = deepgram_check(prov["api_key"], proxy, model or "nova-3", fixed_lang(c) or "auto")
+            return {"detail": f"LIVE — connected in {secs:.1f} s; words appear while they are spoken"}
+
+        def stt(client, model, t0):
+            tt = np.arange(32000) / 16000
+            audio = (0.08 * np.sin(2 * np.pi * 180 * tt) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * tt))
+                     + 0.003 * np.sin(2 * np.pi * 2711 * tt)).astype(np.float32)
+            res = client.transcribe(audio, model, fixed_lang(c), None)
+            heard = (res.get("text") or "").strip()
+            return {"detail": f"answered in {time.time() - t0:.1f} s" +
+                              (f' (heard: "{short(heard, 40)}")' if heard else " (test sound has no words — that is fine)")}
+
+        def chat(system, user, check):
+            def fn(client, model, t0):
+                first = [None]
+
+                def on_text(txt):
+                    if first[0] is None and txt.strip():
+                        first[0] = time.time() - t0
+                text = chat_compat(client, model, [{"role": "system", "content": system},
+                                                   {"role": "user", "content": user}],
+                                   300, 0.2, effort_for(model), on_text)
+                ok, why = check(text)
+                if not ok:
+                    return {"ok": False, "error": why + f' Reply was: "{short(text, 80)}"'}
+                return {"detail": f"first words after {first[0] or 0:.1f} s: “{short(text.strip(), 70)}”"}
+            return fn
+
+        has_fa = lambda t: (in_language(t, c["my_language"]), f"The reply is not in {lang_name(c['my_language'])}.")
+        has_text = lambda t: (len(t.strip()) > 5, "The reply is empty.")
+        run("stt", stt)
+        run("tr", chat(translate_system(c), "Translate:\nCan you briefly introduce yourself?", has_fa))
+        run("ans", chat("You help a user in a job interview. Answer in 1-2 short sentences.",
+                        "Question: What is the difference between TCP and UDP?", has_text))
+        return {"ok": True, "results": results}
+
+    # ---- local AI model for translation and answers -----------------------------------------------
+    def llm_state(self):
+        d = self.download.state if self.download else None
+        return {"ok": True, "llm": LLM.info(), "models": find_llm_models(self.cfg["llm_model"]),
+                "catalog": LLM_CATALOG, "download": d, "config": self.public_config()}
+
+    def api_llm_state(self):
+        return self.llm_state()
+
+    def api_llm_choose(self, path=""):
+        path = os.path.abspath(os.path.expanduser(str(path or "").strip().strip('"'))) if path else ""
+        if not path or not os.path.isfile(path) or not path.lower().endswith(".gguf"):
+            return {**self.llm_state(), "ok": False,
+                    "error": "Choose a .gguf model file (for example one downloaded with the button below)."}
+        if "mmproj" in os.path.basename(path).lower():
+            return {**self.llm_state(), "ok": False,
+                    "error": "That file is only the image part of a model — choose the main .gguf file."}
+        with self.lock:
+            self.cfg["llm_model"] = path
+            save_config(self.cfg)
+        log(f"Local AI model chosen: {path} ({round(os.path.getsize(path) / 1e6)} MB)")
+        self.sync_local()
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return self.llm_state()
+
+    def api_llm_use(self, tasks=None):
+        """tasks: which of 'tr' / 'ans' the local AI model does; the others go back to Groq (or stay)."""
+        if isinstance(tasks, str):
+            tasks = [tasks]
+        tasks = [t for t in (tasks or []) if t in ("tr", "ans")]
+        if tasks and not self.cfg["llm_model"]:
+            return {**self.llm_state(), "ok": False, "error": "Choose or download a local AI model first."}
+        with self.lock:
+            for t in ("tr", "ans"):
+                if t in tasks:
+                    self.cfg[f"{t}_provider"], self.cfg[f"{t}_model"] = "llm", ""
+                elif self.cfg[f"{t}_provider"] == "llm":
+                    self.cfg[f"{t}_provider"], self.cfg[f"{t}_model"] = "groq", ""
+            save_config(self.cfg)
+        self.sync_local()
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return self.llm_state()
+
+    def api_llm_download(self, id="", cancel=False):
+        if cancel:
+            if self.download:
+                self.download.cancel.set()
+            return {"ok": True}
+        item = next((m for m in LLM_CATALOG if m["id"] == id), None)
+        if not item:
+            return {"ok": False, "error": "Unknown model."}
+        if self.download and self.download.thread.is_alive():
+            return {"ok": False, "error": "Another download is still running."}
+        try:
+            os.makedirs(MODELS_DIR, exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"Cannot create the models folder ({short(e, 100)})."}
+        proxy = detect_proxy(self.cfg["proxy"])[0]
+
+        def progress(st):
+            self.hub.publish("download", download=st)
+            if st["state"] == "done":
+                if not self.cfg["llm_model"] or not os.path.isfile(self.cfg["llm_model"]):
+                    self.api_llm_choose(st["path"])
+                self.hub.publish("llm", llm=LLM.info())
+                self.hub.toast("ok", f"Model '{st['id']}' downloaded. Press Test to see how fast it is on this computer.")
+            elif st["state"] == "error":
+                self.hub.toast("error", "Download failed: " + st["error"])
+        self.download = ModelDownload(item, proxy, progress)
+        log(f"Downloading local AI model '{item['id']}' (~{item['mb']} MB){' through ' + mask_proxy(proxy) if proxy else ''}")
+        self.download.thread.start()
+        return {"ok": True, "download": self.download.state}
+
+    def api_llm_delete(self, path=""):
+        path = os.path.abspath(str(path or ""))
+        folder = os.path.dirname(path)
+        inside = os.path.normcase(path).startswith(os.path.normcase(os.path.abspath(MODELS_DIR)) + os.sep)
+        if not inside or not path.lower().endswith(".gguf"):
+            return {**self.llm_state(), "ok": False, "error": "Only models in the program's 'models' folder can be deleted here."}
+        with self.lock:
+            if os.path.normcase(path) == os.path.normcase(self.cfg["llm_model"] or ""):
+                self.cfg["llm_model"] = ""
+                for t in ("tr", "ans"):
+                    if self.cfg[f"{t}_provider"] == "llm":
+                        self.cfg[f"{t}_provider"], self.cfg[f"{t}_model"] = "groq", ""
+                save_config(self.cfg)
+        self.sync_local()
+        for i in range(10):
+            try:
+                os.remove(path)
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                time.sleep(0.5)
+        if os.path.exists(path):
+            return {**self.llm_state(), "ok": False, "error": f"The file is still in use. Close the program and delete it by hand: {path}"}
+        if os.path.normcase(folder) != os.path.normcase(os.path.abspath(MODELS_DIR)):
+            try:
+                os.rmdir(folder)                      # its own folder, if nothing else is in it
+            except OSError:
+                pass
+        log(f"Local AI model deleted: {path}")
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return self.llm_state()
+
+    def api_llm_test(self):
+        """Loads the model (if needed) and times one real translation on this computer."""
+        c = self.cfg
+        if not c["llm_model"]:
+            return {"ok": False, "error": "Choose or download a local AI model first."}
+        if LLM.path != c["llm_model"] or LLM.state in ("off", "error"):
+            LLM.load(c["llm_model"])
+        end = time.time() + 240
+        while LLM.state == "loading" and time.time() < end:
+            time.sleep(0.2)
+        if LLM.state != "ready":
+            return {"ok": False, "error": LLM.error or "The model did not load."}
+        first = [None]
+        t = time.time()
+
+        def on_text(x):
+            if first[0] is None and x.strip():
+                first[0] = time.time() - t
+        try:
+            out = LLM.chat_stream("local", [{"role": "system", "content": translate_system(c)},
+                                            {"role": "user", "content": "Translate:\n" + TEST_SENTENCE}],
+                                  120, 0.2, None, on_text)
+        except APIError as e:
+            return {"ok": False, "error": str(e)}
+        total = time.time() - t
+        good = in_language(out, c["my_language"])
+        verdict = ("fast — each translation appears right after the sentence" if total < 3 else
+                   "usable — each translation takes a few seconds" if total < 8 else
+                   "slow on this computer — use a smaller model, or an online service")
+        log(f"Local AI test: first words after {first[0] or total:.1f} s, whole sentence {total:.1f} s, "
+            f"{LLM.speed or '?'} words/s — {verdict}")
+        return {"ok": True, "first": round(first[0] or total, 1), "total": round(total, 1), "speed": LLM.speed,
+                "text": out.strip(), "language_ok": good, "verdict": verdict, **{k: v for k, v in self.llm_state().items() if k != "ok"}}
+
+    # ---- local model (on this computer) ---------------------------------------------------
+    def local_in_use(self):
+        c = self.cfg
+        return bool(c["local_model"]) and (c["local_preview"] or c["stt_provider"] == "local")
+
+    def sync_local(self):
+        """Loads the chosen model when something uses it; frees the memory when nothing does."""
+        c = self.cfg
+        if self.local_in_use():
+            LOCAL.load(c["local_model"], c["local_device"])
+        else:
+            LOCAL.unload()
+        if c["llm_model"] and "llm" in (c["tr_provider"], c["ans_provider"]):
+            LLM.load(c["llm_model"])
+        else:
+            LLM.unload()
+
+    def preview_plan(self):
+        """(seconds between previews, seconds of speech before the first one) for the other side; 0 = off."""
+        c = self.cfg
+        if LOCAL.ready() and (c["local_preview"] or c["stt_provider"] == "local") and not local_too_slow():
+            return c["local_preview_ms"] / 1000, 0.8
+        if c["live_preview"]:
+            return preview_seconds(c), 1.2
+        return 0.0, 1.2
+
+    def spec_plan(self):
+        """The local model writes the final text: try it the moment the speaker pauses."""
+        c = self.cfg
+        return bool(LOCAL.ready() and c["stt_provider"] == "local" and not local_too_slow())
+
+    def apply_preview(self):
+        every, first = self.preview_plan()
+        spec = self.spec_plan()
+        for cap in self.captures:
+            if cap.source == "them" and cap.tap is None:
+                cap.preview_every, cap.preview_min = every, first
+                cap.spec_final = spec
+                if cap.seg:
+                    cap.seg.preview_every, cap.seg.preview_min = every, first
+                    cap.seg.spec_final = spec
+
+    def _local_changed(self):
+        if LOCAL.state == "ready":
+            b = self.cfg.get("local_bench") or {}
+            if b.get("path") == LOCAL.path and b.get("host") == platform_node():
+                LOCAL.short_ok = bool(b.get("short"))        # what the speed test found on this computer
+                if not LOCAL.quick_avg and b.get("quick"):
+                    LOCAL.quick_avg = float(b["quick"])
+        self.hub.publish("local", local=LOCAL.info())
+        self.apply_preview()
+        eng = self.engine
+        if eng and LOCAL.state == "ready":
+            eng.stt_dead.discard(("local", ""))       # a new model is ready: use it again
+        if eng:
+            self.hub.publish("speech_mode", **eng.speech_mode())
+            if LOCAL.state == "error" and self.running and self.local_in_use():
+                self.hub.toast("error", "Local model: " + LOCAL.error + (" Groq is used instead." if self.cfg["api_key"] else ""))
+
+    def local_state(self):
+        return {"ok": True, "local": LOCAL.info(), "models": find_models(self.cfg["local_model"]),
+                "catalog": LOCAL_CATALOG, "download": self.download.state if self.download else None,
+                "models_dir": MODELS_DIR, "host": platform_node()}
+
+    def api_local_state(self):
+        return self.local_state()
+
+    def api_local_choose(self, path="", browse=False):
+        """Uses a model folder (or model.bin inside it). browse=True opens the Windows file dialog."""
+        if browse:
+            try:
+                path = pick_file_dialog(self.cfg["local_model"] or "")
+            except APIError as e:
+                return {"ok": False, "error": str(e)}
+            except Exception as e:
+                return {"ok": False, "error": "Could not open the file dialog: " + short(e)}
+            if not path:
+                return {"ok": True, "cancelled": True, **self.local_state()}
+        folder, why = model_folder(path)
+        if not folder:
+            return {"ok": False, "error": why}
+        with self.lock:
+            changed = os.path.normcase(folder) != os.path.normcase(self.cfg["local_model"] or "")
+            self.cfg["local_model"] = folder
+            if changed:
+                self.cfg["local_bench"] = {}
+            if not self.cfg["local_preview"] and self.cfg["stt_provider"] != "local":
+                self.cfg["local_preview"] = True          # a chosen model is meant to be used; switch off below
+            save_config(self.cfg)
+        log(f"Local model chosen: {folder} ({folder_mb(folder)} MB)")
+        self.sync_local()
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return {**self.local_state(), "config": self.public_config()}
+
+    def api_local_use(self, role="preview"):
+        """role: preview (local live text, final text from the service chosen for speech to text),
+        all (the local model does all speech to text), off."""
+        with self.lock:
+            c = self.cfg
+            if role != "off" and not c["local_model"]:
+                return {"ok": False, "error": "Choose or download a model first."}
+            if role == "all":
+                c["stt_provider"], c["stt_model"], c["local_preview"] = "local", "", True
+            elif role == "preview":
+                c["local_preview"] = True
+                if c["stt_provider"] == "local":
+                    c["stt_provider"], c["stt_model"] = "groq", ""
+            else:
+                c["local_preview"] = False
+                if c["stt_provider"] == "local":
+                    c["stt_provider"], c["stt_model"] = "groq", ""
+            b = c.get("local_bench") or {}
+            if role != "off" and b.get("every") and b.get("host") == platform_node():
+                c["local_preview_ms"] = max(c["local_preview_ms"], b["every"]) if role == "all" else b["every"]
+            save_config(c)
+        log(f"Local model use: {role}")
+        self.sync_local()
+        self.apply_preview()
+        if self.engine:
+            self.hub.publish("speech_mode", **self.engine.speech_mode())
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return {**self.local_state(), "config": self.public_config()}
+
+    def api_local_test(self):
+        """Loads the model (if needed) and measures it on this computer."""
+        c = self.cfg
+        if not c["local_model"]:
+            return {"ok": False, "error": "Choose or download a model first."}
+        if load_faster_whisper() is None:
+            return {"ok": False, "error": "The local model engine is not included in this program version. "
+                                          "Build the exe again with build_exe.bat. (" + (_fw["error"] or "") + ")"}
+        LOCAL.load(c["local_model"], c["local_device"])
+        LOCAL.wait(600)
+        if not LOCAL.ready():
+            return {"ok": False, "error": LOCAL.error or "The model could not be loaded."}
+        try:
+            b = LOCAL.bench()
+        except Exception as e:
+            log("local test:", traceback.format_exc())
+            return {"ok": False, "error": friendly_local_error(e)}
+        b.update(at=time.time(), host=platform_node(), model=LOCAL.info()["name"], path=LOCAL.path,
+                 device=LOCAL.device, load_secs=LOCAL.load_secs)
+        with self.lock:
+            self.cfg["local_bench"] = b
+            save_config(self.cfg)
+        log(f"Local model test ({b['model']}, {b['device']}): {b['quick']} s per live update, "
+            f"{b['final']} s per sentence, heard \"{short(b['heard'], 60)}\" — {b['text']}")
+        if not self.local_in_use():
+            self.sync_local()                      # it was loaded only for the test
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return {**self.local_state(), "bench": b, "config": self.public_config()}
+
+    def api_local_download(self, id="", cancel=False):
+        if cancel:
+            if self.download:
+                self.download.cancel.set()
+            return {"ok": True}
+        item = next((m for m in LOCAL_CATALOG if m["id"] == id), None)
+        if not item:
+            return {"ok": False, "error": "Unknown model."}
+        if self.download and self.download.thread.is_alive():
+            return {"ok": False, "error": "Another download is still running."}
+        try:
+            os.makedirs(MODELS_DIR, exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"Cannot create the models folder next to the program ({short(e, 100)}). "
+                                          "Move the program to a normal folder (not Program Files)."}
+        proxy = detect_proxy(self.cfg["proxy"])[0]
+
+        def progress(st):
+            self.hub.publish("download", download=st)
+            if st["state"] == "done":
+                if not self.cfg["local_model"] or not model_folder(self.cfg["local_model"])[0]:
+                    self.api_local_choose(st["path"])
+                self.hub.publish("local", local=LOCAL.info())
+                self.hub.toast("ok", f"Model '{st['id']}' downloaded. Press Test to see how fast it is on this computer.")
+            elif st["state"] == "error":
+                self.hub.toast("error", "Download failed: " + st["error"])
+        self.download = ModelDownload(item, proxy, progress)
+        log(f"Downloading model '{item['id']}' (~{item['mb']} MB){' through ' + proxy if proxy else ''}")
+        self.download.thread.start()
+        return {"ok": True, "download": self.download.state}
+
+    def api_local_delete(self, path=""):
+        folder, _ = model_folder(path)
+        if not folder or os.path.normcase(os.path.dirname(folder)) != os.path.normcase(os.path.abspath(MODELS_DIR)):
+            return {"ok": False, "error": "Only models in the program's 'models' folder can be deleted here."}
+        with self.lock:
+            if os.path.normcase(folder) == os.path.normcase(self.cfg["local_model"] or ""):
+                self.cfg["local_model"], self.cfg["local_preview"], self.cfg["local_bench"] = "", False, {}
+                if self.cfg["stt_provider"] == "local":
+                    self.cfg["stt_provider"] = "groq"
+                save_config(self.cfg)
+        self.sync_local()
+        LOCAL.wait(5)
+        for i in range(10):                        # the engine or an antivirus may hold a file for a moment
+            shutil.rmtree(folder, ignore_errors=True)
+            if not os.path.exists(folder):
+                break
+            time.sleep(0.5)
+        if os.path.exists(folder):
+            log(f"Local model could not be fully deleted: {folder}", level="warn")
+            return {**self.local_state(), "config": self.public_config(), "ok": False,
+                    "error": "Some files of this model are still in use. Close the program, delete this folder "
+                             f"by hand, then open the program again: {folder}"}
+        log(f"Local model deleted: {folder}")
+        self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
+        return {**self.local_state(), "config": self.public_config()}
+
+    def api_local_open_folder(self):
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        return self._reveal(MODELS_DIR)
+
+    def api_test_proxy(self, proxy=None):
+        """Step by step: which proxy, is the VPN app listening, does it reach Groq."""
+        import socket
+        steps = []
+        p, src = detect_proxy(self.cfg["proxy"] if proxy is None else proxy)
+        if p:
+            steps.append({"ok": True, "text": ("Using your Windows proxy: " if src == "system" else "Using: ") + mask_proxy(p)})
+            try:
+                u0 = urllib.parse.urlsplit(p)
+                good = u0.scheme in ("http", "https", "socks5", "socks5h") and bool(u0.hostname) and bool(u0.port)
+            except ValueError:
+                good = False
+            if not good:
+                steps.append({"ok": False, "text": "This proxy address looks wrong. It should look like "
+                                                   "http://127.0.0.1:10809 or socks5://127.0.0.1:10808"})
+                return {"ok": False, "steps": steps}
+            u = urllib.parse.urlsplit(p)
+            host, port = u.hostname or "", u.port or (1080 if u.scheme.startswith("socks") else 80)
+            try:
+                import ipaddress
+                near = ipaddress.ip_address(socket.gethostbyname(host))
+                near = near.is_loopback or near.is_private
+            except (OSError, ValueError):
+                near = False
+            try:
+                if near:                                 # only a proxy on this computer or the home network is probed
+                    t = time.time()
+                    with socket.create_connection((host, port), timeout=2):
+                        pass
+                    steps.append({"ok": True, "text": f"The proxy answers on {host}:{port} ({round((time.time() - t) * 1000)} ms)."})
+            except OSError:
+                steps.append({"ok": False, "text": f"Nothing answers on {host}:{port}. Is the proxy (or VPN app) running, and is this the right port? "
+                                                   "In v2rayN the HTTP port is usually 10809 and SOCKS 10808."})
+                log(f"Proxy test: nothing listens on {host}:{port}", level="error")
+                return {"ok": False, "steps": steps}
+        else:
+            steps.append({"ok": True, "text": "No proxy — direct connection (fine for most connections)."})
+        try:
+            client = GroqAPI(self.cfg["api_key"] or "no-key-test", p, BASE_URL, "Groq")
+        except APIError as e:
+            steps.append({"ok": False, "text": str(e)})
+            return {"ok": False, "steps": steps}
+        t = time.time()
+        try:
+            client.request("GET", "/models", timeout=httpx.Timeout(10.0, connect=8.0))
+            reached = True
+        except AuthError:
+            reached = True                          # Groq answered (it only wants a key) -> the route works
+        except APIError as e:
+            reached = False
+            steps.append({"ok": False, "text": "Could not reach Groq through this route: " + str(e)})
+        finally:
+            client.close()
+        if reached:
+            ms = round((time.time() - t) * 1000)
+            slow = " That is slow — a faster connection or server will make the whole program quicker." if ms > 900 else ""
+            steps.append({"ok": True, "text": f"Groq is reachable through this route ({ms} ms).{slow}"})
+        log("Proxy test: " + " | ".join(("OK " if x["ok"] else "FAIL ") + x["text"] for x in steps),
+            level="info" if reached else "error")
+        return {"ok": reached, "steps": steps}
+
+    def api_audio_check(self):
+        if self.running or self.stopping:
+            return {"ok": False, "error": "Stop the meeting first, then run the check."}
+        with self.lock:
+            self._stop_captures()
+            self.monitor_until = 0.0
+        self.publish_running()
+        log("----- audio check started -----")
+        try:
+            lines = audio_check(self.cfg)
+        except Exception as e:
+            lines = [f"Audio check crashed: {e}", traceback.format_exc()]
+        for line in lines:
+            log(line, level="diag")
+        log("----- audio check finished -----")
+        return {"ok": True, "report": "\n".join(lines)}
+
+    def api_clear_log(self):
+        log_flush()
+        with _log_lock, _log_file_lock:
+            LOG_LINES.clear()
+            try:
+                if os.path.exists(LOG_PATH):
+                    os.replace(LOG_PATH, LOG_PATH + ".old")      # the previous log is kept once as app.log.old
+            except OSError:
+                pass
+        self.hub.publish("log_cleared")
+        log(f"Log cleared · Meeting Assistant {VERSION}")
+        return {"ok": True}
+
+    def api_open_log(self):
+        if not os.path.exists(LOG_PATH):
+            return {"ok": False, "error": "There is no log file yet."}
+        return self._reveal(LOG_PATH)
+
+    def api_ui_error(self, message="", stack=""):
+        log("UI error:", short(message, 300), short(stack, 600))
+        return {"ok": True}
+
+    # ---- background ticker -------------------------------------------------------------
+    def _ticker(self):
+        state = {"last_save": 0.0, "last_stats": 0.0, "last_sent": None, "reopened": 0.0, "errors": 0}
+        while not self.closing.is_set():
+            time.sleep(0.1)
+            try:
+                self._tick(state)
+            except Exception:
+                state["errors"] += 1
+                if state["errors"] <= 5:
+                    log("ticker problem (the program keeps running):", traceback.format_exc(), level="error")
+
+    def _tick(self, state):
+        last_save, last_stats, last_sent = state["last_save"], state["last_stats"], state["last_sent"]
+        now = time.time()
+        caps = list(self.captures)
+        if caps:
+            lv = {"me": None, "them": None}
+            for c in caps:
+                lv[c.source] = round(min(1.0, (c.level ** 0.5) * 2.4), 3)
+                if c.error and c.error not in self.reported:
+                    self.reported.add(c.error)
+                    self.hub.toast("error", ("Microphone: " if c.source == "me" else "Computer sound: ") + c.error)
+            self.hub.publish("level", **lv)
+        if self.monitor_until and now > self.monitor_until:
+            with self.lock:
+                if self.monitor_until and not self.running:
+                    self._stop_captures()
+                self.monitor_until = 0.0
+            self.publish_running()
+        if now - last_save > 1.5:
+            last_save = now
+            for s in (self.session, self.last_session):
+                if s:
+                    s.save_if_dirty()
+        if now - last_stats > 1.0:
+            last_stats = now
+            with _usage_lock:
+                usage = {k: dict(v) for k, v in USAGE.items()}
+            rec = self.recording
+            eng = self.engine or (rec.engine if rec else None)
+            try:
+                quota = eng.quota_info() if eng else None
+            except Exception:
+                quota = None
+            payload = {"stats": self.stats.summary(), "quota": quota, "usage": usage}
+            if payload != last_sent:
+                last_sent = payload
+                self.hub.publish("stats", **payload)
+        if self.hub.clients and now - self.last_ping > 15 and self.used_services():
+            self.last_ping = now
+            threading.Thread(target=self._keepalive, daemon=True).start()
+        eng = self.engine
+        if eng is not None and self.running and now - state.get("speed_check", 0) > 1.0:
+            state["speed_check"] = now
+            eng._check_local_speed()               # local live text comes back when the computer is fast again
+        for c in list(self.captures):
+            note = getattr(c, "error_note", "")
+            if note:
+                c.error_note = ""
+                self.hub.toast("warn", note)
+        state["last_save"], state["last_stats"], state["last_sent"] = last_save, last_stats, last_sent
+        # the window was closed -> finish and quit; during a meeting or a recording: open the window again
+        es = self.hub.empty_since
+        if self.hub.ever and es and now - es > 12:
+            if self.running or self.stopping or self.recording:
+                if now - state["reopened"] > 20:
+                    state["reopened"] = now
+                    log("The window disappeared during a meeting — opening it again", level="warn")
+                    threading.Thread(target=open_window, args=(self.url,), daemon=True).start()
+            else:
+                self.shutdown()
+
+    def _keepalive(self):
+        self.last_ping = time.time()
+        first = True
+        for pid in self.used_services():
+            if pid != "groq":
+                name = (self.provider(pid) or {}).get("name", pid)
+                try:
+                    t0 = time.time()
+                    self.get_api(pid).ping_light(self.cfg["tr_model"] or "x")   # keeps that connection warm
+                    if first and not self.cfg["api_key"]:
+                        self.set_net(True, (time.time() - t0) * 1000, name=name)
+                except APIError as e:
+                    if first and not self.cfg["api_key"] and e.status not in (400, 404, 405):
+                        self.set_net(False, None, str(e), name=name)
+                    elif first and not self.cfg["api_key"]:
+                        self.set_net(True, None, name=name)
+                except Exception as e:
+                    if first and not self.cfg["api_key"]:
+                        self.set_net(False, None, short(e), name=name)
+                first = False
+        if not self.cfg["api_key"]:
+            return
+        try:
+            ms = self.get_api().ping_light()   # keeps the connection warm between questions
+            self.set_net(True, ms)
+        except AuthError as e:
+            self.set_net(False, None, str(e))
+        except APIError as e:
+            self.set_net(False, None, str(e))
+        except Exception as e:
+            self.set_net(False, None, short(e))
+
+    def note_request(self):
+        """Any real request also keeps the connection warm - no extra ping needed right after it."""
+        self.last_ping = time.time()
+
+    def shutdown(self):
+        if self.closing.is_set():
+            return
+        log("shutting down")
+        try:
+            if self.running:
+                self.api_stop()
+            end = time.time() + 32                          # finishing waits up to 25 s for the last sentences
+            while self.stopping and time.time() < end:     # let the stop thread finish its work
+                time.sleep(0.2)
+            for s in (self.session, self.last_session):
+                if s:
+                    s.save_if_dirty()
+            if self.download:
+                self.download.cancel.set()
+            rec = self.recording
+            if rec:
+                rec.cancel.set()
+                rec.session.save_if_dirty()
+        except Exception:
+            log("shutdown error:", traceback.format_exc())
+        self.closing.set()
+
+
+# ----------------------------------------------------------------------------
+# Local web server
+# ----------------------------------------------------------------------------
+STALE_PAGE = """<!doctype html><meta charset="utf-8"><title>Meeting Assistant</title>
+<body style="font-family:Segoe UI,sans-serif;display:grid;place-items:center;height:90vh;color:#333;background:#f6f7fb">
+<div style="max-width:440px;text-align:center"><h2>This window is out of date</h2>
+<p>Meeting Assistant was started again and opened a new window. Close this one — or start the program from
+its desktop shortcut.</p></div></body>"""
+
+
+def mask_proxy(p):
+    """A proxy address for the screen and the log: a password in it is hidden."""
+    return re.sub(r"(://[^:@/]+):[^@/]+@", r"\1:***@", p or "")
+
+
+def token_ok(given, token):
+    """Constant-time check; anything odd (missing, non-English letters) is simply 'wrong'."""
+    try:
+        return bool(given) and secrets.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
+    except Exception:
+        return False
+
+
+class Handler(BaseHTTPRequestHandler):
+    timeout = 60                                    # a stalled connection never blocks a thread for ever
+    server_version = "MeetingAssistant"
+    protocol_version = "HTTP/1.1"
+    app: App = None
+
+    def log_message(self, *args):
+        pass
+
+    def _host_ok(self):
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        return host in ("127.0.0.1", "localhost")
+
+    def _cookie_key(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "ma_key":
+                return v
+        return ""
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8", extra=None):
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(code)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if not self._host_ok():
+            return self._send(403, "{}")
+        path, _, qs = self.path.partition("?")
+        params = urllib.parse.parse_qs(qs)
+        app = self.app
+        key = params.get("t", [""])[0] or self._cookie_key()
+        if path == "/":
+            # the page carries the key for the API: only a window opened by the program (?t=key) or
+            # reloaded from it (cookie) gets it — never another program that simply asks for "/"
+            if not token_ok(key, app.token):
+                return self._send(403, STALE_PAGE, "text/html; charset=utf-8")
+            try:
+                with open(os.path.join(WEB_DIR, "index.html"), "r", encoding="utf-8") as f:
+                    html_text = f.read().replace("__TOKEN__", app.token)
+            except OSError:
+                return self._send(500, "web/index.html is missing", "text/plain")
+            return self._send(200, html_text, "text/html; charset=utf-8",
+                              extra={"Set-Cookie": f"ma_key={app.token}; Path=/; HttpOnly; SameSite=Strict"})
+        if path == "/events":
+            if not token_ok(key, app.token):
+                return self._send(403, "{}")
+            return self._events()
+        if path.startswith("/static/"):
+            name = os.path.basename(path)
+            types_ = {".woff2": "font/woff2", ".png": "image/png", ".svg": "image/svg+xml"}
+            ext = os.path.splitext(name)[1].lower()
+            fp = os.path.join(WEB_DIR, name)
+            if ext in types_ and os.path.isfile(fp):
+                with open(fp, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", types_[ext])
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-cache")   # checked again after an update
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            return self._send(404, "{}")
+        if path == "/ping" and self.headers.get("X-Ping") == "1":
+            return self._send(200, json.dumps({"app": "meeting-assistant"}))
+        return self._send(404, "{}")
+
+    def do_POST(self):
+        if not self._host_ok() or not token_ok(self.headers.get("X-Token"), self.app.token):
+            self.close_connection = True            # its body is not read: it must not become the next request
+            return self._send(403, "{}")
+        path = self.path.partition("?")[0]
+        if not path.startswith("/api/"):
+            self.close_connection = True
+            return self._send(404, "{}")
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:
+            self.close_connection = True
+            return self._send(400, json.dumps({"ok": False, "error": "Bad request."}))
+        if n > 2_000_000:
+            self.close_connection = True            # the rest is not read: never take it as the next request
+            return self._send(413, json.dumps({"ok": False, "error": "Request too large."}))
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+        except (ValueError, OSError):
+            body = None
+        if not isinstance(body, dict):              # broken or cut-off request: never act on half of it
+            self.close_connection = True
+            return self._send(400, json.dumps({"ok": False, "error": "Bad request."}))
+        result = self.app.call(path[5:], body)
+        try:
+            out = json.dumps(result, ensure_ascii=False, default=float)
+        except (TypeError, ValueError) as e:
+            log("answer could not be sent:", path, short(e), level="error")
+            return self._send(500, json.dumps({"ok": False, "error": "Internal error: " + short(e, 100)}))
+        return self._send(200, out)
+
+    def _events(self):
+        app = self.app
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        self.close_connection = True
+        q = app.hub.subscribe()
+        if time.time() - app.last_ping > 10:
+            app.warm_async()
+        try:
+            self.wfile.write(b"retry: 1500\n\ndata: " + json.dumps(app.hello(), ensure_ascii=False, default=float).encode("utf-8") + b"\n\n")
+            self.wfile.flush()
+            while CONFIG_NOTE:
+                app.hub.toast("warn", CONFIG_NOTE.pop(0))     # in the order they happened
+            if APP_DIR_MOVED and not getattr(app, "moved_told", False):
+                app.moved_told = True
+                app.hub.toast("info", f"The program's folder is read-only, so settings and meetings are kept in {DATA_DIR}")
+            while not app.closing.is_set():
+                if q.stale:
+                    break                        # the page reconnects by itself and receives a fresh copy
+                try:
+                    msgs = [q.get(timeout=10)]
+                except queue.Empty:
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+                    continue
+                while len(msgs) < 100:
+                    try:
+                        msgs.append(q.get_nowait())
+                    except queue.Empty:
+                        break
+                self.wfile.write(b"".join(b"data: " + m.encode("utf-8") + b"\n\n" for m in msgs))
+                self.wfile.flush()
+        except OSError:
+            pass
+        finally:
+            app.hub.unsubscribe(q)
+
+
+def find_existing(port):
+    if not port:
+        return None
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/ping", headers={"X-Ping": "1"})
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.5) as r:
+            data = json.loads(r.read())
+            if data.get("app") == "meeting-assistant":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def find_browser():
+    env = os.environ
+    bases = [env.get("PROGRAMFILES(X86)"), env.get("PROGRAMFILES"), env.get("LOCALAPPDATA")]
+    cands = [os.path.join(b, "Microsoft", "Edge", "Application", "msedge.exe") for b in bases if b]
+    cands += [os.path.join(b, "Google", "Chrome", "Application", "chrome.exe") for b in bases if b]
+    return next((c for c in cands if os.path.exists(c)), None)
+
+
+WINDOW_CACHES = ("Default/Cache", "Default/Code Cache", "Default/GPUCache", "Default/DawnCache",
+                 "Default/DawnGraphiteCache", "Default/DawnWebGPUCache", "Default/Service Worker",
+                 "GrShaderCache", "GraphiteDawnCache", "ShaderCache", "component_crx_cache",
+                 "extensions_crx_cache", "Crashpad/reports", "BrowserMetrics", "Default/optimization_guide_model_store",
+                 "OptimizationHints", "Safe Browsing", "Subresource Filter", "hyphen-data", "WidevineCdm")
+
+
+def trim_window_profile():
+    """The window (Edge) keeps caches that can grow to hundreds of MB. They are not
+    needed - the page is on this computer - so they are removed before each start."""
+    import shutil
+    for rel in WINDOW_CACHES:
+        shutil.rmtree(os.path.join(WINDOW_PROFILE, *rel.split("/")), ignore_errors=True)
+
+
+def open_window(url):
+    if os.environ.get("MA_NO_BROWSER"):
+        return
+    try:
+        trim_window_profile()
+    except Exception as e:
+        log("could not trim the window cache:", e)
+    exe = find_browser()
+    if exe:
+        try:
+            args = [exe, f"--app={url}", f"--user-data-dir={WINDOW_PROFILE}",
+                    "--no-first-run", "--no-default-browser-check",
+                    "--disable-features=Translate,msEdgeTranslate,msUndersideButton",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    # keep the window's own data tiny (it only shows a local page)
+                    "--disk-cache-size=4194304", "--disable-extensions", "--disable-sync",
+                    "--disable-component-update", "--disable-background-networking", "--no-pings",
+                    "--disable-breakpad"]
+            if not os.path.isdir(WINDOW_PROFILE):
+                args.append("--window-size=1280,860")
+            subprocess.Popen(args)
+            return
+        except OSError as e:
+            log("could not start browser:", e)
+    webbrowser.open(url)
+
+
+def message_box(text):
+    log("fatal:", text)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, "Meeting Assistant", 0x10)
+            return
+        except Exception:
+            pass
+    try:
+        print(text, file=sys.stderr)
+    except Exception:
+        pass
+
+
+def make_shortcut():
+    """Desktop shortcut that starts the program without a console window."""
+    q = lambda x: x.replace("'", "''")
+    if FROZEN:
+        target, args, icon = sys.executable, "", sys.executable
+    else:
+        target = os.path.join(APP_DIR, "venv", "Scripts", "pythonw.exe")
+        args = '"' + os.path.join(APP_DIR, "app.py") + '"'
+        icon = os.path.join(APP_DIR, "icon.ico")
+    ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut("
+          "[Environment]::GetFolderPath('Desktop')+'\\Meeting Assistant.lnk');"
+          f"$s.TargetPath='{q(target)}';"
+          f"$s.Arguments='{q(args)}';"
+          f"$s.WorkingDirectory='{q(APP_DIR)}';"
+          f"$s.Description='Meeting Assistant';"
+          + (f"$s.IconLocation='{q(icon)}';" if os.path.exists(icon) else "")
+          + "$s.Save()")
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                       capture_output=True, text=True)
+    msg = "Desktop shortcut created." if r.returncode == 0 else "Could not create the shortcut: " + r.stderr[-300:]
+    log(msg)
+    try:
+        print(msg)
+    except Exception:
+        pass
+
+
+WIN_TUNE = {}
+
+
+def tune_windows_process():
+    """The program has no window of its own (its screen is an Edge window), so Windows may treat it as
+    background work: lower CPU speed ("efficiency mode"/EcoQoS) and the slow cores of new laptops.
+    That made the local speech model several times slower. This switches that off for this program."""
+    if sys.platform != "win32":
+        return WIN_TUNE
+    import ctypes
+    import ctypes.wintypes as wt
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wt.HANDLE
+        hp = k32.GetCurrentProcess()
+
+        class PPTS(ctypes.Structure):
+            _fields_ = [("Version", wt.ULONG), ("ControlMask", wt.ULONG), ("StateMask", wt.ULONG)]
+        # (priority stays NORMAL: a higher one could make Teams/Zoom audio stutter on a 4-core laptop)
+        try:
+            k32.SetProcessInformation.argtypes = [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.DWORD]
+            ok = False
+            for mask in (0x1 | 0x4, 0x1):     # Windows 11 knows both flags; Windows 10 only EXECUTION_SPEED
+                st = PPTS(1, mask, 0)          # StateMask 0 = never throttle this program
+                if k32.SetProcessInformation(hp, 4, ctypes.byref(st), ctypes.sizeof(st)):
+                    ok = True
+                    break
+            WIN_TUNE["no_throttling"] = ok
+        except Exception:
+            WIN_TUNE["no_throttling"] = False
+        try:
+            ctypes.WinDLL("winmm").timeBeginPeriod(1)
+        except Exception:
+            pass
+        # hybrid processors: how many fast (P) cores?
+        n = wt.ULONG(0)
+        k32.GetSystemCpuSetInformation.argtypes = [ctypes.c_void_p, wt.ULONG, ctypes.POINTER(wt.ULONG), wt.HANDLE, wt.ULONG]
+        k32.GetSystemCpuSetInformation(None, 0, ctypes.byref(n), hp, 0)
+        if n.value:
+            buf = (ctypes.c_ubyte * n.value)()
+            if k32.GetSystemCpuSetInformation(buf, n, ctypes.byref(n), hp, 0):
+                raw, off, sets = bytes(buf), 0, []
+                while off + 20 <= n.value:
+                    size = int.from_bytes(raw[off:off + 4], "little")
+                    if size <= 0:
+                        break
+                    if int.from_bytes(raw[off + 4:off + 8], "little") == 0:
+                        sets.append((int.from_bytes(raw[off + 12:off + 14], "little"), raw[off + 15], raw[off + 18]))
+                    off += size
+                if sets:
+                    top = max(x[2] for x in sets)
+                    WIN_TUNE["hybrid"] = len({x[2] for x in sets}) > 1
+                    WIN_TUNE["cores"] = len({(x[0], x[1]) for x in sets})
+                    WIN_TUNE["fast_cores"] = len({(x[0], x[1]) for x in sets if x[2] == top})
+    except Exception as e:
+        WIN_TUNE["error"] = short(e, 100)
+    return WIN_TUNE
+
+
+def single_instance():
+    """True if no other copy is running (a double-click on the slow-starting exe must not start two)."""
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    SINGLE["mutex"] = k32.CreateMutexW(None, False, "Local\\MeetingAssistant.single")
+    return ctypes.get_last_error() != 183          # ERROR_ALREADY_EXISTS
+
+
+SINGLE = {}
+
+
+def saved_port():
+    """(port, key) of the running copy, as it wrote them into Data/.port."""
+    try:
+        with open(PORT_FILE) as f:
+            lines = f.read().split()
+        return int(lines[0]), (lines[1] if len(lines) > 1 else "")
+    except (OSError, ValueError, IndexError):
+        return 0, ""
+
+
+def running_url():
+    """The window address of an already running copy (None if there is none)."""
+    port, key = saved_port()
+    for p in dict.fromkeys((port, DEFAULT_PORT)):
+        if p and key and find_existing(p):
+            return f"http://127.0.0.1:{p}/?t={key}"
+    return None
+
+
+def main():
+    if "--make-shortcut" in sys.argv:
+        return make_shortcut()
+    existing = running_url()
+    if existing:                                  # already running -> just show its window
+        open_window(existing)
+        return
+    if not single_instance():
+        for _ in range(80):                       # the other copy is still starting: wait for it, then show it
+            time.sleep(0.5)
+            existing = running_url()
+            if existing:
+                open_window(existing)
+                return
+        message_box("Meeting Assistant is already running.")
+        return
+    tune_windows_process()
+    app = App()
+    Handler.app = app
+    if sys.platform == "win32":
+        ThreadingHTTPServer.allow_reuse_address = False
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", DEFAULT_PORT), Handler)
+    except OSError:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    base = f"http://127.0.0.1:{server.server_address[1]}/"
+    app.url = base + "?t=" + app.token             # the window's address carries the key (never logged)
+    try:
+        with open(PORT_FILE, "w") as f:
+            f.write(f"{server.server_address[1]}\n{app.token}\n")
+    except OSError:
+        pass
+    threading.Thread(target=server.serve_forever, daemon=True, name="http").start()
+    log(f"Meeting Assistant {VERSION} started at {base} · Python {sys.version.split()[0]} · "
+        f"HTTP/2 {'on' if HTTP2 else 'off'} · soundfile {'ok' if sf else 'missing'}")
+    if WIN_TUNE:
+        log("Windows speed settings: " + ", ".join(f"{k}={v}" for k, v in WIN_TUNE.items()))
+    if APP_DIR_MOVED:
+        log(f"The program folder {APP_DIR_MOVED} is read-only — settings and meetings are kept in {DATA_DIR}", level="warn")
+    if TIDIED:
+        log("Tidied up: moved " + ", ".join(TIDIED) + f" into {DATA_DIR}")
+    open_window(app.url)
+    try:
+        app.closing.wait()
+    except KeyboardInterrupt:
+        app.shutdown()
+    server.shutdown()
+    log_flush()                                         # the last log lines reach the file
+    try:
+        sys.stdout and sys.stdout.flush()
+        sys.stderr and sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        message_box("Meeting Assistant could not start:\n\n" + traceback.format_exc()[-1500:])
+        sys.exit(1)
