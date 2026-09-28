@@ -6877,6 +6877,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
+        if self.close_connection:
+            self.send_header("Connection", "close")          # tell the other side not to send more on it
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
