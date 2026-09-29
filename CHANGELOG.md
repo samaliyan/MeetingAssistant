@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.2.1]
+
+Same as 6.2 plus the last fixes: the conversation view while you answer (turns grouped, your own lines in a different colour, a "They said" bar), the exe build fix, and the Windows test fix. This release exists because the tag v6.2 had already been published.
+
 ## [6.2]
 
 New tools. Nothing that worked before changes; every new part is optional and off until you use it.

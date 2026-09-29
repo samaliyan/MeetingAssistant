@@ -1,4 +1,4 @@
-# Meeting Assistant — User Guide (version 6.2)
+# Meeting Assistant — User Guide (version 6.2.1)
 
 ## Version 6.2
 
