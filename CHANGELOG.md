@@ -22,6 +22,10 @@ New tools. Nothing that worked before changes; every new part is optional and of
 - **Hide from screen sharing** (Setup, Display): the window is drawn black / invisible to screen sharing.
   Needs the optional `pywebview` package (WebView2); the program shows a red "NOT hidden" mark when it could not do it.
   **Warning:** some companies forbid using an assistant in interviews. You are responsible for following their rules.
+- **Easier to follow while you answer**: lines of the same person that follow each other are grouped as one turn (the
+  name is shown once), your own lines have a colour of their own, and when your new lines push the other side's last
+  question out of view, a bar at the top of the transcript keeps showing what they said (with its translation).
+  Press the bar to read all of it, press again to jump to the line, or close it with the cross.
 - **Check models** (Setup, Services): asks every service which models it has now and shows only the ones that exist and
   are not marked old (speech to text, translation and answers, picture reading). It tells you which of your chosen models
   is gone and what to try instead. Groq's built-in choices are checked while you work; if they disappear, current Groq

@@ -194,6 +194,22 @@ button.chip:hover{filter:brightness(.97)}
 .entry.pending.transcribing .wave{display:none}
 .entry.pending.transcribing .skel{display:flex}
 
+/* conversation flow: my lines look different, lines of one turn are grouped, and the last thing they said stays in view */
+.entry.me{background:linear-gradient(90deg,transparent,var(--me-soft) 140%);border-inline-end:3px solid var(--me)}
+.entry.me .fa{opacity:.78;font-size:1.02rem;line-height:1.7}
+.entry.cont{padding-top:2px;padding-bottom:6px}
+.entry.cont::before{display:none!important}
+.entry.cont .avatar{visibility:hidden;height:0;overflow:hidden}
+.entry.cont .meta .who,.entry.cont .meta .time,.entry.cont .meta .tag,.entry.cont .meta .edited{display:none}
+.entry.cont .meta{position:absolute;right:10px;top:4px;z-index:1}
+.entry.cont .orig{margin-top:0}
+.entry.turn-start{margin-top:6px}
+.ctxbar{position:absolute;left:14px;right:22px;z-index:6;background:var(--surface);border:1px solid var(--them);border-inline-start-width:4px;border-radius:12px;box-shadow:var(--shadow-lg);padding:8px 12px;cursor:pointer;max-height:42%;overflow:auto}
+.ctxbar .cx-h{display:flex;align-items:center;gap:8px;font-size:.78rem;font-weight:700;color:var(--them)}
+.ctxbar .cx-h .cx-x{margin-inline-start:auto;border:0;background:none;color:var(--muted);cursor:pointer;font-size:1rem;line-height:1;padding:2px 6px}
+.ctxbar .cx-o{margin:3px 0 0;font-size:.98rem;line-height:1.5;color:var(--text);overflow-wrap:anywhere}
+.ctxbar .cx-f{margin:4px 0 0;font-family:var(--font-tr);font-size:1.08rem;line-height:1.7;color:var(--text)}
+.ctxbar:not(.open) .cx-o,.ctxbar:not(.open) .cx-f{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .jump{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);box-shadow:var(--shadow-lg)}
 
 /* empty / waiting states */
@@ -670,6 +686,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="empty" id="empty"></div>
         <div id="list"></div>
       </div>
+      <div class="ctxbar" id="ctxBar" hidden role="button" tabindex="0" aria-label="The last thing they said — press to open the line"><div class="cx-h"><span class="cx-who"></span><span class="cx-time"></span><button class="cx-x" title="Hide for this line" aria-label="Hide">×</button></div><p class="cx-o" dir="auto"></p><p class="cx-f" hidden></p></div>
       <button class="btn sm primary jump" id="jump" hidden><span data-icon="down"></span>New lines</button>
     </section>
 
@@ -1249,7 +1266,7 @@ function handle(m){
   }
 }
 function clearTranscript(){
-  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null;
+  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.ctxHidden = null; $("#ctxBar").hidden = true;
   $("#jump").hidden = true;
 }
 function newSession(m){
@@ -1393,16 +1410,73 @@ function keepBottom(fn, added){
 feed.addEventListener("scroll", () => { if(nearBottom()) $("#jump").hidden = true; });
 $("#jump").onclick = () => { feed.scrollTop = feed.scrollHeight; $("#jump").hidden = true; };
 
+/* ---------- conversation flow: turns and the "last thing they said" bar ---------- */
+function groupTurns(){
+  let prev = null;
+  for(const el of list.children){
+    if(!el.classList || !el.classList.contains("entry")) continue;
+    const src = el.classList.contains("me") ? "me" : "them";
+    const gap = prev ? Math.abs(+el.dataset.t - +prev.dataset.t) : 1e9;
+    const same = prev && prev.dataset.src2 === src && gap <= 25;
+    el.classList.toggle("cont", !!same);
+    el.classList.toggle("turn-start", !same && !!prev);
+    el.dataset.src2 = src;
+    prev = el;
+  }
+}
+function lastThem(){
+  let best = null;
+  S.entries.forEach(e => { if(e.source === "them" && (e.text || "").trim() && (!best || e.t0 > best.t0)) best = e; });
+  return best;
+}
+let ctxPending = false;
+function updateCtx(){
+  if(ctxPending) return;
+  ctxPending = true;
+  requestAnimationFrame(() => {
+    ctxPending = false;
+    const bar = $("#ctxBar"), e = lastThem();
+    let show = false;
+    if(e && S.ctxHidden !== e.id){
+      const el = document.getElementById("e" + e.id);
+      if(el){
+        const fr = feed.getBoundingClientRect(), r = el.getBoundingClientRect();
+        show = r.bottom < fr.top + 24;          // its line has scrolled up out of view (new lines of mine pushed it away)
+      }
+    }
+    bar.hidden = !show;
+    if(!show) return;
+    bar.style.top = (feed.offsetTop + 8) + "px";
+    if(bar.dataset.id !== String(e.id)){ bar.dataset.id = e.id; bar.classList.remove("open"); }
+    bar.querySelector(".cx-who").textContent = "They said · " + label(e.source, e.speaker);
+    bar.querySelector(".cx-time").textContent = clock(e.t0);
+    bar.querySelector(".cx-o").textContent = e.text;
+    const f = bar.querySelector(".cx-f"), tr = e.tr_state !== "off" && e.translation;
+    f.hidden = !tr;
+    if(tr){ f.textContent = e.translation; f.setAttribute("dir", myLang().rtl ? "rtl" : "ltr"); f.setAttribute("lang", myLang().code); }
+  });
+}
+$("#ctxBar").addEventListener("click", ev => {
+  const bar = $("#ctxBar");
+  if(ev.target.closest(".cx-x")){ S.ctxHidden = +bar.dataset.id; bar.hidden = true; return; }
+  if(!bar.classList.contains("open")){ bar.classList.add("open"); return; }        // first press: read all of it
+  const el = document.getElementById("e" + bar.dataset.id);                        // second press: go to the line
+  if(el){ el.scrollIntoView({block: "center"}); bar.classList.remove("open"); updateCtx(); }
+});
+feed.addEventListener("scroll", updateCtx, {passive: true});
+window.addEventListener("resize", updateCtx);
+
 function insertSorted(el){
   const t = +el.dataset.t;
   let node = list.lastElementChild;
   while(node && +node.dataset.t > t) node = node.previousElementSibling;
   list.insertBefore(el, node ? node.nextSibling : list.firstChild);
+  groupTurns(); updateCtx();
 }
 
 function onSpeaking(m){
   let p = S.pend.get(m.seg);
-  if(m.phase === "discard"){ if(p){ p.remove(); S.pend.delete(m.seg); renderEmpty(); renderAnswerIfIdle(); } return; }
+  if(m.phase === "discard"){ if(p){ p.remove(); S.pend.delete(m.seg); renderEmpty(); renderAnswerIfIdle(); groupTurns(); updateCtx(); } return; }
   if(!p){
     if(m.t0 == null) return;                           // a late update for a line that is already finished
     p = document.createElement("article");
@@ -1446,7 +1520,7 @@ function entryShell(e){
   return el;
 }
 function fillEntry(el, e){
-  el.className = "entry " + e.source + (el.classList.contains("latest") ? " latest" : "");
+  el.className = "entry " + e.source + (el.classList.contains("latest") ? " latest" : "") + (el.classList.contains("cont") ? " cont" : "") + (el.classList.contains("turn-start") ? " turn-start" : "");
   el.querySelector(".avatar").textContent = initials(label(e.source, e.speaker));
   el.querySelector(".who").textContent = label(e.source, e.speaker);
   el.querySelector(".time").textContent = clock(e.t0);
@@ -1513,6 +1587,7 @@ function upsertEntry(e, silent){
   if(added) renderEmpty();
   if(!has) renderAnswerIfIdle();
   markLatest(); renderSumBtn();
+  groupTurns(); updateCtx();
 }
 function markLatest(){
   let best = null;

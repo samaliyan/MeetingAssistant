@@ -25,6 +25,12 @@ With Deepgram live, turn on "Tell the other speakers apart" (Setup, Meeting tab)
 - **Search past meetings** — choose the range (7 days … all time). Tick "Also answer my question from what was said" for a written answer.
 - **Export** — Word, subtitles (`.srt`), text, JSON, PDF (opens the print window: choose "Save as PDF"), copy summary.
 
+### Following the conversation while you answer
+1. Lines of the same person that follow each other are shown as one turn, with the name once.
+2. Your own lines have a green colour and a green edge, so they are easy to tell from theirs.
+3. When you speak for a while and their last question scrolls out of view, a bar at the top shows "They said" with its translation.
+4. Press the bar once to read all of it, press again to jump to the line, or press the cross to hide it for that line.
+
 ### Check models
 1. Open Setup, then the Services tab.
 2. Press **Check models**.
