@@ -4,6 +4,7 @@ import io
 import json
 import os
 import struct
+import sys
 import time
 import zipfile
 import zlib
@@ -436,7 +437,10 @@ def test_hide_setting_is_read_from_the_settings_file(app):
     with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:
         f.write("not json")
     assert app.hide_wanted() is False
-    assert app.hidden_window_possible() is False          # (not Windows here)
+    if sys.platform != "win32":
+        assert app.hidden_window_possible() is False
+    else:
+        assert isinstance(app.hidden_window_possible(), bool)   # true when pywebview is installed
 
 
 def test_glossary_short_mixed_case_left_alone(app):
