@@ -1,4 +1,16 @@
-# Meeting Assistant — User Guide (version 6.2.1)
+# Meeting Assistant — User Guide (version 6.3)
+
+## Version 6.3
+
+### Hands-free answers
+- The answer panel now follows the conversation by itself: the newest answer is always shown, with no click on "Show suggested answer". An answer you choose on purpose (arrow keys or a click) stays until a newer question is answered.
+- **Ctrl + Left / Ctrl + Right**: earlier / newer answer. **Ctrl + Up / Ctrl + Down**: scroll a long answer. **F2**: answer the last thing they said. **F3**: read the screen. **F8**: pause. Nothing needs the mouse during an interview.
+- Above the "Answer now" button a small "2 / 5" counter shows which answer you are looking at (orange = not the newest).
+
+### Microphone: sensitivity and volume (Setup, Audio)
+- **Sensitivity** now really ignores small sounds. At the lowest setting only clearly loud speech counts; short clicks and coughs are dropped. It also works when Deepgram (live) writes your microphone: quiet rooms are sent as silence.
+- In "Test for 30 seconds" a **red line** on the Microphone bar shows the limit: sound below it is ignored.
+- New **Microphone volume** slider (25 % - 300 %) makes your voice louder or quieter inside the program. Changes are live.
 
 ## Version 6.2
 

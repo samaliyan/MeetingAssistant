@@ -2,6 +2,13 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.3]
+
+- **Hands-free answers**: the answer panel follows the newest question by itself (no click on "Show suggested answer"). Ctrl+Left / Ctrl+Right move between answers, Ctrl+Up / Ctrl+Down scroll a long answer, and a "2 / 5" counter shows where you are.
+- **Microphone sensitivity now works**: the lowest settings ignore small sounds, clicks and coughs; the change also applies to Deepgram live text. A red line in the audio test shows the limit.
+- **Microphone volume** slider (25-300 %) in Setup, Audio.
+- 60 automated tests.
+
 ## [6.2.1]
 
 Same as 6.2 plus the last fixes: the conversation view while you answer (turns grouped, your own lines in a different colour, a "They said" bar), the exe build fix, and the Windows test fix. This release exists because the tag v6.2 had already been published.

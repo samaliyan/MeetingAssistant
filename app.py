@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.2.1"
+VERSION = "6.3"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -209,6 +209,7 @@ DEFAULTS = {
     "mic_device": "",            # "" = Windows default
     "speaker_device": "",
     "sensitivity": 6,            # 1 (less) .. 10 (more)
+    "mic_gain": 100,             # my microphone volume inside the program, % (25..300)
     "theme": "system",           # system | light | dark
     "text_size": 100,            # % of normal
     "answer_size": 24,           # px
@@ -297,7 +298,7 @@ CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
            "about_source": ("text", "file"), "meeting_mode": tuple(MODES),
            "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
-RANGES = {"sensitivity": (1, 10), "text_size": (80, 170), "answer_size": (14, 48),
+RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
 
 # Phrases Whisper tends to "hear" in noise
@@ -821,7 +822,13 @@ class Segmenter:
 
     def set_sensitivity(self, s):
         s = min(10, max(1, int(s)))
-        self.min_level = 0.02 * (0.1 ** ((s - 1) / 9.0))    # 0.02 (1) ... 0.002 (10)
+        self.sens = s
+        if s >= 6:
+            self.min_level = 0.02 * (0.1 ** ((s - 1) / 9.0))       # 0.0056 (6) ... 0.002 (10)
+        else:
+            self.min_level = 0.0056 * (10.7 ** ((6 - s) / 5.0))    # ... 0.06 (1): only clearly loud speech counts
+        self.need_loud = 3 + max(0, 6 - s)                           # frames of real sound before a sentence starts (~0.1-0.25 s)
+        self.min_speech = 0.3 + 0.06 * max(0, 6 - s)                 # shorter sounds (a cough, a click) are dropped
 
     def _reset(self):
         self.active = False
@@ -863,7 +870,7 @@ class Segmenter:
         if not self.active:
             self.pre.append((x, loud, rms))
             self.loud_run = (self.loud_run + 1) if loud else 0
-            if self.loud_run >= 3:                             # ~90 ms of real sound
+            if self.loud_run >= self.need_loud:                  # ~90 ms of real sound (more when sensitivity is low)
                 self._begin()
             return
 
@@ -929,7 +936,7 @@ class Segmenter:
 
     def _emit(self, frames, louds, t0, seg_id, t_end):
         speech = sum(len(f) for f, l in zip(frames, louds) if l) / self.rate
-        if speech < 0.3:
+        if speech < self.min_speech:
             self.sink("discard", self.source, seg_id)
             return
         k = 0                                                   # drop long trailing silence
@@ -1172,6 +1179,8 @@ class AudioCapture(threading.Thread):
         super().__init__(daemon=True, name=f"capture-{source}")
         self.pa, self.device, self.source = pa, device, source
         self.sensitivity, self.sink = sensitivity, sink
+        self.gain = 1.0               # my microphone volume (1.0 = as it comes)
+        self.gate_until = 0.0         # live service: sound is passed on until this time
         self.stop_event = threading.Event()
         self.level = 0.0
         self.error = None
@@ -1196,18 +1205,39 @@ class AudioCapture(threading.Thread):
         if self.seg:
             self.seg.set_sensitivity(s)
 
+    def set_gain(self, percent):
+        self.gain = min(3.0, max(0.25, float(percent) / 100.0)) if self.source == "me" else 1.0
+
+    def threshold(self):
+        """The loudness (same scale as .level) below which nothing counts as speech."""
+        return self.seg.min_level if self.seg else 0.0
+
     def _got(self, x, rate):
         self.last_data = time.time()
-        tap = self.tap
-        if tap is not None:
-            try:
-                tap(x, rate)
-            except Exception as e:
-                self._soft_error("live", e)
+        if self.gain != 1.0 and len(x):
+            x = np.clip(x * self.gain, -1.0, 1.0).astype(np.float32, copy=False)
         try:
             self.seg.feed(x)
         except Exception as e:
             self._soft_error("segment", e)
+        tap = self.tap
+        if tap is not None:
+            if self.source == "me" and len(x):
+                # a live service hears the microphone only while there is speech (and a moment after):
+                # the sensitivity setting works for it too, and a quiet room is not sent as "sound"
+                now = time.time()
+                if self.seg.active or self.seg.loud_run > 0:
+                    self.gate_until = now + 0.7
+                if now > self.gate_until:
+                    x_tap = np.zeros_like(x)
+                else:
+                    x_tap = x
+            else:
+                x_tap = x
+            try:
+                tap(x_tap, rate)
+            except Exception as e:
+                self._soft_error("live", e)
         self.level = self.seg.level
         self.received += len(x) / rate
         if len(x):
@@ -6783,11 +6813,15 @@ class App:
                     new[k] = v
             new = sanitize(new)
             changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
+            changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
             changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
             self.cfg.update(new)          # the engine reads the same dict -> live changes (update, never replace)
             if changed_sens:              # the change is live even if writing the file fails this time
                 for c in self.captures:
                     c.set_sensitivity(self.cfg["sensitivity"])
+            if changed_gain:
+                for c in self.captures:
+                    c.set_gain(self.cfg["mic_gain"])
             try:
                 save_config(self.cfg)
                 failed = None
@@ -6971,6 +7005,7 @@ class App:
         for dev, src in ((mic, "me"), (loop, "them")):
             if dev is not None and (src == "them" or want_mic):
                 c = AudioCapture(pa, dev, src, self.cfg["sensitivity"], sink)
+                c.set_gain(self.cfg["mic_gain"])
                 if preview and src == "them":
                     c.preview_every, c.preview_min = self.preview_plan()
                     c.spec_final = self.spec_plan()
@@ -8658,6 +8693,7 @@ class App:
             lv = {"me": None, "them": None}
             for c in caps:
                 lv[c.source] = round(min(1.0, (c.level ** 0.5) * 2.4), 3)
+                lv["thr_" + c.source] = round(min(1.0, (c.threshold() ** 0.5) * 2.4), 3)
                 if c.error and c.error not in self.reported:
                     self.reported.add(c.error)
                     self.hub.toast("error", ("Microphone: " if c.source == "me" else "Computer sound: ") + c.error)

@@ -594,3 +594,61 @@ def test_hide_status_stale_and_ping_empty(app, tmp_path):
         ms, ids = api.ping()
         assert isinstance(ids, list)
     assert ids == ["m1"]
+
+
+def _speech_events(app, sens, level, seconds=1.0, gain=1.0):
+    """Feeds a steady tone of the given loudness to a Segmenter and returns what it reported."""
+    import numpy as np
+    events = []
+    seg = app.Segmenter("me", 16000, sens, lambda kind, *a, **k: events.append(kind))
+    n = int(16000 * app.FRAME_SEC)
+    t = np.arange(n) / 16000.0
+    frame = (np.sin(2 * np.pi * 220 * t) * level * 1.414 * gain).astype("float32")
+    silent = np.zeros(n, dtype="float32")
+    room = (np.random.RandomState(2).randn(n) * 0.0004).astype("float32")
+    for _ in range(int(3.0 / app.FRAME_SEC)):                 # a quiet room first (sets the noise floor)
+        seg.feed(room)
+    for _ in range(int(seconds / app.FRAME_SEC)):
+        seg.feed(frame)
+    for _ in range(int(2.0 / app.FRAME_SEC)):
+        seg.feed(silent)
+    return events
+
+
+def test_low_sensitivity_ignores_small_sounds(app):
+    assert "segment" in _speech_events(app, 6, 0.02)          # normal speech level: heard at the default
+    assert "segment" not in _speech_events(app, 1, 0.02)      # the same sound is ignored at the lowest setting
+    assert "segment" in _speech_events(app, 1, 0.12)          # loud speech is still heard
+    assert "segment" not in _speech_events(app, 2, 0.05, seconds=0.2)   # a short click is ignored
+
+
+def test_sensitivity_scale_is_ordered(app):
+    lv = []
+    for s in range(1, 11):
+        seg = app.Segmenter("me", 16000, s, lambda *a, **k: None)
+        lv.append(seg.min_level)
+    assert lv == sorted(lv, reverse=True)
+    assert abs(lv[5] - 0.0056) < 0.0005                        # the default is unchanged
+
+
+def test_mic_gain_is_limited_and_only_for_me(app):
+    me = app.AudioCapture(None, {}, "me", 6, lambda *a, **k: None)
+    them = app.AudioCapture(None, {}, "them", 6, lambda *a, **k: None)
+    me.set_gain(1000)
+    them.set_gain(300)
+    assert me.gain == 3.0 and them.gain == 1.0
+    me.set_gain(1)
+    assert me.gain == 0.25
+    assert app.sanitize({"mic_gain": 5000})["mic_gain"] == 300
+
+
+def test_live_service_hears_the_mic_only_during_speech(app):
+    import numpy as np
+    got = []
+    cap = app.AudioCapture(None, {}, "me", 1, lambda *a, **k: None)
+    cap.seg = app.Segmenter("me", 16000, 1, lambda *a, **k: None)
+    cap.tap = lambda x, rate: got.append(float(np.abs(x).max()) if x is not None else 0.0)
+    quiet = (np.random.RandomState(1).randn(480) * 0.004).astype("float32")
+    for _ in range(20):
+        cap._got(quiet, 16000)
+    assert got and max(got) == 0.0                              # a quiet room is sent as silence

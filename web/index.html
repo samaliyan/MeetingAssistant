@@ -259,6 +259,9 @@ button.chip:hover{filter:brightness(.97)}
 @keyframes fresh{from{background:var(--amber-soft);box-shadow:0 0 0 8px var(--amber-soft)}to{background:transparent;box-shadow:0 0 0 8px transparent}}
 .answer-empty span{font-size:.85rem;max-width:300px;line-height:1.55}
 .answer-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+.ans-nav{display:inline-flex;align-items:center;gap:2px;font-size:.78rem;color:var(--muted)}
+.ans-nav .btn{width:26px;height:26px;font-size:1.1rem;line-height:1;padding:0}
+.ans-nav.old #ansPos{color:var(--warn);font-weight:600}
 .answer-foot .hint{font-size:.78rem;color:var(--muted)}
 .size-ctl{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .size-ctl button{border:0;background:transparent;height:30px;width:32px;font-weight:700;color:var(--text-2);font-size:.8rem}
@@ -371,7 +374,9 @@ h2 .ver{margin-inline-start:6px}
 .range-row input{flex:1;accent-color:var(--accent)}
 .big-meters{display:grid;gap:10px;padding:12px;border:1px solid var(--border);border-radius:12px}
 .bm{display:grid;grid-template-columns:110px 1fr;align-items:center;gap:10px;font-size:.82rem;color:var(--text-2)}
-.bm .bar{height:10px;border-radius:5px;background:var(--surface-3);overflow:hidden}
+.bm .bar{height:10px;border-radius:5px;background:var(--surface-3);overflow:hidden;position:relative}
+.bm .bar b.thr{position:absolute;top:0;bottom:0;left:0;width:2px;background:var(--danger);opacity:.85;display:none}
+.bm.me .bar b.thr{display:block}
 .bm .bar i{display:block;height:100%;transform-origin:left;transform:scaleX(0);transition:transform 90ms linear}
 .bm.me .bar i{background:var(--me)} .bm.them .bar i{background:var(--them)}
 .bm small{grid-column:2;color:var(--muted);font-size:.75rem;margin-top:-6px}
@@ -703,6 +708,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       </div>
       <div class="answer-body" id="answerBody"></div>
       <div class="answer-foot">
+        <span class="ans-nav" id="ansNav" hidden><button class="btn icon ghost" id="ansPrev" title="Earlier answer (Ctrl + Left)" aria-label="Earlier answer">‹</button><span id="ansPos"></span><button class="btn icon ghost" id="ansNext" title="Newer answer (Ctrl + Right)" aria-label="Newer answer">›</button></span>
         <button class="btn soft sm" id="answerNowBtn" title="Suggest an answer to the latest question now"><span data-icon="zap"></span>Answer now<kbd>F2</kbd></button>
         <span class="hint" id="answerHint"></span>
       </div>
@@ -829,7 +835,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="field">
         <span class="label">Test audio</span>
         <div class="big-meters">
-          <div class="bm me" id="bmMe"><span>Microphone</span><span class="bar"><i></i></span></div>
+          <div class="bm me" id="bmMe"><span>Microphone</span><span class="bar"><i></i><b class="thr" id="thrMe" title="Sound below this red line is ignored"></b></span></div>
           <div class="bm them" id="bmThem"><span>Computer sound</span><span class="bar"><i></i></span></div>
         </div>
         <div class="input-row"><button class="btn sm" id="monitorBtn"><span data-icon="play"></span><span>Test for 30 seconds</span></button><span class="help" id="monitorHelp" style="align-self:center">Speak, and play a video — both bars should move.</span></div>
@@ -837,7 +843,12 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="field">
         <label for="fSens">Microphone sensitivity</label>
         <div class="range-row"><span>Less</span><input type="range" id="fSens" min="1" max="10" step="1" data-key="sensitivity"><span>More</span></div>
-        <div class="help">Raise it if quiet speech is missed; lower it if background noise gets transcribed.</div>
+        <div class="help">Lower it so small sounds (breathing, keys, a far voice) are ignored. In “Test for 30 seconds” above, only sound that goes past the red line on the Microphone bar is written. Raise it if your quiet speech is missed. The change is live.</div>
+      </div>
+      <div class="field">
+        <label for="fGain">Microphone volume <b id="gainVal">100%</b></label>
+        <div class="range-row"><span>Quieter</span><input type="range" id="fGain" min="25" max="300" step="5" data-key="mic_gain"><span>Louder</span></div>
+        <div class="help">Makes your own voice louder or quieter inside the program (it does not change Windows). Raise it if your voice is weak, lower it if you are too loud.</div>
       </div>
       <label class="toggle"><input type="checkbox" data-key="transcribe_me"><span class="switch"></span><span class="tt"><b>Transcribe my voice</b><span>Your own words are written and saved too.</span></span></label>
 
@@ -1063,6 +1074,8 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="hrow"><kbd>Shift+F9</kbd><span>Continue the last meeting (same transcript)</span></div>
   <div class="hrow"><kbd>F2</kbd><span>Answer the last thing they said</span></div>
   <div class="hrow"><kbd>F3</kbd><span>Read the screen (a question or code shown there)</span></div>
+  <div class="hrow"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
+  <div class="hrow"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
   <div class="hrow"><kbd>F8</kbd><span>Pause / continue listening</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>,</kbd><span>Setup</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>+</kbd> <kbd>Ctrl</kbd><kbd>−</kbd><span>Text size</span></div>
@@ -1173,7 +1186,7 @@ function paintIcons(root=document){ root.querySelectorAll("[data-icon]").forEach
 /* ---------- state ---------- */
 const S = {
   cfg:null, running:false, stopping:false, monitoring:false, startedAt:null,
-  entries:new Map(), pend:new Map(), panelId:null,
+  entries:new Map(), pend:new Map(), panelId:null, pinned:false,
   proxy:["",""], net:{ok:null}, stats:{}, quota:null, sessionFile:"", meetingsDir:"",
   online:false, everOnline:false, busy:false, audioOk:true, firstHello:true,
 };
@@ -1266,7 +1279,7 @@ function handle(m){
   }
 }
 function clearTranscript(){
-  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.ctxHidden = null; $("#ctxBar").hidden = true;
+  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.pinned = false; S.ctxHidden = null; $("#ctxBar").hidden = true;
   $("#jump").hidden = true;
 }
 function newSession(m){
@@ -1396,6 +1409,7 @@ function onLevel(m){
     const v = m[src];
     const el = $(id); el.classList.toggle("off", v==null); setBar(el, v); setBar($(big), v);
   }
+  if(m.thr_me != null) $("#thrMe").style.left = Math.min(99, m.thr_me * 100) + "%";
 }
 
 /* ---------- transcript ---------- */
@@ -1555,7 +1569,7 @@ function fillEntry(el, e){
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
   if(has){
     row.innerHTML = `<button class="chip${S.panelId===e.id?" active":""}">${icon("sparkles")}${S.panelId===e.id ? "Answer shown on the right" : "Show suggested answer"}</button>`;
-    row.firstChild.onclick = () => { S.panelId = e.id; renderAnswer(); refreshChips(); };
+    row.firstChild.onclick = () => showAnswerOf(e.id, true);
   } else if(e.ans_state === "thinking" && e.forced){
     row.innerHTML = `<span class="chip muted"><span class="spinner"></span>Writing an answer…</span>`;
   } else if(e.ans_state === "error"){
@@ -1576,10 +1590,15 @@ function upsertEntry(e, silent){
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
   const cur = S.panelId != null ? S.entries.get(S.panelId) : null;
   const wanted = e.forced && S.forceId === e.id;
-  if(has && (!cur || e.id === S.panelId || e.t0 >= cur.t0 || wanted)){
+  if(has){
+    // Follows the conversation by itself: the panel always shows the answer to the newest question, with no click.
+    // Only a line the user picked on purpose (click, arrow keys, F2 on an old line) stays until a NEWER question is answered.
     if(wanted && e.ans_state === "done") S.forceId = null;
-    const changed = S.panelId !== e.id; S.panelId = e.id;
-    if(changed) refreshChips();
+    const newest = newestAnswered();
+    const pinnedNow = S.pinned && cur && cur.answer && !(newest && newest.t0 > cur.t0);
+    if(wanted) { S.pinned = false; S.panelId = e.id; refreshChips(); }
+    else if(!pinnedNow && newest && S.panelId !== newest.id){ S.pinned = false; S.panelId = newest.id; refreshChips(); }
+    else if(!cur || !cur.answer){ S.panelId = e.id; refreshChips(); }
   }
   if(e.id === S.panelId && !has && e.ans_state === "none"){ /* keep the last shown answer */ }
   if(e.id === S.panelId || has) renderAnswer();
@@ -1587,7 +1606,34 @@ function upsertEntry(e, silent){
   if(added) renderEmpty();
   if(!has) renderAnswerIfIdle();
   markLatest(); renderSumBtn();
-  groupTurns(); updateCtx();
+  groupTurns(); updateCtx(); updateNav();
+}
+function answeredList(){
+  return [...S.entries.values()].filter(x => x.answer && (x.ans_state === "streaming" || x.ans_state === "done")).sort((a, b) => a.t0 - b.t0);
+}
+function newestAnswered(){ const l = answeredList(); return l.length ? l[l.length - 1] : null; }
+function showAnswerOf(id, pin){
+  const l = answeredList(), last = l[l.length - 1];
+  S.panelId = id; S.pinned = !!pin && !(last && last.id === id);       // choosing the newest answer means "follow again"
+  renderAnswer(); refreshChips(); updateNav();
+}
+function stepAnswer(dir){
+  const l = answeredList(); if(!l.length) return;
+  let i = l.findIndex(x => x.id === S.panelId); if(i < 0) i = l.length - 1;
+  const j = Math.min(l.length - 1, Math.max(0, i + dir));
+  if(j === i) { toast("info", dir < 0 ? "This is the oldest answer." : "This is the newest answer."); return; }
+  showAnswerOf(l[j].id, true);
+}
+function updateNav(){
+  const l = answeredList(), i = l.findIndex(x => x.id === S.panelId);
+  const box = $("#ansNav"); if(!box) return;
+  box.hidden = l.length < 2;
+  if(l.length < 2) return;
+  $("#ansPos").textContent = (i < 0 ? l.length : i + 1) + " / " + l.length;
+  $("#ansPrev").disabled = i <= 0;
+  const newer = i >= 0 && i < l.length - 1;
+  $("#ansNext").disabled = !newer;
+  box.classList.toggle("old", newer);
 }
 function markLatest(){
   let best = null;
@@ -1709,6 +1755,8 @@ async function answerNow(entryId){
   if(!r.ok) toast("warn", r.error || "Could not answer.");
 }
 $("#answerNowBtn").onclick = () => answerNow();
+$("#ansPrev").onclick = () => stepAnswer(-1);
+$("#ansNext").onclick = () => stepAnswer(1);
 
 /* ---------- title, pause ---------- */
 function renderTitle(){
@@ -2061,6 +2109,7 @@ function fillDrawer(force){
     else if(el.tagName === "SELECT"){ /* filled by loadDevices */ if([...el.options].some(o=>o.value===v)) el.value = v; }
     else if(el.value !== String(v ?? "")) el.value = v ?? "";
   });
+  $("#gainVal").textContent = (c.mic_gain || 100) + "%";
   const kh = $("#keyHint");
   kh.hidden = !c.has_key; kh.innerHTML = c.has_key ? `${icon("check")} Key saved (${esc(c.key_hint||"")}). Paste a new one to replace it.` : "";
   $("#keyWelcome").hidden = c.has_key;
@@ -2102,7 +2151,7 @@ $$("[data-key]").forEach(el => {
   } else if(el.type === "checkbox"){
     el.onchange = () => { if(!S.cfg) return; S.cfg[k] = el.checked; queueSave({[k]: el.checked}); };
   } else if(el.type === "range"){
-    el.oninput = () => { if(!S.cfg) return; S.cfg[k] = +el.value; if(k === "text_size") applyConfig(); queueSave({[k]: +el.value}); };
+    el.oninput = () => { if(!S.cfg) return; S.cfg[k] = +el.value; if(k === "text_size") applyConfig(); if(k === "mic_gain") $("#gainVal").textContent = el.value + "%"; queueSave({[k]: +el.value}); };
   } else if(el.tagName === "SELECT"){
     el.onchange = () => { if(!S.cfg) return; S.cfg[k] = el.value; queueSave({[k]: el.value}); };
   } else {
@@ -2821,6 +2870,14 @@ document.addEventListener("keydown", ev => {
     if(!a?.isContentEditable && !["INPUT", "TEXTAREA", "SELECT"].includes(a?.tagName)) answerNow();
   }
   else if(ev.key === "F3"){ ev.preventDefault(); readScreen(); }
+  else if((ev.ctrlKey || ev.metaKey) && !ev.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(ev.key)
+          && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && !document.activeElement?.isContentEditable
+          && $("#drawer").getAttribute("aria-hidden") === "true" && $("#toolModal").hidden){
+    ev.preventDefault();
+    if(ev.key === "ArrowLeft") stepAnswer(-1);
+    else if(ev.key === "ArrowRight") stepAnswer(1);
+    else { const b = $("#answerBody"); b.scrollBy({top: (ev.key === "ArrowDown" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"}); }
+  }
   else if(ev.key === "F8"){ ev.preventDefault(); togglePause(); }
   else if(ev.key === "Escape"){ if(!$("#hideModal").hidden) closeHideAsk(false); else if(!$("#toolPop").hidden) $("#toolPop").hidden = true; else if(!$("#toolModal").hidden) closeTool(); else if(!$("#helpPop").hidden) $("#helpPop").hidden = true; else if(!$("#brModal").hidden) closeBrowser(); else if(!$("#sumModal").hidden) $("#sumModal").hidden = true; else closeDrawer(); hideSel(); }
   else if((ev.ctrlKey || ev.metaKey) && ev.key === ","){ ev.preventDefault(); openDrawer(); }
