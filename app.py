@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.7"
+VERSION = "6.8"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -219,7 +219,9 @@ DEFAULTS = {
     "theme": "system",           # system | light | dark
     "text_size": 100,            # % of normal
     "answer_size": 24,           # px
-    "overlay_alpha": 80,         # % how solid the see-through answer window is (30..100)
+    "overlay_alpha": 65,         # % how solid the see-through answer window is (30..100)
+    "overlay_text": 85,          # % how strong the words in it are (30..100)
+    "overlay_hide": True,        # hide the see-through window from screen sharing
     "overlay_pos": "top",        # top | bottom of the screen
     # other services (OpenAI-compatible) and which service does what
     "providers": [],
@@ -325,7 +327,7 @@ CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
            "about_source": ("text", "file"), "overlay_pos": ("top", "bottom"), "meeting_mode": tuple(MODES),
            "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
-RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100),
+RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100), "overlay_text": (30, 100),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
 
 # Phrases Whisper tends to "hear" in noise
@@ -7543,6 +7545,11 @@ class App:
             changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
             changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
             changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
+            if new["overlay_pos"] != self.cfg["overlay_pos"]:
+                try:
+                    os.remove(OVERLAY_POS_PATH)          # a new choice of top / bottom replaces the place it was left
+                except OSError:
+                    pass
             self.cfg.update(new)          # the engine reads the same dict -> live changes (update, never replace)
             if changed_sens:              # the change is live even if writing the file fails this time
                 for c in self.captures:
@@ -10049,6 +10056,172 @@ def run_window_helper(argv):
     return 0
 
 
+def run_overlay_helper(argv):
+    """`--overlay URL --storage FOLDER --status FILE --geom x,y,w,h`: the see-through answer window. This process owns the
+    window: always on top, see-through, click-through, hidden from screen sharing, movable with keys or in 'move mode'."""
+    def opt(name, default=""):
+        return argv[argv.index(name) + 1] if name in argv and argv.index(name) + 1 < len(argv) else default
+    url, storage, status = opt("--overlay"), opt("--storage"), opt("--status")
+    try:
+        x, y, w, h = [int(v) for v in opt("--geom", "100,20,1000,320").split(",")]
+    except ValueError:
+        x, y, w, h = 100, 20, 1000, 320
+    if not url or not status:
+        return 2
+    try:
+        import webview
+    except Exception as e:
+        write_hide_status(status, False, "", "The 'pywebview' package could not be loaded: " + str(e)[:150])
+        return 3
+    import ctypes
+    from ctypes import wintypes as wt
+    u = ctypes.windll.user32
+    u.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+    u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    u.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    u.SetLayeredWindowAttributes.argtypes = [wt.HWND, wt.COLORREF, ctypes.c_ubyte, wt.DWORD]
+    u.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
+    u.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+    u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
+    sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+    try:                                                     # where it was left last time
+        with open(OVERLAY_POS_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        px, py, pw, ph = int(d["x"]), int(d["y"]), int(d["w"]), int(d["h"])
+        if 300 <= pw <= sw and 120 <= ph <= sh and -pw + 80 < px < sw - 80 and 0 <= py < sh - 40:
+            x, y, w, h = px, py, pw, ph
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    st = {"x": x, "y": y, "w": w, "h": h, "move": False}
+    stop = threading.Event()
+    find, set_aff, get_aff = _win_window_tools(os.getpid())
+
+    def settings():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                c = json.load(f)
+        except (OSError, ValueError):
+            c = {}
+        def num(k, d):
+            try:
+                return min(100, max(30, int(c.get(k, d))))
+            except (TypeError, ValueError):
+                return d
+        hide = c.get("overlay_hide", True)
+        return num("overlay_alpha", 65), (hide is True or str(hide).strip().lower() in ("true", "1", "yes", "on"))
+
+    def save_pos():
+        try:
+            tmp = OVERLAY_POS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({k: st[k] for k in ("x", "y", "w", "h")}, f)
+            os.replace(tmp, OVERLAY_POS_PATH)
+        except OSError:
+            pass
+
+    def read_rect(hwnd):
+        r = wt.RECT()
+        if u.GetWindowRect(hwnd, ctypes.byref(r)):
+            st["x"], st["y"], st["w"], st["h"] = r.left, r.top, r.right - r.left, r.bottom - r.top
+
+    def apply(hwnd, alpha, hide, place=False):
+        ex = u.GetWindowLongPtrW(hwnd, -20)
+        ex |= 0x80000 | 0x80 | 0x8000000 | 0x8                # layered, tool window (no taskbar), no-activate, topmost
+        ex = (ex & ~0x20) if st["move"] else (ex | 0x20)       # click-through, except in move mode
+        u.SetWindowLongPtrW(hwnd, -20, ex)
+        u.SetLayeredWindowAttributes(hwnd, 0, int(alpha * 255 / 100) if not st["move"] else 255, 2)
+        if place:
+            u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10 | 0x40 | 0x20)
+        else:
+            u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x2 | 0x1 | 0x10)
+        want = (WDA_EXCLUDEFROMCAPTURE if hide else 0)
+        if get_aff(hwnd) != want:
+            if not set_aff(hwnd, want) and want:
+                set_aff(hwnd, WDA_MONITOR)
+
+    def mark_move(on):
+        try:
+            webview.windows[0].evaluate_js(f"document.body.classList.toggle('mv', {'true' if on else 'false'})")
+        except Exception:
+            pass
+
+    def worker():
+        try:
+            hwnd, end = None, time.time() + 25
+            while not stop.is_set() and time.time() < end and not hwnd:
+                hwnd = find()
+                stop.wait(0.3)
+            if not hwnd:
+                write_hide_status(status, False, "", "The see-through window could not be found.")
+                return
+            alpha, hide = settings()
+            apply(hwnd, alpha, hide, place=True)
+            mode_ok = (not hide) or get_aff(hwnd) in (WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR)
+            write_hide_status(status, True, "hidden" if hide and mode_ok else "shown",
+                              "" if mode_ok else "Windows would not hide the see-through window from screen sharing: it is visible.")
+            keys = {}
+            for i, (vk, mod) in enumerate([(0x4D, 0x2 | 0x1), (0x25, 0x2 | 0x1 | 0x4), (0x27, 0x2 | 0x1 | 0x4),
+                                           (0x26, 0x2 | 0x1 | 0x4), (0x28, 0x2 | 0x1 | 0x4),
+                                           (0x24, 0x2 | 0x1 | 0x4), (0x23, 0x2 | 0x1 | 0x4)], 1):
+                if u.RegisterHotKey(None, 100 + i, mod, vk):
+                    keys[100 + i] = ("move", (-1, 0), (1, 0), (0, -1), (0, 1), "bigger", "smaller")[i - 1]
+            msg, last = wt.MSG(), 0.0
+            while not stop.is_set():
+                while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):
+                    k = keys.get(msg.wParam)
+                    if k == "move":
+                        st["move"] = not st["move"]
+                        if not st["move"]:
+                            read_rect(hwnd)
+                            save_pos()
+                        mark_move(st["move"])
+                        apply(hwnd, *settings())
+                    elif isinstance(k, tuple):
+                        read_rect(hwnd)
+                        st["x"] = min(sw - 80, max(-st["w"] + 80, st["x"] + k[0] * 40))
+                        st["y"] = min(sh - 40, max(0, st["y"] + k[1] * 40))
+                        u.SetWindowPos(hwnd, -1, st["x"], st["y"], 0, 0, 0x1 | 0x10)
+                        save_pos()
+                    elif k in ("bigger", "smaller"):
+                        read_rect(hwnd)
+                        f = 1.1 if k == "bigger" else 1 / 1.1
+                        st["w"] = int(min(sw, max(400, st["w"] * f)))
+                        st["h"] = int(min(sh, max(140, st["h"] * f)))
+                        u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10)
+                        save_pos()
+                if time.time() - last > 0.8:
+                    last = time.time()
+                    if st["move"]:
+                        read_rect(hwnd)
+                    apply(hwnd, *settings())
+                stop.wait(0.04)
+            for i in keys:
+                u.UnregisterHotKey(None, i)
+        except Exception as e:
+            write_hide_status(status, False, "", "The see-through window failed: " + str(e)[:150])
+
+    try:
+        kw = dict(width=w, height=h, x=x, y=y, frameless=True, on_top=True, easy_drag=True, text_select=False, resizable=False)
+        try:
+            webview.create_window(OV_TITLE, url, focus=False, **kw)
+        except TypeError:
+            webview.create_window(OV_TITLE, url, **kw)
+        threading.Thread(target=worker, daemon=True, name="overlay-worker").start()
+        webview.start(gui="edgechromium", storage_path=storage or None, private_mode=False)
+    except Exception as e:
+        write_hide_status(status, False, "", "The see-through window could not start: " + str(e)[:150])
+        return 4
+    finally:
+        stop.set()
+        try:
+            os.remove(status)
+        except OSError:
+            pass
+    return 0
+
+
 def note_hide_failure(msg):
     write_hide_status(HIDE_STATUS_PATH, False, "", msg)
     log("Hidden window: " + msg + " A normal window is opened instead.", level="warn")
@@ -10136,7 +10309,9 @@ def open_window(url):
 # One global key (Ctrl+Alt+O) turns it on and off; Ctrl+Alt+Up/Down scroll it, Ctrl+Alt+Left/Right change the answer.
 # ----------------------------------------------------------------------------
 OV_TITLE = "MA-Overlay"
-OV_KEYS = {"toggle": (0x4F, "O"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right")}
+OVERLAY_STATUS_PATH = os.path.join(DATA_DIR, ".overlay.json")
+OVERLAY_POS_PATH = os.path.join(DATA_DIR, ".overlay_pos.json")
+OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right")}
 
 
 class Overlay:
@@ -10219,6 +10394,14 @@ class Overlay:
         with self.lock:
             if self.on:
                 return ""
+            self.proc = None
+            if hidden_window_possible():
+                err = self._start_helper()
+                if err is None:
+                    return self._finish_start()
+                log("overlay helper window: " + err + " - the simple window is used", level="warn")
+                self.app.hub.toast("warn", "The see-through window is opened in a simpler way, so it cannot be hidden from screen "
+                                           "sharing or moved with the keys. " + err)
             exe = find_browser()
             if not exe:
                 return "Microsoft Edge (or Chrome) was not found."
@@ -10246,6 +10429,56 @@ class Overlay:
             except Exception as e:
                 log("overlay problem:", traceback.format_exc(), level="warn")
                 return "The see-through window could not start: " + short(e, 120)
+            return self._finish_start()
+
+    def _start_helper(self):
+        """The window is opened by a small helper process of this program (it owns the window, so Windows lets it hide
+        it from screen sharing and move it). None when it is up, otherwise the reason."""
+        try:
+            os.remove(OVERLAY_STATUS_PATH)
+        except OSError:
+            pass
+        x, y, w, h = self.geometry()
+        cmd = ([sys.executable] if FROZEN else [sys.executable, os.path.abspath(__file__)]) + \
+            ["--overlay", self.app.url + "&overlay=1", "--storage", HIDDEN_STORAGE, "--status", OVERLAY_STATUS_PATH,
+             "--geom", f"{x},{y},{w},{h}"]
+        try:
+            self.proc = subprocess.Popen(cmd, env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"), close_fds=True)
+        except OSError as e:
+            return short(e, 100)
+        end = time.time() + 40
+        while time.time() < end:
+            st = read_hide_status(OVERLAY_STATUS_PATH)
+            if st is not None:
+                if st["active"]:
+                    self.main_windows = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
+                    for m in self.main_windows:
+                        self.user32().ShowWindow(m, 6)
+                    self.on = True
+                    if st.get("error"):
+                        self.app.hub.toast("warn", st["error"])
+                    return None
+                self._kill_proc()
+                return st["error"] or "the helper window did not start."
+            if self.proc.poll() is not None:
+                return f"the helper window closed at once (code {self.proc.returncode})."
+            time.sleep(0.25)
+        self._kill_proc()
+        return "the helper window took too long to start."
+
+    def _kill_proc(self):
+        p, self.proc = self.proc, None
+        if p is not None and p.poll() is None:
+            try:
+                p.terminate()
+                p.wait(3)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+    def _finish_start(self):
         self.stop_flag.clear()
         threading.Thread(target=self._keeper, daemon=True, name="overlay-keeper").start()
         self.app.hub.publish("overlay", on=True)
@@ -10262,6 +10495,12 @@ class Overlay:
                 u = self.user32()
                 for h in self.find(lambda t: OV_TITLE in t):
                     u.PostMessageW(h, 0x10, 0, 0)                    # WM_CLOSE
+                if getattr(self, "proc", None) is not None:
+                    try:
+                        self.proc.wait(1.5)
+                    except Exception:
+                        pass
+                    self._kill_proc()
                 if restore and was:
                     for m in self.main_windows:
                         if u.IsWindow(m):
@@ -10280,6 +10519,11 @@ class Overlay:
         gone = 0
         while not self.stop_flag.wait(1.5):
             try:
+                if getattr(self, "proc", None) is not None:          # the helper styles its own window
+                    if self.proc.poll() is not None:
+                        self.stop()
+                        return
+                    continue
                 found = self.find(lambda t: OV_TITLE in t)
                 if found:
                     gone = 0
@@ -10328,6 +10572,9 @@ class Overlay:
                 cmd = names.get(msg.wParam) or arrows.get(msg.wParam)
                 if cmd == "toggle":
                     threading.Thread(target=self.app.api_overlay, daemon=True).start()
+                elif cmd in ("more", "less"):
+                    a = int(self.app.cfg.get("overlay_alpha") or 65) + (5 if cmd == "more" else -5)
+                    threading.Thread(target=self.app.api_save_config, kwargs={"overlay_alpha": max(30, min(100, a))}, daemon=True).start()
                 elif cmd:
                     self.app.hub.publish("ov_cmd", cmd=cmd)
             time.sleep(0.04)
@@ -10472,6 +10719,8 @@ def running_url():
 def main():
     if "--window" in sys.argv:
         return sys.exit(run_window_helper(sys.argv))
+    if "--overlay" in sys.argv:
+        return sys.exit(run_overlay_helper(sys.argv))
     if "--make-shortcut" in sys.argv:
         return make_shortcut()
     existing = running_url()

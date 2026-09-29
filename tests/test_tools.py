@@ -1061,4 +1061,4 @@ def test_overlay_api_off_windows(app):
     r = a.api_overlay()
     assert r["ok"] is False and "Windows" in r["error"] and r["on"] is False
     assert a.api_overlay(False)["ok"] is True
-    assert app.DEFAULTS["overlay_alpha"] == 80 and app.CHOICES["overlay_pos"] == ("top", "bottom")
+    assert app.DEFAULTS["overlay_alpha"] == 65 and app.DEFAULTS["overlay_hide"] is True and app.CHOICES["overlay_pos"] == ("top", "bottom")

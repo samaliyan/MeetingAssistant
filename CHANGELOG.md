@@ -2,6 +2,16 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.8]
+
+The see-through answer window (Overlay) is now quiet, movable and hidden from screen sharing.
+
+- **Almost no extra text**: only what they said, its translation, the answer and its meaning, and one short line from the coach (the time you have used and the tip, or an alert). Soft grey-blue colours, easy to read but not loud.
+- **Hidden from screen sharing** (Setup › Display, on by default): the window is now opened by a small helper of the program, so Windows can hide it from a shared screen. If the helper cannot start, a simpler window opens and a message says it cannot be hidden.
+- **Adjustable**: how see-through the window is and how strong the words are (Setup › Display); Ctrl+Alt+PageUp / PageDown change it while it is on.
+- **Movable**: Ctrl+Alt+M = move mode (drag with the mouse, press again to lock), or Ctrl+Alt+Shift + arrows; Ctrl+Alt+Shift+Home / End = bigger / smaller. The place is remembered.
+- Everything below it still works with the mouse and keyboard as if it were not there. 83 automated tests.
+
 ## [6.7]
 
 A see-through answer window, and more kinds of meetings.

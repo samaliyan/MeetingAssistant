@@ -1,4 +1,12 @@
-# Meeting Assistant — User Guide (version 6.7)
+# Meeting Assistant — User Guide (version 6.8)
+
+## Version 6.8: quieter, movable, hidden overlay
+
+- The overlay shows only the other side's words (with translation), the answer, and one short coach line (time used and a tip). Soft colours: readable, not loud.
+- **Hidden from screen sharing**: on by default (Setup › Display › "Hide the overlay from screen sharing"). Needs Windows 10 version 2004 or newer.
+- **Ctrl+Alt+PageUp / PageDown**: more / less solid. Setup › Display also has a slider for how strong the words are.
+- **Move it**: **Ctrl+Alt+M**, drag with the mouse, press **Ctrl+Alt+M** again to lock. Or **Ctrl+Alt+Shift** with the arrow keys; **Home / End** = bigger / smaller. It remembers the place.
+- **Ctrl+Alt+O** on / off, **Ctrl+Alt+↑↓** scroll, **Ctrl+Alt+←→** earlier / newer answer.
 
 ## Version 6.7: see-through answer window, exams
 
