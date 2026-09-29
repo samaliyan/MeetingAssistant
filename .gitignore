@@ -1,0 +1,21 @@
+# everything the program writes (settings with API keys, meetings, logs, models)
+Data/
+config.json
+config.json.*
+*.log
+*.log.old
+meetings/
+models/
+.port
+.window
+
+# Python / build
+venv/
+.buildenv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+pip_log.txt
+build_log.txt
