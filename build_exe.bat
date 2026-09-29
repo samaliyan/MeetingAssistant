@@ -92,6 +92,21 @@ echo        Could not add it ^(see pip_log.txt^). The program is built anyway - 
 %BPY% -m pip uninstall -y -q llama-cpp-python >nul 2>&1
 :afterllm
 
+rem  Hiding the window from screen sharing needs a small helper window (pywebview). Optional too.
+echo        Adding the hidden-window support (hide from screen sharing)...
+set "WEBOK="
+%BPY% -m pip install %PIPQ% "pywebview>=5,<7" >>pip_log.txt 2>&1
+if errorlevel 1 goto nowebview
+%BPY% -c "import webview" >>pip_log.txt 2>&1
+if errorlevel 1 goto nowebview
+set "WEBOK=1"
+echo        OK - the hidden window is included.
+goto afterwebview
+:nowebview
+echo        Could not add it ^(see pip_log.txt^). The program is built anyway - just without hiding from screen sharing.
+%BPY% -m pip uninstall -y -q pywebview >nul 2>&1
+:afterwebview
+
 rem ---------- 2. build ONE exe file ----------
 rem  (The PyInstaller options are in tools\build.py - the same file GitHub uses for the releases.
 rem   UPX is not used: inside a single exe it saves very little and makes antivirus warnings more likely.)
@@ -140,6 +155,7 @@ echo  DONE.  MeetingAssistant.exe - !SIZE! MB, one single file.
 if defined LOCALOPTS echo  Local model engine: included.
 if defined LLMOK echo  Local AI engine ^(translation and answers^): included.
 if not defined LLMOK echo  Local AI engine: NOT included ^(details in pip_log.txt^).
+if not defined WEBOK echo  Hidden window ^(screen sharing^): NOT included ^(details in pip_log.txt^).
 if not defined LOCALOPTS echo  Local model engine: NOT included ^(details in pip_log.txt - usually slow internet: run this file again^).
 echo  It is in:  %~dp0dist
 echo  Start it with the "Meeting Assistant" icon on your desktop.

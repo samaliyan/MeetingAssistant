@@ -58,6 +58,10 @@ echo        Adding the local AI engine (translation and answers on this computer
 venv\Scripts\python.exe -m pip install %PIPQ% --prefer-binary --only-binary=llama-cpp-python "llama-cpp-python>=0.3.19" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu >nul 2>&1
 if errorlevel 1 echo        Could not add it - the program works anyway, just without the local AI model.
 
+echo        Adding the hidden-window support (hide from screen sharing, optional)...
+venv\Scripts\python.exe -m pip install %PIPQ% "pywebview>=5,<7" >nul 2>&1
+if errorlevel 1 echo        Could not add it - the program works anyway, just without hiding from screen sharing.
+
 echo  [4/4] Creating the desktop shortcut...
 venv\Scripts\python.exe app.py --make-shortcut
 

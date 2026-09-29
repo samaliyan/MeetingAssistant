@@ -12,6 +12,7 @@ Windows only (uses WASAPI loopback to hear system audio).
 """
 from __future__ import annotations
 
+import concurrent.futures
 import collections
 import datetime
 import difflib
@@ -31,6 +32,7 @@ import threading
 import time
 import traceback
 import types
+import unicodedata
 import urllib.parse
 import urllib.request
 import wave
@@ -61,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.1"
+VERSION = "6.2"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -84,7 +86,7 @@ def _writable(folder):
 
 # Everything the program writes (settings, meetings, log, models, window cache) lives in ONE folder,
 # "Data", next to the program — nothing else is created beside the exe.
-MAKE_SHORTCUT = "--make-shortcut" in sys.argv       # (the build script only creates the desktop icon)
+MAKE_SHORTCUT = "--make-shortcut" in sys.argv or "--window" in sys.argv   # (only the desktop icon / the hidden-window helper: no files, no log)
 DATA_DIR = os.path.join(APP_DIR, "Data")
 APP_DIR_MOVED = ""
 OLD_DATA_ITEMS = ("config.json", "config.json.bak", "app.log", "app.log.old", "meetings", "models", ".window", ".port")
@@ -184,7 +186,8 @@ ANSWERED_EARLIER = 10            # earlier questions and the answers given (kept
 TRANSLATE_HISTORY = 2
 
 # settings only the program's own actions change (they check them first) - never taken from "save settings"
-INTERNAL_KEYS = ("config_version", "providers", "local_model", "llm_model", "local_bench", "last_recording_dir")
+INTERNAL_KEYS = ("config_version", "providers", "local_model", "llm_model", "local_bench", "last_recording_dir",
+                 "about_file")
 CONFIG_VERSION = 5                 # settings format; older files are converted when they are read
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
@@ -227,6 +230,17 @@ DEFAULTS = {
     # local AI model for translation and answers (llama.cpp); tr_provider / ans_provider "llm" = it does that task
     "llm_model": "",             # the chosen .gguf file
     "last_recording_dir": "",    # where the last transcribed recording was
+    # added in 6.2
+    "about_source": "text",      # "text" = the written 'About you'; "file" = the chosen CV / notes file
+    "about_file": "",            # that file (.txt .md .docx .pdf) - set only by the file chooser
+    "glossary": "",              # technical words (one per line or separated by commas)
+    "meeting_mode": "general",   # general | tech | hr | work | lecture
+    "diarize": False,            # tell the other side's speakers apart (live service only)
+    "hide_from_share": False,    # the window is hidden from screen sharing and recordings (Windows)
+    "screen_provider": "",       # who reads a screenshot: "" = the service that writes answers
+    "screen_model": "",          # "" = chosen automatically from the service's model list
+    "screen_delay": "3",         # seconds between pressing 'Read my screen' and the picture being taken
+    "search_days": "90",         # past meetings searched: 7 / 30 / 90 / 180 / 365 days, or 0 = all
 }
 PREVIEW_EVERY = 2.0              # default seconds between previews for services without a live mode
 
@@ -249,8 +263,40 @@ PRESETS = {
 TASKS = {"stt": "Speech to text", "tr": "Translation", "ans": "Answers"}
 KEEP_FROM_OLD = ("api_key", "proxy", "language", "languages", "context", "answer_style", "about_me",
                  "translate_me", "me_label", "them_label")
+MODES = {
+    "general": {"name": "General (default)", "answer": "", "summary": "", "feedback": ""},
+    "tech": {"name": "Technical interview",
+             "answer": "This is a technical interview: give correct, specific technical answers (real commands, "
+                       "protocols, numbers). For design or troubleshooting questions, structure the answer: "
+                       "requirements, approach, trade-offs, how you would verify it.",
+             "summary": "Emphasize the technical questions, whether each was answered well, and the topics to review afterwards.",
+             "feedback": "This was a technical interview: judge the technical depth and correctness of the answers, "
+                         "the structure of the explanations, and whether good questions were asked."},
+    "hr": {"name": "HR / behavioural interview",
+           "answer": "This is an HR / behavioural interview: for experience questions use the STAR method (situation, "
+                     "task, action, result) in a few spoken sentences; stay honest, positive and tied to the role. "
+                     "Never invent experience that is not in 'About the user'.",
+           "summary": "Emphasize the behavioural questions, the examples that were given, and the impression left.",
+           "feedback": "This was an HR / behavioural interview: judge the stories (STAR structure), honesty, "
+                       "motivation, and how well the answers fit the role."},
+    "work": {"name": "Work meeting",
+             "answer": "This is a normal work meeting, not an interview: suggest short, practical things to say (a "
+                       "status update, a clarifying question, a proposal or a decision). Do not answer as if the user "
+                       "were being interviewed.",
+             "summary": "Emphasize decisions made, action items with owner and date, open questions and risks.",
+             "feedback": "This was a work meeting: judge how clear and useful the contributions were, whether decisions "
+                         "and owners were pinned down, and how the time was used."},
+    "lecture": {"name": "Lecture / class",
+                "answer": "This is a lecture or class: suggest something to say only if the user is asked a direct "
+                          "question or wants to ask one; otherwise output NO_REPLY.",
+                "summary": "Write it like study notes: main concepts, definitions, examples, formulas or names, and "
+                           "what to read or practise next.",
+                "feedback": "This was a lecture or class: judge how well the user followed and took part, and what to review."},
+}
 CHOICES = {"answer_mode": ("smart", "fast"),
-           "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu")}
+           "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
+           "about_source": ("text", "file"), "meeting_mode": tuple(MODES),
+           "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
 RANGES = {"sensitivity": (1, 10), "text_size": (80, 170), "answer_size": (14, 48),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
 
@@ -502,6 +548,8 @@ def sanitize(cfg):
             lo, hi = RANGES.get(k, (v, v))
             v = min(hi, max(lo, v))
         else:
+            if isinstance(v, float) and v == v and abs(v) != float("inf") and v == int(v):
+                v = int(v)                                  # 30.0 -> "30"
             v = "" if v is None else str(v)
             if k in CHOICES and v not in CHOICES[k]:
                 v = default
@@ -533,6 +581,14 @@ def sanitize(cfg):
         if out[f"{t}_provider"] != "groq" and out[f"{t}_provider"] not in ids:
             out[f"{t}_provider"] = "groq"
         out[f"{t}_model"] = out[f"{t}_model"].strip()[:120]
+    af = out["about_file"].strip().strip('"')
+    out["about_file"] = "" if is_network_path(af) else af[:500]
+    if not out["about_file"]:
+        out["about_source"] = "text"
+    out["glossary"] = out["glossary"][:3000]
+    sp = re.sub(r"[^a-z0-9_-]", "", out["screen_provider"].lower())[:40]
+    out["screen_provider"] = sp if sp in ("", "groq", "llm") or sp in ids else ""
+    out["screen_model"] = out["screen_model"].strip()[:120]
     out["config_version"] = CONFIG_VERSION
     out["api_key"] = out["api_key"].strip()
     return out
@@ -1781,9 +1837,14 @@ class GroqAPI:
         r = self.request("GET", "/models", timeout=httpx.Timeout(10.0, connect=8.0))
         ms = (time.time() - t) * 1000
         try:
-            ids = [m["id"] for m in r.json().get("data", [])]
+            body = r.json()
+            items = body if isinstance(body, list) else (body.get("data") or body.get("models") or [])
+            data = [m if isinstance(m, dict) else {"id": m} for m in items if isinstance(m, (dict, str))]
+            data = [m for m in data if m.get("id")]
+            ids = [m["id"] for m in data]
         except Exception:
-            ids = []
+            data, ids = [], []
+        self.last_raw = data                        # what the service says about each model (kept for the model check)
         return ms, ids
 
     def transcribe(self, audio16k, model, language=None, prompt=None, _again=False):
@@ -1896,9 +1957,18 @@ class GroqAPI:
         finally:
             if raw or used[0]:
                 # exact count when the service reports it, otherwise an estimate (~4 characters per token)
-                est = used[0] or (sum(len(str(m.get("content", ""))) for m in messages) + len(raw)) // 4
+                est = used[0] or (sum(_msg_chars(m) for m in messages) + len(raw)) // 4
                 record_usage(self.name, tokens=est)
         return strip_think(raw)
+
+
+def _msg_chars(m):
+    """Characters of a message; a picture (list content) counts as its text parts plus a flat 1000 tokens."""
+    c = m.get("content", "")
+    if isinstance(c, list):
+        return sum(len(p.get("text", "")) for p in c if isinstance(p, dict)) + 4000 * sum(
+            1 for p in c if isinstance(p, dict) and p.get("type") == "image_url")
+    return len(str(c))
 
 
 def chat_compat(client, model, messages, max_tokens, temperature, effort, on_text):
@@ -2171,11 +2241,16 @@ class WSClient:
 DEEPGRAM_WS = os.environ.get("MA_DEEPGRAM_WS", "wss://api.deepgram.com/v1/listen")
 
 
-def deepgram_url(model, language):
+def deepgram_url(model, language, terms=None, diarize=False):
     lang = language if language in LANGS else "multi"
-    q = {"model": model or "nova-3", "language": lang, "encoding": "linear16", "sample_rate": "16000",
-         "channels": "1", "interim_results": "true", "smart_format": "true", "punctuate": "true",
-         "endpointing": "400", "utterance_end_ms": "1000"}
+    q = [("model", model or "nova-3"), ("language", lang), ("encoding", "linear16"), ("sample_rate", "16000"),
+         ("channels", "1"), ("interim_results", "true"), ("smart_format", "true"), ("punctuate", "true"),
+         ("endpointing", "400"), ("utterance_end_ms", "1000")]
+    if diarize:
+        q.append(("diarize", "true"))
+    if terms:                                              # nova-3 takes 'keyterm', older models 'keywords'
+        new = (model or "nova-3").startswith("nova-3")
+        q += [("keyterm", t) if new else ("keywords", t + ":2") for t in terms[:40]]
     return DEEPGRAM_WS + "?" + urllib.parse.urlencode(q)
 
 
@@ -2190,8 +2265,10 @@ class DeepgramLive:
     on_fail(error)             - the connection broke; the program falls back to Groq
     """
 
-    def __init__(self, source, key, model, language, proxy, on_interim, on_final, on_fail):
+    def __init__(self, source, key, model, language, proxy, on_interim, on_final, on_fail, terms=None, diarize=False):
         self.source, self.key, self.model, self.language, self.proxy = source, key, model, language, proxy
+        self.terms, self.diarize = list(terms or []), bool(diarize)
+        self.spk = collections.Counter()      # words per speaker in the sentence being built (diarize only)
         self.on_interim, self.on_final, self.on_fail = on_interim, on_final, on_fail
         self.q = queue.Queue(maxsize=600)
         self.stop_event = threading.Event()
@@ -2278,7 +2355,8 @@ class DeepgramLive:
 
     def _run(self):
         try:
-            self.ws = WSClient(deepgram_url(self.model, self.language), {"Authorization": f"Token {self.key}"},
+            self.ws = WSClient(deepgram_url(self.model, self.language, self.terms, self.diarize),
+                               {"Authorization": f"Token {self.key}"},
                                self.proxy)
         except Exception as e:
             return self._fail(e)
@@ -2367,6 +2445,11 @@ class DeepgramLive:
                     if m.get("is_final"):
                         if words:
                             self.words = (self.words + " " + words).strip()
+                            if self.diarize:
+                                for w in alt.get("words") or []:
+                                    sp = w.get("speaker") if isinstance(w, dict) else None
+                                    if isinstance(sp, int) and not isinstance(sp, bool):
+                                        self.spk[sp] += 1
                         if m.get("speech_final") and self.words:
                             self._finish(end)
                         elif self.words:
@@ -2388,6 +2471,10 @@ class DeepgramLive:
         text, start = self.words, self.utt_start or 0.0
         self.words, self.utt_start = "", None
         self.utt += 1
+        if self.diarize:
+            who = self.spk.most_common(1)[0][0] if self.spk else None
+            self.spk = collections.Counter()
+            return self._cb(self.on_final, key, self._wall(start), self._wall(end), text, who)
         self._cb(self.on_final, key, self._wall(start), self._wall(end), text)
 
 
@@ -2443,6 +2530,211 @@ LOCAL_CATALOG = [
     {"id": "large-v3-turbo", "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "mb": 1620,
      "note": "Most accurate; needs a strong processor or an NVIDIA graphics card"},
 ]
+# ---- finding newer downloadable models (Hugging Face) ---------------------------------------
+def system_info():
+    """Memory, processor threads and free disk of this computer (0 when unknown)."""
+    ram = 0
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("sullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = MS()
+            m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                ram = int(m.ullTotalPhys // (1024 * 1024))
+        else:
+            with open("/proc/meminfo") as f:
+                for ln in f:
+                    if ln.startswith("MemTotal:"):
+                        ram = int(ln.split()[1]) // 1024
+                        break
+    except Exception:
+        ram = 0
+    try:
+        disk = shutil.disk_usage(MODELS_DIR if os.path.isdir(MODELS_DIR) else APP_DIR).free // (1024 * 1024)
+    except Exception:
+        disk = 0
+    return {"ram_mb": ram, "threads": os.cpu_count() or 0, "disk_mb": disk}
+
+
+def model_needs(kind, mb):
+    """Rough memory and processor need of a model file of `mb` MB. (Estimates - every computer is different.)"""
+    if kind == "llm":
+        ram = int(mb * 1.2 + 600)             # the file in memory, plus the working memory (4096 words of context)
+        cpu = ("any processor" if mb < 1500 else "4 or more cores" if mb < 3500 else
+               "6 or more cores (a graphics card helps)" if mb < 6000 else "8 or more fast cores, or a strong graphics card")
+        speed = "fast" if mb < 1500 else "normal" if mb < 3500 else "slow on a laptop" if mb < 6000 else "slow without a graphics card"
+    else:
+        ram = int(mb * 1.5 + 300)
+        cpu = ("any processor" if mb < 300 else "a normal processor" if mb < 700 else
+               "a fast processor (6 or more cores)" if mb < 1700 else "a strong processor or an NVIDIA graphics card")
+        speed = "very fast" if mb < 300 else "fast" if mb < 700 else "normal" if mb < 1700 else "needs a strong computer"
+    return {"ram_mb": ram, "cpu": cpu, "speed": speed}
+
+
+def model_fit(ram_need, ram_have):
+    if not ram_have:
+        return "unknown"
+    return "ok" if ram_need <= ram_have * 0.6 else "tight" if ram_need <= ram_have * 0.85 else "no"
+
+
+def catalog_view(items, kind):
+    sysi = system_info()
+    out = []
+    for m in items:
+        n = model_needs(kind, m["mb"])
+        out.append(dict(m, ram_mb=n["ram_mb"], cpu=n["cpu"], speed=n["speed"], fit=model_fit(n["ram_mb"], sysi["ram_mb"])))
+    return out
+
+
+_HF_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]{0,95}/[A-Za-z0-9][\w.-]{0,127}$")
+_HF_FILE_RE = re.compile(r"^[\w][\w.+-]{0,150}\.gguf$", re.I)
+_QUANT_PREF = ("q4_k_m", "q4_k_s", "q4_0", "q5_k_m", "q4_1", "q5_k_s", "q6_k", "q3_k_m", "q8_0", "iq4_xs")
+
+
+def custom_item(kind, repo, file, mb):
+    """A model chosen from the search list: checked, with a folder name that is safe."""
+    repo, file = str(repo or ""), str(file or "")
+    if not _HF_REPO_RE.match(repo) or ".." in repo:
+        raise ValueError("This model address is not valid.")
+    if kind == "llm" and not _HF_FILE_RE.match(file):
+        raise ValueError("This file name is not valid.")
+    try:
+        mb = int(mb)
+    except (TypeError, ValueError):
+        mb = 0
+    if not 1 <= mb <= 200_000:
+        raise ValueError("The model size is not known.")
+    tag = hashlib.sha1((repo + "|" + file).lower().encode("utf-8")).hexdigest()[:8]     # keeps folders apart, and short (Windows paths)
+    slug = re.sub(r"[^a-z0-9._-]+", "_", repo.split("/", 1)[1].lower())[:40].strip("._-") or "model"
+    item = {"id": f"hf-{slug}-{tag}", "repo": repo, "mb": mb, "note": "From Hugging Face"}
+    if kind == "llm":
+        item["file"] = file
+    return item
+
+
+def _hf_pick_file(siblings):
+    """(file name, MB) of the best single-file .gguf of a repository, or None."""
+    best = None
+    for sb in siblings or []:
+        name = str(sb.get("rfilename") or "")
+        low = name.lower()
+        if ("/" in name or not low.endswith(".gguf") or re.search(r"mmproj|lora|imatrix|vocab|q4_0_\d_\d", low)
+                or re.search(r"-\d{4,}-of-\d{4,}", low)):
+            continue
+        size = sb.get("size") or (sb.get("lfs") or {}).get("size") or 0
+        if not size or not _HF_FILE_RE.match(name):
+            continue
+        rank = next((k for k, q in enumerate(_QUANT_PREF) if q in low), 99)
+        if rank == 99 and re.search(r"f16|bf16|f32", low):
+            continue                                   # uncompressed: far too big for this use
+        try:
+            mb = int(int(size) / 1_000_000)
+        except (TypeError, ValueError):
+            continue
+        if best is None or (rank, mb) < (best[0], best[2]):
+            best = (rank, name, mb)
+    return (best[1], best[2]) if best else None
+
+
+def hf_search(kind, sort, proxy, limit=12):
+    """Models on Hugging Face that this program can use: faster-whisper folders ('stt') or single-file .gguf chat models ('llm').
+    Returns [{id, repo, file, mb, downloads, updated, ...needs}]; raises APIError when no site answers."""
+    sysi = system_info()
+    params = {"filter": "ctranslate2" if kind == "stt" else "gguf", "sort": "createdAt" if sort == "new" else "downloads",
+              "direction": "-1", "limit": "60", "search": "whisper" if kind == "stt" else "instruct"}
+    kw = dict(timeout=httpx.Timeout(25.0, connect=10.0), follow_redirects=True, trust_env=False,
+              headers={"User-Agent": f"MeetingAssistant/{VERSION}"})
+    last = None
+    for host in HF_HOSTS:
+        for px in ([proxy, ""] if proxy else [""]):
+            try:
+                with httpx.Client(**dict(kw, **({"proxy": px} if px else {}))) as client:
+                    r = client.get(f"{host}/api/models", params=params)
+                    if r.status_code != 200:
+                        last = f"HTTP {r.status_code}"
+                        continue
+                    listing = r.json()
+                    if not isinstance(listing, list):
+                        last = "unexpected answer"
+                        continue
+                    cands = []
+                    for m in listing:
+                        if not isinstance(m, dict):
+                            continue
+                        rid = str(m.get("id") or m.get("modelId") or "")
+                        m["id"] = rid
+                        if not _HF_REPO_RE.match(rid) or m.get("private") or m.get("gated"):
+                            continue
+                        if kind == "stt" and "whisper" not in rid.lower():
+                            continue
+                        if kind == "llm" and not re.search(r"instruct|[-_.]it[-_.]|chat|gguf", rid, re.I):
+                            continue
+                        try:
+                            if int(m.get("downloads") or 0) < (300 if sort == "new" else 1000):
+                                continue
+                        except (TypeError, ValueError):
+                            continue
+                        cands.append(m)
+                        if len(cands) >= 20:
+                            break
+
+                    fails = []
+
+                    def detail(m):
+                        try:
+                            rr = client.get(f"{host}/api/models/{m['id']}", params={"blobs": "true"})
+                            if rr.status_code != 200:
+                                fails.append(f"HTTP {rr.status_code}")
+                                return m, None
+                            d = rr.json()
+                            return m, (d if isinstance(d, dict) else None)
+                        except (httpx.HTTPError, ValueError) as e:
+                            fails.append(dl_error(e) if isinstance(e, httpx.HTTPError) else "unexpected answer")
+                            return m, None
+                    items = []
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+                        for m, d in ex.map(detail, cands):
+                            if not d:
+                                continue
+                            try:
+                                sib = [sb for sb in (d.get("siblings") or []) if isinstance(sb, dict)]
+                                if kind == "stt":
+                                    names = {sb.get("rfilename"): sb for sb in sib}
+                                    if not all(n in names for n in NEEDED_FILES):
+                                        continue
+                                    sz = names["model.bin"].get("size") or (names["model.bin"].get("lfs") or {}).get("size") or 0
+                                    file, mb = "", int(int(sz) / 1_000_000)
+                                    if mb <= 0:
+                                        continue
+                                else:
+                                    pick = _hf_pick_file(sib)
+                                    if not pick:
+                                        continue
+                                    file, mb = pick
+                                need = model_needs(kind, mb)
+                                items.append({"repo": m["id"], "file": file, "mb": mb, "downloads": int(m.get("downloads") or 0),
+                                              "likes": int(m.get("likes") or 0),
+                                              "updated": str(d.get("lastModified") or m.get("createdAt") or "")[:10],
+                                              "ram_mb": need["ram_mb"], "cpu": need["cpu"], "speed": need["speed"],
+                                              "fit": model_fit(need["ram_mb"], sysi["ram_mb"]),
+                                              "small_disk": bool(sysi["disk_mb"]) and mb * 1.1 > sysi["disk_mb"]})
+                            except (TypeError, ValueError, AttributeError, KeyError):
+                                continue
+                    if cands and not items and fails:
+                        last = fails[0] + (" (the site is busy - try again in a minute)" if "429" in fails[0] else "")
+                        continue
+                    return {"system": sysi, "items": items[:limit]}
+            except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError) as e:
+                last = dl_error(e) if isinstance(e, httpx.HTTPError) else "unexpected answer"
+    raise APIError(f"Hugging Face could not be reached ({last or 'no answer'}). Check the internet or the proxy in Setup.")
+
 HF_HOSTS = tuple(h for h in os.environ.get("MA_HF_HOSTS", "https://huggingface.co https://hf-mirror.com").split() if h)
 MODEL_FILE_RE = re.compile(r"^(config\.json|preprocessor_config\.json|model\.bin|tokenizer\.json|vocabulary\.(txt|json))$")
 NEEDED_FILES = ("model.bin", "config.json", "tokenizer.json")
@@ -3383,6 +3675,10 @@ class ModelDownload:
             known = [f for f in files if f[1]]
             if len(known) == len(files):
                 self.state["total"] = sum(f[1] for f in files)
+                free_now = shutil.disk_usage(MODELS_DIR).free + self._on_disk()
+                if free_now < self.state["total"] * 1.05:
+                    raise DownloadError(f"Not enough free disk space: {round(self.state['total'] / 1e6)} MB needed, "
+                                        f"{round(free_now / 1e6)} MB free.")
             have_total = sum(os.path.getsize(os.path.join(self.part, f[0])) for f in files
                              if os.path.isfile(os.path.join(self.part, f[0])))
             self._emit(True, state="downloading", done=have_total)
@@ -3730,6 +4026,240 @@ def clean_transcript(res):
 # ----------------------------------------------------------------------------
 # Meeting session (transcript + autosave)
 # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# 6.2 helpers: glossary, speakers, documents (About from a file), modes
+# ----------------------------------------------------------------------------
+GLOSSARY_MAX_TERMS = 60
+GLOSSARY_MAX_LEN = 40
+DOC_EXT = (".docx", ".pdf", ".txt", ".md")
+ABOUT_MAX = 8000                  # characters of a CV / background file that are used
+DOC_MAX_BYTES = 20 * 1024 * 1024
+
+
+def glossary_terms(cfg):
+    """The technical words the user listed (one per line or separated by commas), cleaned, no repeats."""
+    raw = str(cfg.get("glossary") or "")
+    out, seen = [], set()
+    for t in re.split(r"[\n\r,;،؛]+", raw):
+        t = re.sub(r"\s+", " ", t).strip()
+        if not t or len(t) > GLOSSARY_MAX_LEN or t.lower() in seen:
+            continue
+        seen.add(t.lower())
+        out.append(t)
+        if len(out) >= GLOSSARY_MAX_TERMS:
+            break
+    return out
+
+
+def glossary_note(cfg):
+    terms = glossary_terms(cfg)
+    return ("\nTechnical words that may be spoken (spell them exactly like this): " + ", ".join(terms)) if terms else ""
+
+
+def apply_glossary(text, terms):
+    """Fixes the spelling of terms that have capitals or digits (OSPF, RMAN, k8s). Plain words are left alone."""
+    for t in terms:
+        if t == t.lower() and not re.search(r"\d", t):
+            continue
+        if len(t) <= 2 and not re.search(r"\d", t):
+            continue  # IT, AI, US, Go, OR are also normal words: leave the text alone
+        if len(t) <= 3 and not re.search(r"\d", t) and t != t.upper():
+            continue
+        try:
+            text = re.sub(r"(?<!\w)" + re.escape(t) + r"(?!\w)", t.replace("\\", "\\\\"), text, flags=re.I)
+        except re.error:
+            continue
+    return text
+
+
+def speaker_label(base, n):
+    """'Interviewer' + speaker 1 -> 'Interviewer 2'; speaker 0 (or unknown) keeps the plain label."""
+    if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+        return base
+    stem = re.sub(r"\s*\d+$", "", base).strip() or base
+    return f"{stem} {n + 1}"
+
+
+def mode_text(cfg, key):
+    m = MODES.get(cfg.get("meeting_mode"), MODES["general"])
+    return m.get(key, "")
+
+
+class DocError(ValueError):
+    pass
+
+
+_DOC_CACHE = {}
+_DOC_WARNED = set()
+
+
+def _decode_text(raw):
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeError:
+            pass
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        if len(raw) >= 1_000_000 and e.reason == "unexpected end of data" and e.end == len(raw):   # a big file read only in part ends mid-character
+            return raw[:e.start].decode("utf-8-sig")
+    except UnicodeError:
+        pass
+    encs = []
+    # Persian Windows "ANSI" files are cp1256; pick it when the text has Arabic-script letters and no Latin accents
+    encs += ["cp1256", "cp1252"] if sum(0xC1 <= b <= 0xDF for b in raw) > len(raw) // 8 else ["cp1252", "cp1256"]
+    for enc in encs:
+        try:
+            return raw.decode(enc)
+        except UnicodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+def _docx_text(path):
+    import zipfile
+    import xml.etree.ElementTree as ET
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    try:
+        with zipfile.ZipFile(path) as z:
+            info = z.getinfo("word/document.xml")
+            if info.file_size > 60 * 1024 * 1024:
+                raise DocError("This Word file is too large.")
+            root = ET.fromstring(z.read("word/document.xml"))
+    except DocError:
+        raise
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, OSError) as e:
+        raise DocError("This is not a readable .docx file.") from e
+    paras = []
+    body = root.find(ns + "body")
+    fallback = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+    skip = set()
+    for fb in root.iter(fallback):
+        skip.update(id(x) for x in fb.iter())
+    scope = body if body is not None else root
+    for p in scope.iter(ns + "p"):  # a paragraph inside a text box is read once, with its outer paragraph
+        skip.update(id(x) for x in p.iter(ns + "p") if x is not p)
+    for p in scope.iter(ns + "p"):
+        if id(p) in skip:
+            continue
+        parts = []
+        for el in p.iter():
+            if id(el) in skip:
+                continue
+            if el.tag == ns + "t" and el.text:
+                parts.append(el.text)
+            elif el.tag == ns + "tab":
+                parts.append("\t")
+            elif el.tag == ns + "br":
+                parts.append("\n")
+        line = "".join(parts).strip()
+        if line:
+            paras.append(line)
+    return "\n".join(paras)
+
+
+def _pdf_text(path):
+    try:
+        import pypdf
+    except ImportError as e:
+        raise DocError("Reading PDF files needs the 'pypdf' package (pip install pypdf). "
+                       "Save the file as .docx or .txt instead.") from e
+    try:
+        rd = pypdf.PdfReader(path)
+        if rd.is_encrypted:
+            try:
+                if not rd.decrypt(""):
+                    raise DocError("This PDF is password protected.")
+            except DocError:
+                raise
+            except Exception as e:
+                raise DocError("This PDF is password protected.") from e
+        out, n = [], 0
+        for page in rd.pages[:40]:
+            t = (page.extract_text() or "").strip()
+            if t:
+                out.append(t)
+                n += len(t)
+            if n > ABOUT_MAX * 2:
+                break
+    except DocError:
+        raise
+    except Exception as e:
+        raise DocError("This PDF could not be read.") from e
+    return "\n".join(out)
+
+
+def read_document(path, limit=ABOUT_MAX):
+    """Text of a .txt / .md / .docx / .pdf file (cut to `limit` characters). Raises DocError with a plain message."""
+    p = str(path or "").strip().strip('"')
+    if not p:
+        raise DocError("No file chosen.")
+    if is_network_path(p):
+        raise DocError("Network paths are not used. Copy the file to this computer first.")
+    try:
+        st = os.stat(p)
+    except OSError:
+        raise DocError("The file was not found.")
+    if not os.path.isfile(p):
+        raise DocError("This is not a file.")
+    if st.st_size > DOC_MAX_BYTES:
+        raise DocError("The file is larger than 20 MB.")
+    key = (p, st.st_mtime_ns, st.st_size, limit)
+    hit = _DOC_CACHE.get(key)
+    if hit is not None:
+        return hit
+    ext = os.path.splitext(p)[1].lower()
+    if ext == ".docx":
+        text = _docx_text(p)
+    elif ext == ".pdf":
+        text = _pdf_text(p)
+    elif ext in (".txt", ".md", ".text", ".markdown"):
+        try:
+            with open(p, "rb") as f:
+                text = _decode_text(f.read(3 * 1024 * 1024))
+        except OSError:
+            raise DocError("The file could not be read.")
+    else:
+        raise DocError("Use a .docx, .pdf, .txt or .md file.")
+    text = re.sub(r"[ \t]+\n", "\n", text.replace("\r\n", "\n").replace("\r", "\n"))
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not text:
+        raise DocError("No text was found in the file (a scanned PDF has only pictures).")
+    text = text[:limit]
+    if len(_DOC_CACHE) > 8:
+        _DOC_CACHE.clear()
+    _DOC_CACHE[key] = text
+    return text
+
+
+def about_text(cfg):
+    """What the answers know about the user: the chosen file, or the written About text."""
+    if cfg.get("about_source") == "file" and cfg.get("about_file"):
+        try:
+            t = read_document(cfg["about_file"])
+            return "(from the user's file)\n" + t
+        except DocError as e:
+            k = (cfg["about_file"], str(e))
+            if k not in _DOC_WARNED:
+                _DOC_WARNED.add(k)
+                log("About file not used, the written text is used instead:", e, level="warn")
+    return cfg.get("about_me") or ""
+
+
+def about_info(cfg):
+    """For the window: which source is used, and whether the file can be read."""
+    f = cfg.get("about_file") or ""
+    info = {"source": cfg.get("about_source", "text"), "file": os.path.basename(f) if f else "",
+            "chars": 0, "error": ""}
+    if f:
+        try:
+            info["chars"] = len(read_document(f))
+        except DocError as e:
+            info["error"] = str(e)
+    return info
+
+
 class Session:
     def __init__(self, cfg, recording=""):
         self.cfg = cfg
@@ -3752,15 +4282,18 @@ class Session:
         self.dirty = True
         self.save_lock = threading.Lock()
         self.resumes = []                           # times the meeting was continued after a stop
+        self.feedback = ""                          # the review written after the meeting
+        self.screens = []                           # notes from 'Read my screen': {t, text}
 
     FIELDS = ("source", "t0", "t_end", "t_text", "text", "lang", "translation", "tr_state", "answer", "answer_fa",
-              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing")
+              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing", "speaker")
 
     def state(self):
         with self.lock:
             rows = [{k: e.get(k) for k in self.FIELDS} for e in self.entries.values()]
             return {"path": self.path, "started": self.started.timestamp(), "summary": self.summary,
-                    "resumes": list(self.resumes), "entries": rows}
+                    "resumes": list(self.resumes), "feedback": self.feedback, "screens": list(self.screens),
+                    "entries": rows}
 
     @classmethod
     def load_last(cls, cfg):
@@ -3780,6 +4313,9 @@ class Session:
             s = cls(cfg)
             s.path = path
             s.summary = d.get("summary") if isinstance(d.get("summary"), str) else ""
+            s.feedback = d.get("feedback") if isinstance(d.get("feedback"), str) else ""
+            s.screens = [{"t": float(x["t"]), "text": x["text"]} for x in (d.get("screens") if isinstance(d.get("screens"), list) else [])
+                         if isinstance(x, dict) and num(x.get("t")) and isinstance(x.get("text"), str)][:30]
             s.resumes = [float(x) for x in (d.get("resumes") if isinstance(d.get("resumes"), list) else []) if num(x)]
             s.started = datetime.datetime.fromtimestamp(float(d["started"])) if num(d.get("started")) else s.started
             for row in d["entries"]:
@@ -3801,14 +4337,15 @@ class Session:
             log("the last meeting could not be read (Continue is not offered):", short(e, 100), level="warn")
             return None
 
-    def add(self, source, t0, t_end, text, lang, seg_ids):
+    def add(self, source, t0, t_end, text, lang, seg_ids, speaker=None):
         with self.lock:
             eid = next(_entry_ids)
             e = {"id": eid, "source": source, "t0": t0, "t_end": t_end, "t_text": time.time(),
                  "text": text, "lang": lang, "seg_ids": seg_ids,
                  "translation": "", "tr_state": "pending",
                  "answer": "", "answer_fa": "", "ans_state": "none", "forced": False, "question": "",
-                 "explain": "", "explain_q": "", "ex_state": "none", "edited": False}
+                 "explain": "", "explain_q": "", "ex_state": "none", "edited": False,
+                 "speaker": speaker if isinstance(speaker, int) and speaker > 0 else None}
             self.entries[eid] = e
             self.dirty = True
             return dict(e)
@@ -3817,6 +4354,18 @@ class Session:
         with self.lock:
             e = self.entries.get(eid)
             return dict(e) if e else None
+
+    def set_feedback(self, text):
+        with self.lock:
+            self.feedback = text
+            self.dirty = True
+
+    def add_screen(self, text):
+        with self.lock:
+            row = {"t": time.time(), "text": text}
+            self.screens = (self.screens + [row])[-30:]
+            self.dirty = True
+            return dict(row)
 
     def set_summary(self, text):
         with self.lock:
@@ -3855,7 +4404,9 @@ class Session:
         return [e for e in self.ordered() if e["source"] == source and e["t0"] >= since]
 
     def label(self, e):
-        return self.cfg["me_label"] if e["source"] == "me" else self.cfg["them_label"]
+        if e["source"] == "me":
+            return self.cfg["me_label"]
+        return speaker_label(self.cfg["them_label"], e.get("speaker"))
 
     def save_if_dirty(self, final=True):
         """final=False (the regular save during a meeting): the 'Continue' copy is refreshed at most every 20 s."""
@@ -3901,6 +4452,10 @@ class Session:
             out.append("")
         if self.summary:
             out += ["---", "", "## Summary / خلاصه", "", self.summary, ""]
+        if self.feedback:
+            out += ["---", "", "## Feedback / بازخورد", "", self.feedback, ""]
+        for sc in self.screens:
+            out += ["---", "", f"## Screen / صفحه {datetime.datetime.fromtimestamp(sc['t']):%H:%M:%S}", "", sc["text"], ""]
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -3927,6 +4482,433 @@ class Session:
             os.replace(tmp, LAST_MEETING)
         except (OSError, TypeError, ValueError) as e:
             log("could not keep the meeting for 'Continue':", short(e), level="debug")
+
+
+# ----------------------------------------------------------------------------
+# 6.2 tools: talk statistics, screen picture, search in old meetings, export
+# ----------------------------------------------------------------------------
+SPEECH_FILLERS = ("um", "uh", "er", "erm", "hmm", "äh", "ähm", "you know", "i mean", "basically",
+                  "sort of", "kind of", "sozusagen", "quasi")
+
+
+def talk_stats(rows):
+    """Numbers about how the user spoke (from the transcript only). rows: entries in time order.
+    Note: speech-to-text often leaves out 'um' and 'uh', so the filler count is a lower bound."""
+    rows = [r for r in rows if (r.get("text") or "").strip()]
+    me = [r for r in rows if r["source"] == "me"]
+    th = [r for r in rows if r["source"] != "me"]
+    words = lambda r: len(re.findall(r"\w+", r["text"]))
+    mw, tw = sum(words(r) for r in me), sum(words(r) for r in th)
+    m_sec = sum(max(0.0, r["t_end"] - r["t0"]) for r in me)
+    fill = {}
+    blob = " ".join(r["text"].lower() for r in me)
+    for f in SPEECH_FILLERS:
+        n = len(re.findall(r"(?<!\w)" + re.escape(f) + r"(?!\w)", blob))
+        if n:
+            fill[f] = n
+    delays = []
+    for a, b in zip(rows, rows[1:]):
+        if a["source"] != "me" and b["source"] == "me":
+            delays.append(max(0.0, b["t0"] - a["t_end"]))
+    span = (max(r["t_end"] for r in rows) - min(r["t0"] for r in rows)) / 60 if rows else 0.0
+    return {"minutes": round(span, 1), "me_words": mw, "them_words": tw,
+            "me_share": round(100 * mw / (mw + tw)) if mw + tw else 0,
+            "wpm": round(mw / (m_sec / 60)) if m_sec >= 20 else None,
+            "fillers": sum(fill.values()), "filler_list": fill,
+            "long_pauses": sum(1 for d in delays if d > 6), "answers": len(delays),
+            "avg_delay": round(sum(delays) / len(delays), 1) if delays else None}
+
+
+def clip_middle(text, limit):
+    if len(text) <= limit:
+        return text
+    a = limit // 3
+    return text[:a] + "\n[…]\n" + text[-(limit - a):]
+
+
+_STT_RE = re.compile(r"whisper|transcri|voxtral|speech-to|(^|[-_/])stt([-_]|$)", re.I)
+_NOTCHAT_RE = re.compile(r"embed|tts|text-to-speech|dall|imagen|image-gen|moderation|rerank|guard|realtime|"
+                         r"(^|[-_/])audio([-_]|$)|veo|sora|lyria|aqa|safeguard|orpheus|playai", re.I)
+_VISION_NAME_RE = re.compile(r"gpt-4o|gpt-4\.1|gpt-5|gemini|llama-4|pixtral|qwen3\.\d|qwen.*vl|vision|claude|"
+                             r"mistral-(small|medium|large)|gemma-3|grok", re.I)
+
+
+def model_info(m):
+    """What one entry of a service's model list tells us: {id, stt, chat, vision, alive, sure}.
+    Uses the facts the service publishes (active, deprecated, input types, capabilities) and the name only when it is silent."""
+    if isinstance(m, str):
+        m = {"id": m}
+    mid = str(m.get("id") or m.get("name") or "")
+    arch = m.get("architecture") if isinstance(m.get("architecture"), dict) else {}
+    caps = m.get("capabilities") if isinstance(m.get("capabilities"), dict) else {}
+    mods_in = [str(x).lower() for x in (arch.get("input_modalities") or m.get("input_modalities") or []) if x]
+    mods_out = [str(x).lower() for x in (arch.get("output_modalities") or m.get("output_modalities") or []) if x]
+    status = str(m.get("status") or "").lower()
+    alive = not (m.get("active") is False or m.get("deprecated") is True or m.get("archived") is True
+                 or bool(m.get("deprecation")) or status in ("deprecated", "retired", "decommissioned", "disabled", "inactive"))
+    mtype = str(m.get("type") or "").lower()
+    stt = bool(_STT_RE.search(mid)) or "transcri" in mtype
+    chat = (not stt and not _NOTCHAT_RE.search(mid) and not (mods_out and "text" not in mods_out)
+            and not (mods_out and "image" in mods_out)
+            and not re.search(r"image|embed|rerank|moderation|audio|speech|video", mtype))
+    sure = False
+    vision = False
+    if "image" in mods_in or caps.get("vision") is True or m.get("supports_vision") is True or m.get("vision") is True:
+        vision, sure = True, True
+    elif mods_in or "vision" in caps or "supports_vision" in m:
+        vision, sure = False, True
+    else:
+        vision = bool(_VISION_NAME_RE.search(mid))
+    return {"id": mid, "stt": stt, "chat": chat, "vision": vision and chat, "alive": alive, "sure": sure}
+
+
+def model_infos(raw):
+    seen, out = set(), []
+    for m in raw or []:
+        i = model_info(m)
+        if i["id"] and i["id"] not in seen:
+            seen.add(i["id"])
+            out.append(i)
+    return out
+
+
+_VISION_PREF = ("qwen3.8", "gpt-4.1-mini", "gpt-4o-mini", "gpt-4o", "gemini-2.5-flash", "gemini-2.5", "gemini-2", "gpt-4.1",
+                "gpt-5", "llama-4-scout", "llama-4-maverick", "pixtral", "mistral-small", "gemma-3", "qwen", "claude")
+
+
+def pick_vision(infos):
+    """The best picture-reading model of a service, decided from what the service says about its models."""
+    ok = [i for i in infos if i["alive"] and i["vision"]]
+    ok.sort(key=lambda i: (not i["sure"], next((n for n, k in enumerate(_VISION_PREF) if k in i["id"].lower()), 99)))
+    return ok[0]["id"] if ok else None
+
+
+def pick_chat(infos, n=3):
+    """Current text models for translation and answers (used when the built-in Groq choices are gone)."""
+    good = [i for i in infos if i["alive"] and i["chat"] and not re.search(
+        r"instant|compound|(^|[-_/:.])(1|3|8)b([-_:.]|$)|(^|[-_/])mini-|small-|tiny", i["id"], re.I)]
+    good.sort(key=lambda i: next((k for k, key in enumerate(("gpt-oss-120b", "gpt-oss-20b", "qwen3", "llama-3.3", "llama-4", "kimi", "gemini", "gpt-4")) if key in i["id"].lower()), 99))
+    return [i["id"] for i in good[:n]]
+
+
+def guess_vision_model(ids):
+    """Picks a model that can read pictures from the list a service reports (None if nothing looks right)."""
+    bad = ("embed", "whisper", "tts", "audio", "realtime", "moderation", "transcribe", "rerank", "guard", "dall")
+    ids = [i for i in ids if not any(b in i.lower() for b in bad)]
+    for key in ("qwen3.8", "gpt-4.1-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-5", "gemini-2.5-flash", "gemini-2.0-flash",
+                "gemini-1.5-flash", "gemini", "llama-4-scout", "llama-4-maverick", "pixtral", "mistral-small",
+                "qwen2.5-vl", "qwen-vl", "vision", "claude"):
+        for i in ids:
+            if key in i.lower():
+                return i
+    return None
+
+
+def _grab_screen_windows():
+    """(width, height, BGRA bytes) of the monitor that holds the window in front. Windows only."""
+    import ctypes
+    from ctypes import wintypes as wt
+    u, g = ctypes.windll.user32, ctypes.windll.gdi32
+    u.GetForegroundWindow.restype = wt.HWND
+    u.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
+    u.MonitorFromWindow.restype = wt.HANDLE
+    u.GetMonitorInfoW.argtypes = [wt.HANDLE, ctypes.c_void_p]
+    u.GetDC.argtypes = [wt.HWND]
+    u.GetDC.restype = wt.HDC
+    u.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
+    g.CreateCompatibleDC.argtypes = [wt.HDC]
+    g.CreateCompatibleDC.restype = wt.HDC
+    g.CreateCompatibleBitmap.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int]
+    g.CreateCompatibleBitmap.restype = wt.HBITMAP
+    g.SelectObject.argtypes = [wt.HDC, wt.HGDIOBJ]
+    g.SelectObject.restype = wt.HGDIOBJ
+    g.BitBlt.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.HDC,
+                         ctypes.c_int, ctypes.c_int, wt.DWORD]
+    g.GetDIBits.argtypes = [wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
+    g.DeleteObject.argtypes = [wt.HGDIOBJ]
+    g.DeleteDC.argtypes = [wt.HDC]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+
+    class BMIH(ctypes.Structure):
+        _fields_ = [("biSize", wt.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                    ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                    ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", ctypes.c_long), ("biYPelsPerMeter", ctypes.c_long),
+                    ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+    old_ctx = None
+    try:                                              # real pixels on a scaled screen (per-monitor DPI, this thread only)
+        u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        old_ctx = u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    except (AttributeError, OSError):
+        pass
+    hdc = mdc = bmp = old = None
+    try:
+        mon = u.MonitorFromWindow(u.GetForegroundWindow(), 2)
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if mon and u.GetMonitorInfoW(mon, ctypes.byref(mi)):
+            x, y = mi.rcMonitor.left, mi.rcMonitor.top
+            w, h = mi.rcMonitor.right - x, mi.rcMonitor.bottom - y
+        else:
+            x = y = 0
+            w, h = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+        if w <= 0 or h <= 0 or w * h > 40_000_000:
+            raise APIError("The screen size could not be read.")
+        hdc = u.GetDC(None)
+        mdc = g.CreateCompatibleDC(hdc)
+        bmp = g.CreateCompatibleBitmap(hdc, w, h)
+        if not (hdc and mdc and bmp):
+            raise APIError("The screen could not be captured.")
+        old = g.SelectObject(mdc, bmp)
+        if not g.BitBlt(mdc, 0, 0, w, h, hdc, x, y, 0x00CC0020 | 0x40000000):
+            raise APIError("The screen could not be captured.")
+        bi = BMIH()
+        bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(BMIH), w, -h, 1, 32
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if not g.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0):
+            raise APIError("The screen could not be captured.")
+        return w, h, buf.raw
+    finally:
+        if old:
+            g.SelectObject(mdc, old)
+        if bmp:
+            g.DeleteObject(bmp)
+        if mdc:
+            g.DeleteDC(mdc)
+        if hdc:
+            u.ReleaseDC(None, hdc)
+        if old_ctx:
+            try:
+                u.SetThreadDpiAwarenessContext(ctypes.c_void_p(old_ctx))
+            except OSError:
+                pass
+
+
+def encode_png(w, h, bgra, max_width=1920):
+    """PNG bytes from raw BGRA pixels; wide pictures are made smaller so the request stays light."""
+    import zlib
+    import struct
+    a = np.frombuffer(bgra, dtype=np.uint8, count=w * h * 4).reshape(h, w, 4)
+    if w > max_width:
+        nw = max_width
+        nh = max(1, int(round(h * nw / w)))
+        a = a[(np.arange(nh) * h // nh)][:, (np.arange(nw) * w // nw)]
+        w, h = nw, nh
+    rgb = np.ascontiguousarray(a[:, :, 2::-1])
+    raw = np.zeros((h, w * 3 + 1), dtype=np.uint8)
+    raw[:, 1:] = rgb.reshape(h, w * 3)
+
+    def chunk(kind, data):
+        c = kind + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw.tobytes(), 4)) + chunk(b"IEND", b""))
+
+
+SCREEN_CAPTURE = sys.platform == "win32"        # (a switch the tests can turn on)
+
+
+def capture_screen_png():
+    if sys.platform != "win32":
+        raise APIError("Reading the screen works on Windows only.")
+    w, h, raw = _grab_screen_windows()
+    png = encode_png(w, h, raw)
+    for mw in (1440, 1152, 960):                       # services refuse big pictures (about 4 MB): make it smaller
+        if len(png) * 4 // 3 <= 3_200_000:
+            break
+        png = encode_png(w, h, raw, max_width=mw)
+    return png
+
+
+# ---- old meetings: search -------------------------------------------------------
+_AR_FIX = str.maketrans({"ي": "ی", "ك": "ک", "ۀ": "ه", "ة": "ه", "أ": "ا", "إ": "ا", "ئ": "ی", "\u200c": " "})
+
+
+def fold(text):
+    """Lower case, one form of the Persian/Arabic letters, no accents: the same word matches in every spelling."""
+    t = unicodedata.normalize("NFKD", str(text).lower().translate(_AR_FIX))
+    return "".join(ch for ch in t if not unicodedata.combining(ch))
+
+
+_SEARCH_STOP = set("the a an of to in on at for and or is are was were what did do does how when where who why which about with from my me i we you it this that "
+                   "و در به از که این آن را با برای چه چی چیه کی کجا چرا چطور چگونه آیا من ما تو شما بود بود؟ است شد بود گفت گفتم گفتیم".split())
+
+
+def search_words(query):
+    ws = [w for w in re.findall(r"\w+", fold(query)) if len(w) >= 2]
+    keep = [w for w in ws if w not in _SEARCH_STOP]
+    return (keep or ws)[:12]
+
+
+_ENTRY_RE = re.compile(r"^\*\*\[(\d\d:\d\d:\d\d)\] (.*?):\*\* ?(.*)$")
+_NAME_RE = re.compile(r"^(meeting|recording)_(?:.*_)?(\d{4})-(\d\d)-(\d\d)_(\d\d)-(\d\d)-(\d\d)")
+
+
+def meeting_file_date(name):
+    m = _NAME_RE.match(name)
+    if not m:
+        return None
+    try:
+        return datetime.datetime(*(int(x) for x in m.groups()[1:]))
+    except ValueError:
+        return None
+
+
+def parse_meeting_md(text):
+    """[(kind, time, who, text)] of a saved meeting: lines, and the summary / feedback / screen parts."""
+    out, cur = [], None
+    section = None
+    for ln in text.split("\n"):
+        if ln.startswith("## "):
+            if cur:
+                out.append(cur)
+                cur = None
+            section = ln[3:].strip()
+            cur = ["note", "", section, ""]
+            continue
+        if section is None:
+            m = _ENTRY_RE.match(ln)
+            if m:
+                if cur:
+                    out.append(cur)
+                cur = ["line", m.group(1), m.group(2), m.group(3)]
+            elif cur and ln.startswith(">"):
+                cur[3] += "\n" + ln.lstrip("> ").strip()
+            continue
+        if cur is not None and ln.strip() != "---":
+            cur[3] += ("\n" if cur[3] else "") + ln
+    if cur:
+        out.append(cur)
+    return [tuple(x) for x in out if x[3].strip()]
+
+
+def search_meetings(folder, query, days=90, limit=40, now=None):
+    """Looks in the saved meetings of the last `days` days (0 = all). Returns (matches, files_checked)."""
+    words = search_words(query)
+    if not words:
+        return [], 0
+    now = now or datetime.datetime.now()
+    try:
+        names = sorted((n for n in os.listdir(folder) if n.endswith(".md") and _NAME_RE.match(n)),
+                       key=lambda n: meeting_file_date(n) or datetime.datetime.min, reverse=True)
+    except OSError:
+        return [], 0
+    cutoff = now - datetime.timedelta(days=days) if days else None
+    hits, checked = [], 0
+    for n in names[:600]:
+        when = meeting_file_date(n)
+        if when is None or (cutoff and when < cutoff):
+            continue
+        try:
+            path = os.path.join(folder, n)
+            if os.path.getsize(path) > 3 * 1024 * 1024:
+                continue
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                parts = parse_meeting_md(f.read())
+        except OSError:
+            continue
+        checked += 1
+        for kind, tm, who, body in parts:
+            f = fold(who + " " + body)
+            got = sum(1 for w in words if w in f)
+            if got == 0:
+                continue
+            hits.append({"score": got / len(words), "all": got == len(words), "file": n,
+                         "date": when.strftime("%Y-%m-%d %H:%M"), "time": tm, "who": who, "kind": kind,
+                         "text": body.strip()[:700], "_w": when.timestamp()})
+    if any(h["all"] for h in hits):
+        hits = [h for h in hits if h["all"]]
+    else:
+        hits = [h for h in hits if h["score"] >= 0.5]
+    hits.sort(key=lambda h: (-h["score"], -h["_w"]))
+    for h in hits:
+        h.pop("_w", None)
+    return hits[:limit], checked
+
+
+# ---- export -------------------------------------------------------------------------
+_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+_RTL_RE = re.compile("[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]")
+
+
+def _x(t):
+    from xml.sax.saxutils import escape
+    return escape(_XML_BAD.sub("", str(t)))
+
+
+def docx_bytes(paragraphs):
+    """A Word file from [(style, text, {bold, italic, color})]. style: title / h / p. Right-to-left text is set right."""
+    import zipfile
+    body = []
+    for style, text, fmt in paragraphs:
+        fmt = fmt or {}
+        for pi, piece in enumerate(str(text).split("\n")):
+            rtl = bool(_RTL_RE.search(piece))
+            ppr = ("<w:pStyle w:val=\"%s\"/>" % {"title": "Title", "h": "Heading1"}.get(style, "Normal")) + \
+                  ("<w:bidi/>" if rtl else "")
+            rpr = ("<w:b/><w:bCs/>" if fmt.get("bold") else "") + ("<w:i/><w:iCs/>" if fmt.get("italic") else "") + \
+                  (f"<w:color w:val=\"{fmt['color']}\"/>" if fmt.get("color") else "") + ("<w:rtl/>" if rtl else "")
+            runs = ""
+            lead = fmt.get("lead")
+            if lead and pi == 0:
+                runs += f"<w:r><w:rPr><w:b/><w:bCs/>{'<w:rtl/>' if rtl else ''}</w:rPr><w:t xml:space=\"preserve\">{_x(lead)} </w:t></w:r>"
+            runs += f"<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{_x(piece)}</w:t></w:r>"
+            body.append(f"<w:p><w:pPr>{ppr}</w:pPr>{runs}</w:p>")
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    doc = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{ns}"><w:body>'
+           + "".join(body) + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" '
+           'w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>')
+    styles = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{ns}">'
+              '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Tahoma"/>'
+              '<w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>'
+              '<w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>'
+              '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
+              '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/>'
+              '<w:rPr><w:b/><w:bCs/><w:sz w:val="40"/><w:szCs w:val="40"/></w:rPr></w:style>'
+              '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>'
+              '<w:pPr><w:keepNext/><w:spacing w:before="280" w:after="100"/></w:pPr>'
+              '<w:rPr><w:b/><w:bCs/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style></w:styles>')
+    types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+             '<Default Extension="xml" ContentType="application/xml"/>'
+             '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+             '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+    drels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("word/document.xml", doc)
+        z.writestr("word/styles.xml", styles)
+        z.writestr("word/_rels/document.xml.rels", drels)
+    return bio.getvalue()
+
+
+def srt_time(sec):
+    ms = int(round(max(0.0, sec) * 1000))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def srt_text(rows, base, label, with_translation=True):
+    """Subtitles: times are seconds from the start of the meeting (the moment Start was pressed)."""
+    out, n = [], 0
+    for r in rows:
+        if not (r.get("text") or "").strip():
+            continue
+        n += 1
+        a = max(0.0, r["t0"] - base)
+        b = max(r["t_end"] - base, a + 1.0)
+        blank = lambda t: re.sub(r"\n\s*\n+", "\n", t.strip())       # a blank line would end the subtitle early
+        lines = [f"{label(r)}: {blank(r['text'])}"]
+        if with_translation and (r.get("translation") or "").strip():
+            lines.append(blank(r["translation"]))
+        out.append(f"{n}\n{srt_time(a)} --> {srt_time(b)}\n" + "\n".join(lines) + "\n")
+    return "\n".join(out)
 
 
 # ----------------------------------------------------------------------------
@@ -4040,8 +5022,10 @@ class Engine:
             box = []
             lv = DeepgramLive(src, prov["api_key"], self.cfg["stt_model"] or "nova-3", fixed_lang(self.cfg) or "auto", proxy,
                               on_interim=lambda k, t0, text, s=src: self.live_interim(s, k, t0, text),
-                              on_final=lambda k, t0, t1, text, s=src: self._submit_live(s, k, t0, t1, text),
-                              on_fail=lambda e, s=src, b=box: self.live_failed(s, e, b[0] if b else None))
+                              on_final=lambda k, t0, t1, text, who=None, s=src: self._submit_live(s, k, t0, t1, text, who),
+                              on_fail=lambda e, s=src, b=box: self.live_failed(s, e, b[0] if b else None),
+                              terms=glossary_terms(self.cfg),
+                              diarize=bool(self.cfg["diarize"]) and src == "them" and not self.file_mode)
             box.append(lv)
             self.live[src] = lv
             cap.tap = lv.feed
@@ -4100,7 +5084,7 @@ class Engine:
         if words > 0:                                   # 0 = translate only the finished sentence (fewest tokens)
             self._preview_translate(key, source, text, min_new=words)
 
-    def live_final(self, source, key, t0, t_end, text):
+    def live_final(self, source, key, t0, t_end, text, speaker=None):
         text = re.sub(r"\s+", " ", text).strip()
         self.live_heard[source] = max(self.live_heard.get(source, 0.0), t_end)   # the live service answered up to here
         if self.paused or not normalize_words(text):
@@ -4108,7 +5092,7 @@ class Engine:
             self.previews.pop(key, None)
             return self.hub.publish("speaking", seg=key, source=source, phase="discard")
         self.accept_text(source, text, "", t0, t_end, [key],
-                         {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "live", "model": "live"})
+                         {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "live", "model": "live"}, speaker)
 
     # ---- previews (services without a live mode) -----------------------------------
     def _on_preview(self, source, seg_id, audio, t0, spec=False):
@@ -4266,7 +5250,7 @@ class Engine:
 
     def _run_preview_translate(self, key, source, text):
         st = self.previews.get(key) or {}
-        messages = [{"role": "system", "content": translate_system(self.cfg)
+        messages = [{"role": "system", "content": translate_system(self.cfg, glossary_note(self.cfg))
                      + " The sentence may be unfinished: translate what is there."},
                     {"role": "user", "content": "Translate:\n" + text}]
         last = [0.0]
@@ -4472,6 +5456,14 @@ class Engine:
         # The meeting topic teaches Whisper the right technical words (OSPF, RMAN ...).
         # Earlier sentences are NOT used as prompt: Whisper sometimes repeats them.
         first = self.cfg["context"].strip().split("\n", 1)[0]
+        terms = glossary_terms(self.cfg)
+        if terms:                                          # the user's technical words help Whisper spell them right
+            p = (first[:160].rstrip(" .") + ". " if first else "")
+            for t in terms:                                # whole terms only: a cut term ("kubect") would mislead Whisper
+                if len(p) + len(t) + 2 > 420:
+                    break
+                p += t + ", "
+            return p.rstrip(", ")
         return first[:220] or None                         # only the first line: a long text would mislead it
 
     def _stt_worker(self):
@@ -4607,7 +5599,7 @@ class Engine:
             return self._drop(job)
         self.accept_text(source, text, detected or "", job["t0"], job["t_end"], job["segs"], job.get("timing", {}))
 
-    def accept_text(self, source, text, lang, t0, t_end, segs, timing):
+    def accept_text(self, source, text, lang, t0, t_end, segs, timing, speaker=None):
         """A finished sentence (from any service): show it, translate it, maybe answer it."""
         job = {"source": source, "t0": t0, "t_end": t_end, "segs": segs}
         self._mark_done(segs)
@@ -4622,10 +5614,11 @@ class Engine:
                                        "Use headphones for a clean transcript.")
             return self._drop(job)
 
+        text = apply_glossary(text, glossary_terms(self.cfg))
         self.last_text[source] = text
         c = self.cfg
         lang = lang or fixed_lang(c) or ""
-        e = self.session.add(source, t0, t_end, text, lang, segs)
+        e = self.session.add(source, t0, t_end, text, lang, segs, speaker)
         tr_on = source == "them" or c["translate_me"] or c["answer_me"]     # test mode: my lines are the questions
         if lang and lang == c["my_language"]:
             tr_on = False                                   # already in my language: nothing to translate
@@ -4642,9 +5635,9 @@ class Engine:
         elif ans_on and not self._submit(self._answer, e["id"]):
             self._publish(e["id"], ans_state="none")
 
-    def _submit_live(self, source, key, t0, t_end, text):
+    def _submit_live(self, source, key, t0, t_end, text, speaker=None):
         try:
-            self.live_pool.submit(self.live_final, source, key, t0, t_end, text)
+            self.live_pool.submit(self.live_final, source, key, t0, t_end, text, speaker)
         except RuntimeError:                                # the meeting is already closed
             pass
 
@@ -4734,6 +5727,7 @@ class Engine:
         if c["api_key"] and (pid == "groq" or c["use_backup"] or not out):
             auto = TRANSLATE_CHAIN if task == "tr" else ANSWER_CHAINS[c["answer_mode"]]
             out += [("groq", m, e) for m, e in auto if not any(o[:2] == ("groq", m) for o in out)]
+            out += [("groq", m, effort_for(m)) for m in self.app.groq_extra if not any(o[:2] == ("groq", m) for o in out)]
         return out
 
     def run_chat(self, chain, messages, max_tokens, temperature, on_text):
@@ -4798,7 +5792,7 @@ class Engine:
             return
         current = lambda: gen is None or self.tr_gen[eid] == gen      # a hand-corrected line replaces this one
         c = self.cfg
-        topic = f"\nMeeting topic (for terminology): {c['context'][:300]}" if c["context"] else ""
+        topic = (f"\nMeeting topic (for terminology): {c['context'][:300]}" if c["context"] else "") + glossary_note(c)
         hist = self.session.history(e["t0"], TRANSLATE_HISTORY, exclude=eid)
         user = ""
         if hist:
@@ -4856,9 +5850,9 @@ class Engine:
                       question=(question if force and question and question != e["text"] else ""))
         hist = self.session.history(e["t0"], ANSWER_HISTORY, exclude=eid)
         system = ANSWER_SYSTEM.format(
-            context=c["context"] or "(not given)",
-            style=c["answer_style"] or DEFAULT_STYLE,
-            about=c["about_me"] or "(not given)",
+            context=(c["context"] or "(not given)") + glossary_note(c),
+            style=(c["answer_style"] or DEFAULT_STYLE) + ((" " + mode_text(c, "answer")) if mode_text(c, "answer") else ""),
+            about=about_text(c) or "(not given)",
             first_rule=RULE_FORCE if force else RULE_DECIDE,
             answer_lang=answer_lang_rule(c),
             fa_rule=meaning_rule(c, e.get("lang")))
@@ -5079,7 +6073,8 @@ class Engine:
                       f"{heads[2]}\n- important facts, names, numbers, dates, requirements.\n"
                       f"{heads[3]}\n- follow-ups and things to prepare or send; if none: {heads[5]}.\n"
                       "Only use what is in the text. No introduction."
-                      + (f"\nMeeting topic: {c['context'][:300]}" if c["context"] else ""))
+                      + (f"\n{mode_text(c, 'summary')}" if mode_text(c, "summary") else "")
+                      + (f"\nMeeting topic: {c['context'][:300]}" if c["context"] else "") + glossary_note(c))
             last = [0.0]
 
             def on_text(t):
@@ -5098,6 +6093,135 @@ class Engine:
         except Exception as ex:
             log("summary error:", short(ex))
             pub(state="error", text="", note="The summary failed: " + short(ex, 160))
+
+    # ---- 6.2: feedback after the meeting, screen reading, "help me say", questions about old meetings ----
+    def feedback(self):
+        rows = [r for r in self.session.ordered() if r["text"].strip()]
+        return self._submit(self._feedback, rows)
+
+    def _feedback(self, rows):
+        c = self.cfg
+        pub = lambda **kw: self.hub.publish("feedback", session_file=self.session.path, **kw)
+        stats = talk_stats(rows)
+        try:
+            chain = self.chat_targets("ans")
+            waiting = lambda w: pub(state="working", text="", stats=stats, note=f"Waiting {round(w)} s for the free limit…")
+            me, them = c["me_label"], c["them_label"]
+            ml = c["my_language"]
+            lines = [f"{self.session.label(r)}: {r['text']}" for r in rows]
+            if ml == "fa":
+                heads = ("## نتیجه کلی", "## نقاط قوت", "## چه چیزی را بهتر کنید", "## پاسخ‌هایی که ارزش دوباره گفتن دارند",
+                         "## نحوه صحبت کردن")
+            else:
+                heads = ("## Overall", "## What went well", "## What to improve", "## Answers worth redoing",
+                         "## Delivery")
+            fills = ", ".join(f"{k} ×{v}" for k, v in stats["filler_list"].items()) or "none found"
+            facts = (f"Length {stats['minutes']} min. {me} spoke {stats['me_share']}% of the words"
+                     + (f", about {stats['wpm']} words per minute" if stats["wpm"] else "")
+                     + f". Filler words by {me} (speech-to-text often omits them): {fills}. "
+                     f"{stats['long_pauses']} of {stats['answers']} replies began more than 6 seconds after the question"
+                     + (f" (average wait {stats['avg_delay']} s)." if stats["avg_delay"] is not None else "."))
+            system = (f"You are a candid, kind coach. {me} (a {lang_name(ml)} speaker) just finished the meeting below with "
+                      f"{them}. Review how {me} did. Write in {lang_full(ml)}; keep technical terms, product names, "
+                      "commands and numbers as they are. Markdown headings and bullet points, in this order:\n"
+                      f"{heads[0]}\n2-3 sentences.\n{heads[1]}\n- specific things that worked.\n"
+                      f"{heads[2]}\n- concrete, actionable points.\n"
+                      f"{heads[3]}\n- up to 4 weak or missing answers: the question, what {me} said in a few words, and a better "
+                      f"answer {me} could give (a few spoken sentences, in the language of the meeting).\n"
+                      f"{heads[4]}\n- comment on the numbers you are given (share of talking, pace, pauses, filler words).\n"
+                      "Only use what is in the transcript. Never invent quotes. No introduction."
+                      + (f"\n{mode_text(c, 'feedback')}" if mode_text(c, "feedback") else "")
+                      + (f"\nMeeting topic: {c['context'][:300]}" if c["context"] else "") + glossary_note(c))
+            user = f"Numbers:\n{facts}\n\nTranscript:\n" + clip_middle("\n".join(lines), 14000)
+            last = [0.0]
+
+            def on_text(t):
+                now = time.time()
+                if now - last[0] > 0.1:
+                    last[0] = now
+                    pub(state="streaming", text=t.strip(), stats=stats)
+            pub(state="working", text="", stats=stats, note="Writing the review…")
+            out = self.chat_patient(chain, [{"role": "system", "content": system},
+                                            {"role": "user", "content": user}], 1800, 0.3, on_text,
+                                    on_wait=waiting).strip()
+            self.session.set_feedback(out)
+            self.session.save_if_dirty()
+            pub(state="done", text=out, stats=stats)
+            log(f"Feedback written ({len(rows)} lines)")
+        except Exception as ex:
+            log("feedback error:", short(ex))
+            pub(state="error", text="", stats=stats, note="The review failed: " + short(ex, 160))
+
+    def read_screen(self, png, pid, model):
+        """A screenshot goes to a model that can read pictures; the answer streams to the window."""
+        c = self.cfg
+        pub = lambda **kw: self.hub.publish("screen", **kw)
+        ml = c["my_language"]
+        system = (f"You help {c['me_label']} (a {lang_name(ml)} speaker) during a meeting or interview. The picture is a "
+                  "screenshot of their screen: it may show a coding task, a question, a slide, a chart, a document, "
+                  "a diagram or a chat.\n"
+                  f"Meeting: {c['context'] or '(not given)'}\nAbout the user: {about_text(c) or '(not given)'}\n"
+                  "Do this:\n1. One short line: what the screen shows.\n"
+                  "2. If it holds a question, task or problem, give what the user can use. Code: correct, complete code "
+                  "in a fenced code block, then 2-3 short sentences on the idea and its complexity. A written question: "
+                  f"what to say, {answer_lang_rule(c)}, first person, spoken style.\n"
+                  "3. If nothing needs an answer, list the important points as short bullets.\n"
+                  f"Write your notes in {lang_full(ml)}; keep code, commands and technical terms as they are. Use only "
+                  "what is visible; if something is cut off or unreadable, say so instead of guessing. Never invent "
+                  "personal facts: use a placeholder such as [your name]."
+                  + (f"\n{mode_text(c, 'answer')}" if mode_text(c, "answer") else "") + glossary_note(c))
+        import base64 as _b64
+        url = "data:image/png;base64," + _b64.b64encode(png).decode("ascii")
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": [{"type": "text", "text": "Read this screen."},
+                                                 {"type": "image_url", "image_url": {"url": url}}]}]
+        last = [0.0]
+
+        def on_text(t):
+            now = time.time()
+            if now - last[0] > 0.1:
+                last[0] = now
+                pub(state="streaming", text=t.strip())
+        return self.run_chat([(pid, model, None)], messages, 2000, 0.3, on_text).strip()
+
+    SAY_TONES = {"natural": "natural and conversational", "formal": "polite and formal",
+                 "short": "as short as possible (one or two sentences)", "friendly": "warm and friendly",
+                 "confident": "confident and direct"}
+
+    def say(self, text, lang="", tone="natural"):
+        """'Help me say': the user's rough idea (in any language) becomes what to say out loud."""
+        c = self.cfg
+        target = lang if lang in LANGS else (c["answer_language"] if c["answer_language"] != "same"
+                                             else meeting_langs(c)[0])
+        my = c["my_language"]
+        hist = self.session.history(time.time() + 1, 6)
+        convo = "\n".join(f"{s}: {t}" for s, t in hist)
+        system = (f"You help {c['me_label']} say something in a live meeting. The user writes a rough idea (in any language). "
+                  f"Output only the words to say out loud: first person, {lang_name(target)}, "
+                  f"{self.SAY_TONES.get(tone, self.SAY_TONES['natural'])}, correct grammar, spoken style. No preface, no quotes, no markdown.\n"
+                  f"Meeting: {c['context'] or '(not given)'}\nAbout the user: {about_text(c) or '(not given)'}\n"
+                  "Personal facts come ONLY from 'About the user'; if one is needed and not given, write a placeholder "
+                  "such as [your name]. Do not add facts the user did not give."
+                  + (f"\n{mode_text(c, 'answer')}" if mode_text(c, "answer") else "") + glossary_note(c)
+                  + ((f"\nAfter the sentence output a line containing only ### and then a short {lang_full(my)} translation of it.")
+                     if target != my else ""))
+        user = ((f"Conversation so far:\n{convo}\n\n" if convo else "") + f"My idea: {text}")
+        out = self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                       {"role": "user", "content": user}], 600, 0.5, lambda t: None)
+        ans, fa = split_answer(out)
+        return {"text": ans, "meaning": fa, "lang": target}
+
+    def ask_past(self, question, hits):
+        c = self.cfg
+        ml = c["my_language"]
+        parts = "\n\n".join(f"[{h['date']} {h['who']}] {h['text'][:500]}" for h in hits[:12])
+        system = (f"You answer a question about the user's own past meetings, using ONLY the excerpts given. Write in "
+                  f"{lang_full(ml)}; keep technical terms as they are. Say when (the date) the information was said. "
+                  "If the excerpts do not answer the question, say so plainly. Short: 2-5 sentences or bullets.")
+        out = self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                       {"role": "user", "content": f"Excerpts:\n{parts}\n\nQuestion: {question}"}],
+                            700, 0.2, lambda t: None)
+        return out.strip()
 
     # ---- quota / lifecycle ---------------------------------------------------------
     def quota_info(self):
@@ -5129,6 +6253,7 @@ class Engine:
             try:
                 ms, ids = self.api.ping()
                 if ids:
+                    self.app.note_groq_models(getattr(self.api, "last_raw", None) or ids)
                     for m, _ in TRANSLATE_CHAIN + ANSWER_CHAINS["smart"]:
                         if m not in ids:
                             self.models.kill(f"groq|{m}")
@@ -5303,7 +6428,8 @@ class RecordingJob:
             self._emit(True, state="reading", total=total)
             log(f"Transcribing the recording '{self.name}'" + (f" ({total / 60:.1f} min)" if total else ""))
             # times shown are positions in the recording (00:00:00 = its start)
-            base = datetime.datetime.combine(datetime.date.today(), datetime.time()).timestamp()
+            _st = getattr(eng.session, "started", None) or datetime.datetime.now()
+            base = datetime.datetime.combine(_st.date(), datetime.time()).timestamp()
             pos = [0.0]
             seg = Segmenter("them", 16000, self.app.cfg["sensitivity"], eng.on_audio, clock=lambda: base + pos[0])
             step = int(16000 * FRAME_SEC)
@@ -5436,6 +6562,72 @@ class Hub:
 # ----------------------------------------------------------------------------
 # Application controller
 # ----------------------------------------------------------------------------
+def _md_paragraphs(text):
+    """Summary / review text (markdown-like) as paragraphs for a Word file."""
+    out = []
+    for ln in str(text).split("\n"):
+        ln = ln.rstrip()
+        if not ln.strip():
+            continue
+        if ln.startswith("#"):
+            out.append(("h", ln.lstrip("# ").strip(), None))
+        elif re.match(r"^\s*[-*] ", ln):
+            out.append(("p", "• " + re.sub(r"^\s*[-*] ", "", ln), None))
+        else:
+            out.append(("p", ln.strip(), None))
+    return out
+
+
+def export_bytes(session, fmt):
+    """The meeting as a Word file (docx), subtitles (srt), plain text (txt) or data (json)."""
+    rows = [r for r in session.ordered() if r["text"].strip()]
+    stamp = lambda t: datetime.datetime.fromtimestamp(t).strftime("%H:%M:%S")
+    if fmt == "json":
+        return json.dumps(session.state(), ensure_ascii=False, indent=1).encode("utf-8")
+    if fmt == "srt":
+        _b = session.started.timestamp()
+        if getattr(session, "recording", False):
+            _b = datetime.datetime.combine(session.started.date(), datetime.time()).timestamp()
+        return srt_text(rows, _b, session.label).encode("utf-8")
+    if fmt == "txt":
+        out = [f"{'Recording' if session.recording else 'Meeting'} — {session.started:%Y-%m-%d %H:%M}", ""]
+        for r in rows:
+            out.append(f"[{stamp(r['t0'])}] {session.label(r)}: {r['text']}")
+            if r.get("translation"):
+                out.append(f"    → {r['translation']}")
+            if r.get("answer"):
+                out.append(f"    💡 {r['answer']}")
+        for title, body in (("Summary", session.summary), ("Feedback", session.feedback)):
+            if body:
+                out += ["", f"== {title} ==", body]
+        return "\n".join(out).encode("utf-8")
+    c = session.cfg
+    paras = [("title", f"{'Recording' if session.recording else 'Meeting'} — {session.started:%Y-%m-%d %H:%M}", None)]
+    if c["context"]:
+        paras.append(("p", c["context"], {"italic": True, "color": "555555"}))
+    if session.summary:
+        paras.append(("h", "Summary / خلاصه", None))
+        paras += _md_paragraphs(session.summary)
+    if session.feedback:
+        paras.append(("h", "Feedback / بازخورد", None))
+        paras += _md_paragraphs(session.feedback)
+    paras.append(("h", "Transcript / متن", None))
+    for r in rows:
+        paras.append(("p", r["text"], {"lead": f"[{stamp(r['t0'])}] {session.label(r)}:", "bold": False}))
+        if r.get("translation"):
+            paras.append(("p", r["translation"], {"italic": True, "color": "555555"}))
+        if r.get("answer"):
+            paras.append(("p", "💡 " + r["answer"], {"color": "1F6B3A"}))
+            if r.get("answer_fa"):
+                paras.append(("p", r["answer_fa"], {"color": "1F6B3A"}))
+        if r.get("explain"):
+            paras.append(("p", f"❓ «{r.get('explain_q', '')}»: {r['explain']}", {"color": "8A5A00"}))
+    for sc in session.screens:
+        paras.append(("h", f"Screen / صفحه {stamp(sc['t'])}", None))
+        paras += _md_paragraphs(sc["text"])
+    return docx_bytes(paras)
+
+
 class App:
     def __init__(self):
         self.cfg = load_config()
@@ -5467,6 +6659,17 @@ class App:
         self.last_ping = 0.0
         self.download = None
         self.review = None           # after a meeting: summary, explanations and answers still work
+        self.tool_eng = None         # engine for the tools when no meeting is on screen
+        self.hide_state = None       # the hidden window's own report (from its status file)
+        try:
+            os.remove(HIDE_STATUS_PATH)          # a report left by an earlier run is not true any more
+        except OSError:
+            pass
+        self.screen_busy = False
+        self.ids_cache = {}          # (service, address) -> (time, model ids)
+        self.infos_cache = {}        # service -> model_info of each model it lists
+        self.groq_extra = []         # current Groq text models to add when the built-in choices are gone
+        self.model_report = None     # result of the last "Check models"
         self.api_lock = threading.Lock()      # service connections (never waits for audio work)
         self.pa_zombies = []
         self.dl_lock = threading.Lock()
@@ -5492,6 +6695,9 @@ class App:
         c["providers"] = provs
         c["presets"] = PRESETS
         c["langs"] = LANGS
+        c["about_info"] = about_info(self.cfg)
+        c["hide_possible"] = hidden_window_possible()
+        c["modes"] = {k: v["name"] for k, v in MODES.items()}
         c["tasks"] = self.task_status()
         c["ready"] = all(v["ok"] for v in c["tasks"].values())
         return c
@@ -5526,7 +6732,9 @@ class App:
                 "local": LOCAL.info(), "llm": LLM.info(),
                 "download": self.download.state if self.download else None,
                 "paused": bool(eng and eng.paused), "summary": s.summary if s else "",
+                "feedback": s.feedback if s else "",
                 "resume": self.resume_info(),
+                "hide": self.hide_state,
                 "recording": self.recording.state if self.recording else None}
 
     def set_net(self, ok, ms, error="", name="Groq"):
@@ -5844,7 +7052,8 @@ class App:
             self.session.save_if_dirty()
             self.hub.publish("session", session_file=self.session.path,
                              entries=self.session.ordered() if old is not None else [],
-                             summary=self.session.summary if old is not None else "")
+                             summary=self.session.summary if old is not None else "",
+                             feedback=self.session.feedback if old is not None else "")
             threading.Thread(target=self.engine.warm, daemon=True).start()
         log(f"Meeting started · microphone: {mic or '(off)'} · computer sound: {spk or '(none)'} · "
             f"languages {'+'.join(meeting_langs(self.cfg))} -> {self.cfg['my_language']} · answers {self.cfg['answer_mode']}")
@@ -6035,6 +7244,328 @@ class App:
             return {"ok": False, "error": "Please try again in a moment."}
         return {"ok": True}
 
+    # ---- 6.2 tools -----------------------------------------------------------------------
+    def tool_engine(self):
+        """An engine without a meeting: 'help me say', reading the screen and searching old meetings work without one."""
+        with self.lock:
+            if self.tool_eng is None or self.tool_eng.stop_event.is_set():
+                self.tool_eng = Engine(self, Session(self.cfg), workers=False)
+            return self.tool_eng
+
+    def api_about_file(self, path="", clear=False):
+        """Uses a CV / background file (Word, PDF, text) instead of the written About text."""
+        with self.lock:
+            if clear:
+                self.cfg["about_file"] = ""
+                self.cfg["about_source"] = "text"
+            else:
+                p = os.path.abspath(os.path.expanduser(str(path or "").strip().strip('"')))
+                try:
+                    n = len(read_document(p))
+                except DocError as e:
+                    return {"ok": False, "error": str(e)}
+                self.cfg["about_file"] = p
+                self.cfg["about_source"] = "file"
+                log(f"About file chosen: {os.path.basename(p)} ({n} characters used)")
+            return self._save_and_publish()
+
+    def model_ids(self, pid):
+        """Models a service lists (kept for 10 minutes)."""
+        prov = self.provider(pid)
+        key = (pid, (prov or {}).get("base_url", ""))
+        hit = self.ids_cache.get(key)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        api = self.get_api(pid)
+        _ms, ids = api.ping()
+        self.ids_cache[key] = (time.time(), ids)
+        self.infos_cache[pid] = model_infos(getattr(api, "last_raw", None) or ids)
+        return ids
+
+    def model_infos_cached(self, pid):
+        return self.infos_cache.get(pid) or model_infos(self.model_ids(pid))
+
+    def note_groq_models(self, raw):
+        """Learns from Groq's own model list which built-in choices still exist; keeps replacements ready."""
+        try:
+            infos = model_infos(raw)
+            self.infos_cache["groq"] = infos
+            have = {i["id"] for i in infos if i["alive"]}
+            builtin = {m for m, _ in TRANSLATE_CHAIN + ANSWER_CHAINS["smart"]}
+            self.groq_extra = pick_chat(infos) if (len(builtin & have) < 2 and len(infos) >= 5) else []
+        except Exception as e:
+            log("model list not understood:", short(e), level="warn")
+
+    def api_check_models(self):
+        """Asks every service what models it has now; reports which of the chosen ones exist and are current."""
+        c = self.cfg
+        targets = []
+        if c["api_key"]:
+            targets.append(("groq", "Groq"))
+        for p in c["providers"]:
+            if p.get("kind") != "live" and p.get("api_key") and p.get("base_url"):
+                targets.append((p["id"], p["name"]))
+        live = [p["name"] for p in c["providers"] if p.get("kind") == "live"]
+
+        def one(t):
+            pid, name = t
+            row = {"id": pid, "name": name, "ok": False, "error": "", "stt": [], "chat": [], "vision": [], "hidden": 0, "count": 0}
+            try:
+                api = self.get_api(pid)
+                _ms, ids = api.ping()
+                infos = model_infos(getattr(api, "last_raw", None) or ids)
+            except APIError as e:
+                row["error"] = ("This service does not publish its model list - type the model names yourself."
+                                if e.status == 404 else short(e, 160))
+                return row, []
+            except Exception as e:
+                row["error"] = short(e, 160)
+                return row, []
+            if not infos:
+                row["error"] = "The service answered but listed no models (or in a format this program does not know) - type the model names yourself."
+                return row, []
+            alive = [i for i in infos if i["alive"]]
+            row.update(ok=True, count=len(infos), hidden=len(infos) - len(alive),
+                       stt=sorted(i["id"] for i in alive if i["stt"]),
+                       chat=sorted(i["id"] for i in alive if i["chat"]),
+                       vision=sorted(i["id"] for i in alive if i["vision"]))
+            return row, infos
+
+        rows, infos_by = [], {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+            for t, (row, infos) in zip(targets, ex.map(one, targets)):
+                rows.append(row)
+                if row["ok"]:
+                    infos_by[row["id"]] = infos
+                    self.infos_cache[row["id"]] = infos
+        if "groq" in infos_by:
+            self.note_groq_models([{"id": i["id"], "active": i["alive"]} for i in infos_by["groq"]])
+            self.infos_cache["groq"] = infos_by["groq"]
+        by = {r["id"]: r for r in rows}
+
+        def status(pid, model, kind, defaults):
+            """('ok'|'missing'|'auto'|'local'|'live'|'unchecked'|'off', note, suggestion)"""
+            if pid in ("local", "llm"):
+                return "local", "Runs on this computer.", ""
+            prov = self.provider(pid) if pid != "groq" else {"name": "Groq"}
+            if prov and prov.get("kind") == "live":
+                return "live", "Live service - press Test in Services to check it.", ""
+            r = by.get(pid)
+            if r is None:
+                return "unchecked", "No key for this service, so it could not be checked.", ""
+            if not r["ok"]:
+                return "unchecked", r["error"], ""
+            ids = set(r[kind])
+            if model:
+                if model in ids:
+                    return "ok", "Exists and is current.", ""
+                every = {i["id"]: i for i in infos_by.get(pid, [])}
+                sug = (r["stt"][:1] if kind == "stt" else r["chat"][:1])
+                if model in every:
+                    why = ("it is marked old / not active." if not every[model]["alive"] else
+                           "but it does not look like a " + ("speech-to-text" if kind == "stt" else "text") + " model.")
+                    return "missing", "The service lists it, " + why, (sug[0] if sug else "")
+                return "missing", "The service does not have this model any more.", (sug[0] if sug else "")
+            have = [m for m in defaults if m in ids]
+            if have:
+                return "auto", "Automatic: " + ", ".join(have) + (" (some built-in choices are gone)" if len(have) < len(defaults) else ""), ""
+            sug = pick_chat(infos_by.get(pid, [])) if kind != "stt" else r["stt"][:1]
+            return "missing", "None of the built-in choices exist here any more.", ", ".join(sug)
+
+        tasks = []
+        for t, kind in (("stt", "stt"), ("tr", "chat"), ("ans", "chat")):
+            pid, model = c[f"{t}_provider"], c[f"{t}_model"]
+            if t == "stt":
+                defaults = WHISPER_MODELS["them"]
+            elif t == "tr":
+                defaults = [m for m, _ in TRANSLATE_CHAIN]
+            else:
+                defaults = [m for m, _ in ANSWER_CHAINS[c["answer_mode"]]]
+            st, note, sug = status(pid, model, kind, defaults if pid == "groq" else [])
+            prov = self.provider(pid)
+            tasks.append({"label": TASKS[t], "service": "Groq" if pid == "groq" else (prov["name"] if prov else pid),
+                          "model": model or "(automatic)", "state": st, "note": note, "suggest": sug})
+        # the screen
+        spid, smodel = c["screen_provider"], c["screen_model"]
+        note_s, st_s, sug_s = "", "unchecked", ""
+        try:
+            eff = spid if spid in by else next((x for x in [c["ans_provider"], "groq"] + [p["id"] for p in c["providers"]] if x in by), "")
+            if spid in ("llm", "local"):
+                st_s, note_s = "off", "The local model cannot read pictures."
+            elif not eff or not by[eff]["ok"]:
+                st_s, note_s = "unchecked", "No online service with a working key was found."
+            elif smodel and eff == spid:
+                if smodel in by[eff]["vision"] or re.sub(r"^models/", "", smodel) in by[eff]["vision"]:
+                    st_s, note_s = "ok", "Exists and can read pictures."
+                elif smodel in by[eff]["chat"]:
+                    st_s, note_s, sug_s = "missing", "It exists, but the service does not say it can read pictures.", pick_vision(infos_by[eff]) or ""
+                else:
+                    st_s, note_s, sug_s = "missing", "The service does not have this model.", pick_vision(infos_by[eff]) or ""
+            else:
+                pick = pick_vision(infos_by[eff])
+                if pick:
+                    st_s, note_s = "auto", f"Automatic: {pick} at {by[eff]['name']}"
+                else:
+                    st_s, note_s = "missing", f"{by[eff]['name']} lists no model that reads pictures."
+        except Exception as e:
+            st_s, note_s = "unchecked", short(e, 120)
+        tasks.append({"label": "Reading the screen", "service": "", "model": smodel or "(automatic)",
+                      "state": st_s, "note": note_s, "suggest": sug_s})
+        # keep the menus current: only models that exist and are active
+        with self.lock:
+            for p in self.cfg["providers"]:
+                r = by.get(p["id"])
+                if r and r["ok"] and (r["stt"] or r["chat"]):
+                    p["models"] = sorted(set(r["stt"] + r["chat"]))[:500]
+            self._save_and_publish()
+        self.model_report = {"at": time.time(), "services": rows, "tasks": tasks, "live": live}
+        bad = sum(1 for t in tasks if t["state"] == "missing")
+        log(f"Model check: {len(rows)} service(s), {bad} chosen model(s) missing")
+        return {"ok": True, "report": self.model_report}
+
+    def vision_target(self):
+        """(service id, model) that reads the screenshot; raises APIError with a plain message."""
+        c = self.cfg
+        pid, model = c["screen_provider"], c["screen_model"]
+        usable = lambda x: x not in ("", "llm", "local") and bool(self.provider(x)) and \
+            bool(self.provider(x).get("api_key")) and self.provider(x).get("kind") != "live"
+        if pid in ("llm", "local"):
+            raise APIError("The local model cannot read pictures. Choose an online service in Setup › Services › Reading the screen.")
+        if not pid or not usable(pid):
+            if model and pid:
+                model = ""  # the chosen service cannot be used: its model name does not fit another service
+            pid = next((x for x in [c["ans_provider"], "groq"] + [p["id"] for p in c["providers"]] if usable(x)), "")
+        if not pid:
+            raise APIError("Reading the screen needs an online AI service with an API key (Groq, OpenAI, Gemini …). "
+                           "Add one in Setup › Services.")
+        if not model:
+            try:
+                ids = self.model_ids(pid)
+            except APIError as e:
+                raise APIError(f"{self.provider(pid)['name']}: the model list could not be read ({short(e, 100)}). "
+                               "Type a model name in Setup › Services › Reading the screen.")
+            model = pick_vision(self.model_infos_cached(pid)) or guess_vision_model(ids)
+            log(f"Screen reading: picked {model} at {pid}")
+            if not model:
+                raise APIError(f"No picture-reading model was found at {self.provider(pid)['name']}. "
+                               "Type one in Setup › Services › Reading the screen.")
+        return pid, model
+
+    def api_screen(self):
+        if not SCREEN_CAPTURE:
+            return {"ok": False, "error": "Reading the screen works on Windows only."}
+        with self.lock:
+            if self.screen_busy:
+                return {"ok": False, "error": "The screen is already being read."}
+            self.screen_busy = True
+        threading.Thread(target=self._screen_job, daemon=True, name="screen").start()
+        return {"ok": True}
+
+    def _screen_job(self):
+        pub = lambda **kw: self.hub.publish("screen", **kw)
+        try:
+            for i in range(int(self.cfg["screen_delay"]), 0, -1):
+                pub(state="working", text="", note=f"Picture in {i} s — switch to the screen you want read.")
+                time.sleep(1)
+            pub(state="working", text="", note="Taking the picture…")
+            png = capture_screen_png()
+            pid, model = self.vision_target()
+            pub(state="working", text="", note=f"Reading it with {self.provider(pid)['name']} ({short(model, 40)})…")
+            eng = self.helper()
+            own = eng is None
+            eng = eng or self.tool_engine()
+            text = eng.read_screen(png, pid, model)
+            if not text:
+                raise APIError("The model returned nothing. Try again or choose another model.")
+            if not own:
+                eng.session.add_screen(text)
+                eng.session.save_if_dirty()
+            pub(state="done", text=text, saved=not own)
+            log(f"Screen read with {model} ({len(png) // 1024} KB picture)")
+        except BadRequest as e:
+            gone = re.search(r"does not exist|not found|no access|decommission|deprecated", str(e), re.I)
+            pub(state="error", text="", note=(f"The model '{model}' is not available at this service: " if gone
+                else "This model did not accept the picture: ") + short(e, 160)
+                + " — clear the model name in Setup › Services › Reading the screen to pick one automatically, "
+                  "or type a model that this service has and that can read pictures.")
+        except Exception as e:
+            log("screen error:", short(e), level="warn")
+            pub(state="error", text="", note=short(e, 260))
+        finally:
+            self.screen_busy = False
+
+    def api_feedback(self):
+        eng = self.helper()
+        if not eng:
+            return {"ok": False, "error": "There is no meeting to review yet."}
+        rows = [r for r in eng.session.ordered() if r["text"].strip()]
+        if len(rows) < 3 or not any(r["source"] == "me" for r in rows):
+            return {"ok": False, "error": "The review needs a meeting where you spoke too (at least a few lines)."}
+        if not eng.feedback():
+            return {"ok": False, "error": "Please try again in a moment."}
+        return {"ok": True}
+
+    def api_say(self, text="", lang="", tone="natural"):
+        text = str(text or "").strip()[:800]
+        if not text:
+            return {"ok": False, "error": "Write what you want to say first."}
+        eng = self.engine if (self.engine and not self.engine.stop_event.is_set()) else self.tool_engine()
+        try:
+            return {"ok": True, **eng.say(text, str(lang or ""), str(tone or "natural"))}
+        except AuthError as e:
+            return {"ok": False, "error": str(e)}
+        except APIError as e:
+            return {"ok": False, "error": short(e, 200)}
+
+    def api_search_meetings(self, query="", days=None, ask=False):
+        query = str(query or "").strip()[:200]
+        try:
+            days = int(days if days is not None else self.cfg["search_days"])
+        except (TypeError, ValueError):
+            days = 90
+        if days not in (0, 7, 30, 90, 180, 365):
+            days = 90
+        if not search_words(query):
+            return {"ok": False, "error": "Write a word or a question to look for."}
+        hits, checked = search_meetings(MEETINGS_DIR, query, days)
+        out = {"ok": True, "matches": hits, "checked": checked, "days": days, "answer": ""}
+        if ask and hits:
+            try:
+                out["answer"] = (self.helper() or self.tool_engine()).ask_past(query, hits)
+            except APIError as e:
+                out["answer_error"] = short(e, 200)
+        return out
+
+    def api_export(self, format="docx"):
+        s = self.session or self.last_session or self.resumable
+        if not s:
+            return {"ok": False, "error": "There is no meeting to export yet."}
+        rows = s.ordered()
+        if not any(r["text"].strip() for r in rows):
+            return {"ok": False, "error": "The meeting has no text yet."}
+        fmt = str(format or "docx").lower()
+        if fmt not in ("docx", "srt", "json", "txt"):
+            return {"ok": False, "error": "Unknown format."}
+        try:
+            data = export_bytes(s, fmt)
+        except Exception as e:
+            log("export failed:", traceback.format_exc(), level="warn")
+            return {"ok": False, "error": "The file could not be built: " + short(e, 120)}
+        path = os.path.splitext(s.path)[0] + "." + fmt
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError as e:
+            try:
+                os.remove(path + ".tmp")
+            except OSError:
+                pass
+            return {"ok": False, "error": "The file could not be saved: " + short(e, 120)}
+        self._reveal(path, select=True)
+        return {"ok": True, "path": path, "name": os.path.basename(path)}
+
     def api_pause(self, on=None):
         eng = self.engine
         if not eng or not self.running:
@@ -6076,6 +7607,10 @@ class App:
                 lm = self.cfg["local_model"]
                 path = os.path.dirname(lm) if lm and os.path.isdir(os.path.dirname(lm)) else MODELS_DIR
                 os.makedirs(MODELS_DIR, exist_ok=True)
+            elif kind == "doc":
+                af = self.cfg["about_file"]
+                path = os.path.dirname(af) if af and os.path.isdir(os.path.dirname(af)) else \
+                    next((p["path"] for p in places if p["name"] == "Documents"), home)
             else:
                 path = self.cfg.get("last_recording_dir") or ""
                 path = path if path and os.path.isdir(path) else (places[0]["path"] if places else home)
@@ -6102,6 +7637,7 @@ class App:
                     else:
                         more = True
                 elif (kind == "audio" and n.lower().endswith(AUDIO_EXT)) or \
+                        (kind == "doc" and n.lower().endswith(DOC_EXT)) or \
                         (kind == "gguf" and n.lower().endswith(".gguf") and "mmproj" not in n.lower()):
                     if len(files) < 400:
                         files.append({"name": n, "path": full, "mb": round(os.path.getsize(full) / 1e6, 1)})
@@ -6598,7 +8134,21 @@ class App:
     def llm_state(self):
         d = self.download.state if self.download else None
         return {"ok": True, "llm": LLM.info(), "models": find_llm_models(self.cfg["llm_model"]),
-                "catalog": LLM_CATALOG, "download": d, "config": self.public_config()}
+                "catalog": catalog_view(LLM_CATALOG, "llm"), "download": d, "config": self.public_config()}
+
+    def api_find_models(self, kind="llm", sort="popular"):
+        """Looks on Hugging Face for models this program can download; shows size, memory and processor needs."""
+        kind = "stt" if kind == "stt" else "llm"
+        proxy = detect_proxy(self.cfg["proxy"])[0]
+        try:
+            res = hf_search(kind, "new" if sort == "new" else "popular", proxy)
+        except APIError as e:
+            return {"ok": False, "error": str(e)}
+        have = {m["repo"] for m in (LOCAL_CATALOG if kind == "stt" else LLM_CATALOG)}
+        for it in res["items"]:
+            it["listed"] = it["repo"] in have
+        log(f"Model search ({kind}, {sort}): {len(res['items'])} found")
+        return {"ok": True, "kind": kind, **res}
 
     def api_llm_state(self):
         return self.llm_state()
@@ -6639,12 +8189,18 @@ class App:
         self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
         return self.llm_state()
 
-    def api_llm_download(self, id="", cancel=False):
+    def api_llm_download(self, id="", cancel=False, repo="", file="", mb=0):
         if cancel:
             if self.download:
                 self.download.cancel.set()
             return {"ok": True}
-        item = next((m for m in LLM_CATALOG if m["id"] == id), None)
+        if repo:
+            try:
+                item = custom_item("llm", repo, file, mb)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+        else:
+            item = next((m for m in LLM_CATALOG if m["id"] == id), None)
         if not item:
             return {"ok": False, "error": "Unknown model."}
         with self.dl_lock:                                  # a double click never starts two downloads
@@ -6812,7 +8368,7 @@ class App:
 
     def local_state(self):
         return {"ok": True, "local": LOCAL.info(), "models": find_models(self.cfg["local_model"]),
-                "catalog": LOCAL_CATALOG, "download": self.download.state if self.download else None,
+                "catalog": catalog_view(LOCAL_CATALOG, "stt"), "download": self.download.state if self.download else None,
                 "models_dir": MODELS_DIR, "host": platform_node()}
 
     def api_local_state(self):
@@ -6907,12 +8463,18 @@ class App:
         self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
         return {**self.local_state(), "bench": b, "config": self.public_config()}
 
-    def api_local_download(self, id="", cancel=False):
+    def api_local_download(self, id="", cancel=False, repo="", mb=0):
         if cancel:
             if self.download:
                 self.download.cancel.set()
             return {"ok": True}
-        item = next((m for m in LOCAL_CATALOG if m["id"] == id), None)
+        if repo:
+            try:
+                item = custom_item("stt", repo, "", mb)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+        else:
+            item = next((m for m in LOCAL_CATALOG if m["id"] == id), None)
         if not item:
             return {"ok": False, "error": "Unknown model."}
         with self.dl_lock:                                  # a double click never starts two downloads
@@ -7138,6 +8700,12 @@ class App:
                 c.error_note = ""
                 self.hub.toast("warn", note)
         state["last_save"], state["last_stats"], state["last_sent"] = last_save, last_stats, last_sent
+        if now - state.get("hide_t", 0) > 3.0:
+            state["hide_t"] = now
+            st = read_hide_status()
+            if st != self.hide_state:
+                self.hide_state = st
+                self.hub.publish("hide", hide=st)
         # the window was closed -> finish and quit; during a meeting or a recording: open the window again
         es = self.hub.empty_since
         if self.hub.ever and es and now - es > 12:
@@ -7441,8 +9009,246 @@ def trim_window_profile():
         shutil.rmtree(os.path.join(WINDOW_PROFILE, *rel.split("/")), ignore_errors=True)
 
 
+# ----------------------------------------------------------------------------
+# A window that screen sharing cannot see (optional).
+# Windows lets a program hide only ITS OWN windows from capture (SetWindowDisplayAffinity). The normal window is an
+# Edge window (another program), so for this feature the page is shown in a small helper process of this program
+# (pywebview / WebView2), which sets the flag on its own window and reports back through a status file.
+# ----------------------------------------------------------------------------
+HIDE_STATUS_PATH = os.path.join(DATA_DIR, ".hide.json")
+HIDDEN_STORAGE = os.path.join(DATA_DIR, ".window_hidden")
+WDA_MONITOR, WDA_EXCLUDEFROMCAPTURE = 0x1, 0x11
+
+
+def hide_wanted():
+    """The 'hide from screen sharing' setting (read from the file: the window may be opened by a second start)."""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            v = json.load(f).get("hide_from_share")
+        return v is True or str(v).strip().lower() in ("true", "1", "yes", "on")
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+_HIDE_OK = []
+
+
+def hidden_window_possible():
+    if sys.platform != "win32":
+        return False
+    if not _HIDE_OK:
+        try:
+            import importlib.util
+            _HIDE_OK.append(importlib.util.find_spec("webview") is not None)
+        except (ImportError, ValueError):
+            _HIDE_OK.append(False)
+    return _HIDE_OK[0]
+
+
+def write_hide_status(path, active, mode="", error=""):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"active": bool(active), "mode": mode, "error": error, "t": time.time()}, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def read_hide_status(path=None):
+    try:
+        with open(path or HIDE_STATUS_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict):
+            stale = time.time() - float(d.get("t") or 0) > 90 and d.get("active") is True
+            if stale:
+                return {"active": False, "mode": "", "error": "The hidden window stopped answering."}
+            return {"active": d.get("active") is True, "mode": str(d.get("mode") or "")[:20],
+                    "error": str(d.get("error") or "")[:300]}
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def keep_hidden(find, set_aff, get_aff, write, stop, interval=10.0, first_wait=20.0):
+    """Sets 'hidden from screen sharing' on our window and keeps checking that it stays set.
+    find() -> window handle or None; set_aff(hwnd, flag) -> bool; get_aff(hwnd) -> flag or None;
+    write(active, mode, error) reports; stop is a threading.Event. Returns True if it was ever set."""
+    end = time.time() + first_wait
+    hwnd = None
+    while not stop.is_set() and time.time() < end:
+        hwnd = find()
+        if hwnd:
+            break
+        stop.wait(0.3)
+    if not hwnd:
+        write(False, "", "The hidden window could not be found.")
+        return False
+    mode = None
+    for flag, name in ((WDA_EXCLUDEFROMCAPTURE, "exclude"), (WDA_MONITOR, "black")):
+        if set_aff(hwnd, flag) and get_aff(hwnd) == flag:
+            mode = (flag, name)
+            break
+    if mode is None:
+        write(False, "", "Windows refused to hide the window from screen sharing.")
+        return False
+    write(True, mode[1], "")
+    bad = 0
+    while not stop.wait(interval):
+        h = find()
+        if not h:
+            continue                                   # (the window is closing)
+        if h != hwnd or get_aff(h) != mode[0]:
+            if set_aff(h, mode[0]) and get_aff(h) == mode[0]:
+                hwnd, bad = h, 0
+                write(True, mode[1], "")
+                continue
+            bad += 1
+            if bad == 2:
+                write(False, mode[1], "The window is no longer hidden from screen sharing.")
+        else:
+            bad = 0
+            write(True, mode[1], "")                   # also a heartbeat: a status that stops being renewed is not trusted
+    return True
+
+
+def _win_window_tools(pid):
+    import ctypes
+    from ctypes import wintypes as wt
+    u = ctypes.windll.user32
+    u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    u.IsWindowVisible.argtypes = [wt.HWND]
+    u.GetWindow.argtypes = [wt.HWND, wt.UINT]
+    u.GetWindow.restype = wt.HWND
+    u.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    u.SetWindowDisplayAffinity.argtypes = [wt.HWND, wt.DWORD]
+    u.GetWindowDisplayAffinity.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    proto = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def find():
+        best = [None, 0]
+
+        def cb(hwnd, _lp):
+            p = wt.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+            if p.value == pid and u.IsWindowVisible(hwnd) and not u.GetWindow(hwnd, 4):     # 4 = owner
+                r = wt.RECT()
+                u.GetWindowRect(hwnd, ctypes.byref(r))
+                area = max(0, r.right - r.left) * max(0, r.bottom - r.top)
+                if area > best[1]:
+                    best[0], best[1] = hwnd, area
+            return True
+        u.EnumWindows(proto(cb), 0)
+        return best[0]
+
+    def set_aff(hwnd, flag):
+        return bool(u.SetWindowDisplayAffinity(hwnd, flag))
+
+    def get_aff(hwnd):
+        v = wt.DWORD()
+        return v.value if u.GetWindowDisplayAffinity(hwnd, ctypes.byref(v)) else None
+    return find, set_aff, get_aff
+
+
+def run_window_helper(argv):
+    """`--window URL --storage FOLDER --status FILE`: shows the page in a window that is hidden from screen sharing."""
+    def opt(name, default=""):
+        return argv[argv.index(name) + 1] if name in argv and argv.index(name) + 1 < len(argv) else default
+    url, storage, status = opt("--window"), opt("--storage"), opt("--status")
+    if not url or not status:
+        return 2
+    try:
+        import webview
+    except Exception as e:
+        write_hide_status(status, False, "", "The 'pywebview' package could not be loaded: " + str(e)[:150])
+        return 3
+    stop = threading.Event()
+    closed_normally = False
+    find, set_aff, get_aff = _win_window_tools(os.getpid())
+    write = lambda a, m, e: write_hide_status(status, a, m, e)
+
+    def worker():
+        try:
+            keep_hidden(find, set_aff, get_aff, write, stop)
+        except Exception as e:
+            write(False, "", "Hiding the window failed: " + str(e)[:150])
+    worker_t = None
+    try:
+        # a neutral title: the taskbar button of a window that is hidden from sharing should not say what it is
+        webview.create_window("Notes", url, width=1280, height=860, min_size=(900, 600), text_select=True)
+        worker_t = threading.Thread(target=worker, daemon=True, name="hide-keeper")
+        worker_t.start()
+        webview.start(gui="edgechromium", storage_path=storage or None, private_mode=False)
+        closed_normally = True
+    except Exception as e:
+        write(False, "", "The hidden window could not start: " + str(e)[:150])
+        return 4                                           # the message stays in the file for the main program
+    finally:
+        stop.set()
+        if worker_t is not None:
+            worker_t.join(3)                       # it must not write the status again after we remove it
+        if closed_normally:
+            try:
+                os.remove(status)
+            except OSError:
+                pass
+    return 0
+
+
+def note_hide_failure(msg):
+    write_hide_status(HIDE_STATUS_PATH, False, "", msg)
+    log("Hidden window: " + msg + " A normal window is opened instead.", level="warn")
+    app = getattr(Handler, "app", None)
+    if app is not None:
+        app.hub.toast("error", "The window could NOT be hidden from screen sharing — it is visible now. " + msg)
+
+
+def open_hidden_window(url):
+    """True when the hidden window is up and its hiding is on."""
+    if not hidden_window_possible():
+        note_hide_failure("This copy of the program has no hidden-window support (the 'pywebview' package is missing).")
+        return False
+    try:
+        os.remove(HIDE_STATUS_PATH)
+    except OSError:
+        pass
+    cmd = ([sys.executable] if FROZEN else [sys.executable, os.path.abspath(__file__)]) + \
+        ["--window", url, "--storage", HIDDEN_STORAGE, "--status", HIDE_STATUS_PATH]
+    try:
+        p = subprocess.Popen(cmd, env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"), close_fds=True)
+    except OSError as e:
+        note_hide_failure("The hidden window could not be started: " + short(e, 100))
+        return False
+    end = time.time() + 40
+    while time.time() < end:
+        st = read_hide_status()
+        if st is not None:
+            if st["active"]:
+                log(f"Window hidden from screen sharing ({st['mode']})")
+                return True
+            try:
+                p.terminate()
+            except OSError:
+                pass
+            note_hide_failure(st["error"] or "Windows did not hide the window.")
+            return False
+        rc = p.poll()
+        if rc is not None:
+            note_hide_failure(f"The hidden window closed at once (code {rc}).")
+            return False
+        time.sleep(0.25)
+    try:
+        p.terminate()
+    except OSError:
+        pass
+    note_hide_failure("The hidden window took too long to start.")
+    return False
+
+
 def open_window(url):
     if os.environ.get("MA_NO_BROWSER"):
+        return
+    if hide_wanted() and open_hidden_window(url):
         return
     try:
         trim_window_profile()
@@ -7604,6 +9410,8 @@ def running_url():
 
 
 def main():
+    if "--window" in sys.argv:
+        return sys.exit(run_window_helper(sys.argv))
     if "--make-shortcut" in sys.argv:
         return make_shortcut()
     existing = running_url()

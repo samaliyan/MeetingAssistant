@@ -4,3 +4,5 @@
 numpy>=1.26,<3
 httpx[http2,socks]>=0.28,<1
 pytest>=8
+pypdf>=4,<7
+python-docx>=1

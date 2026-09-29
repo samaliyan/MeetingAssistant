@@ -1,8 +1,53 @@
-# Meeting Assistant — User Guide (version 6.1)
+# Meeting Assistant — User Guide (version 6.2)
 
-## Version 6.1
+## Version 6.2
 
-Only fixes from a full independent code review. Nothing changes in how you use the program.
+New optional tools. Nothing that worked before changes.
+
+### About you from a file
+1. Open Setup, then the Answers tab.
+2. In "About you" choose **Use a file (CV)**, then pick your CV (`.txt`, `.md`, `.docx` or `.pdf`).
+3. Or choose **Write it here** and write it yourself. Only the first 8,000 characters are used.
+
+### Modes and glossary (Setup, Meeting tab)
+1. Pick a **Type of meeting** (General, Technical interview, HR / behavioural interview, Work meeting, Lecture / class) to fill in a good style. You can still change everything.
+2. In **Glossary** write one technical word per line (up to 60). They help speech recognition and are spelled
+   correctly in the transcript. Words of one or two letters, and words that are all lower case, are left alone.
+
+### Speaker separation
+With Deepgram live, turn on "Tell the other speakers apart" (Setup, Meeting tab). Names follow the "Person 1" label you chose. People on the computer's sound become "Person 1", "Person 2", …
+
+### Tools menu (in the meeting window)
+- **How did I do?** — talking time, speed, filler words, and a written review. Saved in the meeting file.
+- **Help me say** — write what you mean, get a good sentence in the meeting language.
+- **Read my screen** — a picture of the screen goes to a model that can read pictures. Set the model in Setup, Services, "Reading the screen"
+  if the automatic choice fails. The picture is not saved.
+- **Search past meetings** — choose the range (7 days … all time). Tick "Also answer my question from what was said" for a written answer.
+- **Export** — Word, subtitles (`.srt`), text, JSON, PDF (opens the print window: choose "Save as PDF"), copy summary.
+
+### Check models
+1. Open Setup, then the Services tab.
+2. Press **Check models**.
+3. Read the list: green = exists now, red = gone (the line says what to try instead).
+4. Only models that exist and are not marked old are shown, and the menus use this fresh list.
+5. Leave a model box empty to let the program choose. For "Reading the screen" it chooses from what the service reports, and you can type another name.
+
+### Find more models to download
+1. Open Setup, then the Services tab, then "Local model" or "Local AI model".
+2. Under the download list you see the download size, the memory and the processor the chosen model needs.
+3. Press **Find more…** to search Hugging Face. Choose "Most used" or "Newest".
+4. Each line shows size, memory needed, processor, and "Fits this computer" or "Too big".
+5. Press **Download** on the one you want, then **Test on this computer**.
+6. The numbers are estimates. Check the licence on the model's Hugging Face page.
+
+### Hide from screen sharing
+1. Install the optional package: `pip install pywebview` (the exe build includes it when it is installed).
+2. Setup, Display tab: turn on **Hide this window from screen sharing**, then restart the program.
+3. Look at the pill at the top: the pill "Hidden from screen sharing" means it worked; red "NOT hidden" means it did not.
+4. Test with a real share (for example a second Zoom meeting) before you rely on it.
+
+> **Warning:** some companies forbid using an assistant in interviews. Check the rules first; you are responsible.
+> The taskbar button may still be visible in a full-screen share.
 
 
 ## What changed in version 6.0

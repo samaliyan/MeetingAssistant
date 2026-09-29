@@ -2,6 +2,38 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.2]
+
+New tools. Nothing that worked before changes; every new part is optional and off until you use it.
+
+- **About you from a file**: in Setup, Answers, choose "Use a file (CV)" and pick your CV (`.txt`, `.md`, `.docx`, `.pdf`);
+  or keep writing the About text yourself. The file is read again when it changes.
+- **Ready-made modes** (Setup, Meeting, "Type of meeting"): General, Technical interview, HR / behavioural interview, Work meeting, Lecture / class. A mode only fills in a suggested
+  style; you can still change every setting.
+- **Glossary** (Setup, Meeting): technical words (OSPF, RMAN, kubectl). They help speech recognition (Whisper prompt,
+  Deepgram keywords) and the spelling of capital / digit words in the transcript, translations and answers.
+- **Speaker separation** (Deepgram live): several people on the computer's sound become "Person 1", "Person 2".
+- **Tools menu** in the meeting window:
+  - "How did I do?": talking time, speed, filler words and an AI review, saved in the meeting file.
+  - "Help me say": type what you mean in your own words and get a good sentence in the meeting language.
+  - "Read my screen": sends a picture of the screen to a picture-reading model (needs a model that can read pictures).
+  - "Search past meetings": choose how far back (7 days to all time), optionally ask the AI a question about them.
+  - "Export": Word (`.docx`), subtitles (`.srt`), text, JSON, PDF (print), or copy the summary.
+- **Hide from screen sharing** (Setup, Display): the window is drawn black / invisible to screen sharing.
+  Needs the optional `pywebview` package (WebView2); the program shows a red "NOT hidden" mark when it could not do it.
+  **Warning:** some companies forbid using an assistant in interviews. You are responsible for following their rules.
+- **Check models** (Setup, Services): asks every service which models it has now and shows only the ones that exist and
+  are not marked old (speech to text, translation and answers, picture reading). It tells you which of your chosen models
+  is gone and what to try instead. Groq's built-in choices are checked while you work; if they disappear, current Groq
+  models are used instead.
+- **Find more models** (Setup, Services, Local model and Local AI model): searches Hugging Face for speech-to-text
+  (faster-whisper) and chat (.gguf) models, most used or newest. Every model shows its download size, the memory and
+  processor it needs, and whether it fits this computer's memory. The built-in download lists show the same facts.
+- **Reading the screen** picks its model from what the service says about its models (input types, capabilities);
+  you can still type your own. A model name typed for one service is no longer sent to another.
+- Build: the exe build no longer excludes `distutils` (it broke the build when the hidden-window support was included).
+- Build and tests: `pypdf` is in the requirements; `pywebview` is installed by the build scripts when available; 56 automated tests.
+
 ## [6.1]
 
 Fixes only, from a full independent code review (eight separate reviewers, then a second review of the fixes).

@@ -43,6 +43,8 @@ jobs:
           # an engine that installed but does not import is removed, so a broken one is never packed
           python -c "import sys,types;sys.modules.setdefault('av',types.ModuleType('av'));import faster_whisper,ctranslate2" || { echo "::warning::local speech engine does not import - left out"; python -m pip uninstall -y -q faster-whisper ctranslate2; }
           python -c "import llama_cpp" || { echo "::warning::local AI engine does not import - left out"; python -m pip uninstall -y -q llama-cpp-python; }
+          python -m pip install --quiet "pywebview>=5,<7" || echo "::warning::pywebview not installed - the exe is built without the hidden window"
+          python -c "import webview" || { echo "::warning::pywebview does not import - left out"; python -m pip uninstall -y -q pywebview; }
 
       - name: Run tests
         run: python -m pytest -q tests

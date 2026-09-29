@@ -26,6 +26,8 @@ you are asked a question.
 - Works with **Groq** (free API key), any **OpenAI-compatible** service, **Deepgram** live — or completely
   **offline**: a local Whisper model for speech to text and a local AI model (llama.cpp, `.gguf`) for translation
   and answers, both downloadable inside the program
+- Tools: post-meeting feedback, "help me say", read the screen, search past meetings, export (Word, subtitles, PDF), glossary, speaker separation, CV from a file
+- Optional **hide from screen sharing** (some companies forbid assistants in interviews — check the rules first)
 - See what credit or free limit is left with each service (Setup › Services › Credit & limits)
 
 ## Requirements

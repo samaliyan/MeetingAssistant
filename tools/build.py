@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXCLUDE = ["tkinter", "_tkinter", "lib2to3", "pydoc_data", "setuptools", "pip", "distutils", "pkg_resources",
+EXCLUDE = ["tkinter", "_tkinter", "lib2to3", "pydoc_data", "setuptools", "pip", "pkg_resources",
            "sqlite3", "_sqlite3", "curses", "IPython", "matplotlib", "PIL", "scipy", "pandas", "PySide6",
            "shiboken6", "PyQt5", "PyQt6", "numpy.f2py", "numpy.distutils", "av", "onnxruntime", "torch",
            "transformers"]
@@ -52,6 +52,15 @@ def main():
         print("Local AI engine: included")
     else:
         print("Local AI engine: NOT included (llama-cpp-python not installed)")
+    # a window that screen sharing cannot see (optional): a helper window made with pywebview / WebView2
+    if sys.platform == "win32" and imports("webview"):
+        args += ["--collect-all", "webview", "--hidden-import", "clr"]
+        for extra in ("pythonnet", "clr_loader"):
+            if importlib.util.find_spec(extra) is not None:
+                args += ["--collect-all", extra]
+        print("Hidden window (screen sharing): included")
+    else:
+        print("Hidden window (screen sharing): NOT included (pywebview not installed)")
     for m in exclude:
         args += ["--exclude-module", m]
     args.append("app.py")
