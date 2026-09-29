@@ -1058,7 +1058,12 @@ def test_overlay_api_off_windows(app):
     a.url = "http://127.0.0.1:1/?t=x"
     a.closing = __import__("threading").Event()
     a.overlay = app.Overlay(a)
-    r = a.api_overlay()
-    assert r["ok"] is False and "Windows" in r["error"] and r["on"] is False
-    assert a.api_overlay(False)["ok"] is True
+    real = app.sys.platform
+    app.sys.platform = "linux"                                  # never open a real window from a test, also on Windows
+    try:
+        r = a.api_overlay()
+        assert r["ok"] is False and "Windows" in r["error"] and r["on"] is False
+        assert a.api_overlay(False)["ok"] is True
+    finally:
+        app.sys.platform = real
     assert app.DEFAULTS["overlay_alpha"] == 65 and app.DEFAULTS["overlay_hide"] is True and app.CHOICES["overlay_pos"] == ("top", "bottom")

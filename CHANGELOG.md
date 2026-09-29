@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.8.1]
+
+Fix: an automatic test opened a real window on Windows and failed the release check. No change for users; everything in 6.8 is included.
+
 ## [6.8]
 
 The see-through answer window (Overlay) is now quiet, movable and hidden from screen sharing.

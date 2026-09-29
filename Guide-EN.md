@@ -1,4 +1,4 @@
-# Meeting Assistant — User Guide (version 6.8)
+# Meeting Assistant — User Guide (version 6.8.1)
 
 ## Version 6.8: quieter, movable, hidden overlay
 
