@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.6"
+VERSION = "6.7"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -219,6 +219,8 @@ DEFAULTS = {
     "theme": "system",           # system | light | dark
     "text_size": 100,            # % of normal
     "answer_size": 24,           # px
+    "overlay_alpha": 80,         # % how solid the see-through answer window is (30..100)
+    "overlay_pos": "top",        # top | bottom of the screen
     # other services (OpenAI-compatible) and which service does what
     "providers": [],
     "stt_provider": "groq", "stt_model": "",     # "" = automatic (Groq's best models)
@@ -293,6 +295,25 @@ MODES = {
              "summary": "Emphasize decisions made, action items with owner and date, open questions and risks.",
              "feedback": "This was a work meeting: judge how clear and useful the contributions were, whether decisions "
                          "and owners were pinned down, and how the time was used."},
+    "exam": {"name": "Language or oral exam (IELTS, TOEFL, level test)",
+             "answer": "This is a spoken language test or oral exam. Suggest what the user can SAY, in the language of the "
+                       "question, at the level asked for in 'Answer style' (if none is given: clear B2 English, natural and "
+                       "fluent, not fancy). Answer the question directly first, then extend with a reason and a short personal "
+                       "example, and use two or three useful linking phrases. Short questions (part 1): 2-4 sentences. A talk "
+                       "or 'describe...' task: a simple structure (what, when/where, why it matters, how you felt) that can be "
+                       "spoken for about 1-2 minutes. Discussion questions: opinion, reason, example, another view. Keep it "
+                       "natural to say aloud and honest about the user's own life; if a fact is missing from 'About the "
+                       "user', use a believable general detail that the user can adjust.",
+             "summary": "Emphasize the questions asked, the answers given, and vocabulary or grammar worth practising.",
+             "feedback": "This was a spoken language test: judge fluency, answer length, structure, vocabulary range, "
+                         "grammar and pronunciation clues from the transcript, and give a few phrases to practise."},
+    "client": {"name": "Client, sales or negotiation call",
+               "answer": "This is a client, sales or negotiation call: suggest short, confident things to say. Listen for "
+                         "needs, objections, prices and deadlines; help answer objections, ask a good question, and never "
+                         "promise what the user has not said they can deliver.",
+               "summary": "Emphasize the client's needs, objections, offers and prices, agreements, next steps with dates.",
+               "feedback": "This was a client or negotiation call: judge how well needs were understood, objections handled "
+                           "and next steps agreed."},
     "lecture": {"name": "Lecture / class",
                 "answer": "This is a lecture or class: suggest something to say only if the user is asked a direct "
                           "question or wants to ask one; otherwise output NO_REPLY.",
@@ -302,9 +323,9 @@ MODES = {
 }
 CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
-           "about_source": ("text", "file"), "meeting_mode": tuple(MODES),
+           "about_source": ("text", "file"), "overlay_pos": ("top", "bottom"), "meeting_mode": tuple(MODES),
            "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
-RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48),
+RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
 
 # Phrases Whisper tends to "hear" in noise
@@ -3972,6 +3993,14 @@ COACH_ROLES = {
     "lecture": ("You are a study partner next to the user during a LIVE lecture or class. Track the key ideas, definitions and "
                 "anything the teacher says is important for an exam or a task. Help the user understand what is being taught "
                 "and suggest a good question to ask when something is unclear."),
+    "exam": ("You are an experienced speaking-test coach (IELTS, TOEFL, oral exams) sitting next to the candidate during a LIVE "
+             "speaking test. Watch answer length, fluency, whether they answer the question first, then extend with a reason and "
+             "an example, and whether they are stuck. Part 1 answers are short, a long talk task needs a clear structure and "
+             "about 1-2 minutes, discussion questions need an opinion, a reason and another view. Tell them in one line what to "
+             "do next: extend, slow down, use a linking phrase, or stop."),
+    "client": ("You are a sharp sales and negotiation coach sitting next to the user during a LIVE client call. Track needs, "
+               "objections, prices, promises and deadlines. Help the user ask good questions, answer objections calmly, avoid "
+               "promising too much, and close with clear next steps."),
     "auto": ("You sit next to the user during a LIVE conversation. First decide from the conversation whether it is a job "
              "interview, an ordinary work meeting or a class, then coach like a senior professional of that kind: for an "
              "interview - keep the candidate consistent, calm and specific; for a meeting - track decisions and action items; "
@@ -4068,7 +4097,9 @@ _ASK_EN = re.compile(r"\b(what|why|how|when|where|who|whom|whose|which|can you|c
                      r"difference between|compare|design|implement|write|solve|optimi[sz]e|troubleshoot|debug|"
                      r"in your (opinion|view|experience)|would you|should we|if you|introduce|tell us|walk us|take me through|"
                      r"talk to me|define|elaborate|go on|continue|convince|list|name (a|an|some|the)|so you|so how|and how|and what|"
-                     r"and why|what about|how about|thoughts|approach|strategy|scenario|situation|example)\b", re.I)
+                     r"and why|what about|how about|thoughts|approach|strategy|scenario|situation|example|you should say|i'?d like you|"
+                     r"i would like you|i want you|cue card|speak for|talk for|do you agree|agree or disagree|to what extent|"
+                     r"do you think|would you say|nowadays|these days)\b", re.I)
 _ASK_DE = re.compile(r"\b(was|wie|warum|wieso|weshalb|wann|wo|wer|welche[rsmn]?|k(ö|oe)nnen sie|k(ö|oe)nntest du|haben sie|"
                      r"hast du|sind sie|bist du|erz(ä|ae)hl\w*|beschreib\w*|erkl(ä|ae)r\w*|nennen sie|zeigen sie|stellen sie sich|"
                      r"gibt es|w(ü|ue)rden sie|fragen)\b", re.I)
@@ -4661,6 +4692,8 @@ QTYPES = [
                     r"difficult (situation|colleague|customer|stakeholder)|(your|about) leadership|under pressure|tight deadline|"
                     r"erz(ä|ae)hl\w* sie .*(situation|beispiel|mal)|wie gehen sie mit .*(konflikt|kritik|druck|stress)\w*|"
                     r"schwierige[nr]? (situation|kollege|kunde)", 90, 120),
+    ("describe", r"describe (a|an|the|your|someone|something)\b|talk about (a|an|the|your|someone|something)\b|you should say|"
+                 r"tell me about (a|an|your|the) (place|person|book|film|movie|hobby|city|town|home|friend|teacher|trip|holiday)", 60, 120),
     ("coding", r"\b(write|implement|code|program|script)\b.*\b(function|class|query|script|algorithm|program|code)\b|"
                r"whiteboard|leetcode", 0, 0),
     ("design", r"\bdesign (a|an|the)\b|\barchitect(ure)? (a|an|the|for)\b|how would you (build|set up|plan|structure|migrate|implement|approach)|"
@@ -4702,6 +4735,8 @@ QTYPE_HINTS = {
                    "اول بله یا نه، بعد یک پروژه‌ی واقعی: چه بود، نقش شما، نتیجه."),
     "concept": ("One-sentence answer first, then one detail or example. Stop when it is enough.",
                 "اول جواب یک‌جمله‌ای، بعد یک جزئیات یا مثال. وقتی کافی شد تمام کنید."),
+    "describe": ("Use a simple frame: what it is, when or where, why it matters to you, how you felt. Keep talking until time is up.",
+                 "یک چارچوب ساده: چیست، کِی یا کجا، چرا برایتان مهم است، چه احساسی داشتید. تا آخر زمان ادامه دهید."),
     "opinion": ("Give your view, one reason, one trade-off. It is fine to say it depends, then say on what.",
                 "نظرتان، یک دلیل، یک مبادله. اگر «بستگی دارد» می‌گویید، بگویید به چه."),
     "yesno": ("Answer yes or no first, then one short reason.", "اول بله یا نه، بعد یک دلیل کوتاه."),
@@ -4709,7 +4744,7 @@ QTYPE_HINTS = {
 QTYPE_LABELS = {"candidate_q": "Your questions", "salary": "Salary", "availability": "Availability", "intro": "Introduction",
                 "motivation": "Motivation", "weakness": "Weakness", "strength": "Strengths", "behavioural": "Behavioural",
                 "coding": "Coding / task", "design": "Design", "troubleshoot": "Troubleshooting", "experience": "Experience",
-                "concept": "Concept", "opinion": "Opinion", "yesno": "Yes / no"}
+                "concept": "Concept", "describe": "Describe / talk", "opinion": "Opinion", "yesno": "Yes / no"}
 _QTYPE_RX = [(n, re.compile(rx, re.I), lo, hi) for n, rx, lo, hi in QTYPES]
 
 
@@ -4801,9 +4836,9 @@ def check_answer(rows, question):
     flags = []
     if hi and secs > hi * 1.25:
         flags.append("long")
-    elif lo and secs < lo * 0.4 and words < 25 and qt in ("intro", "behavioural", "design", "troubleshoot", "experience"):
+    elif lo and secs < lo * 0.4 and words < 25 and qt in ("intro", "behavioural", "design", "troubleshoot", "experience", "describe"):
         flags.append("short")
-    if not proof and words >= 30 and qt in ("behavioural", "experience", "design", "troubleshoot", "intro", "concept", "strength"):
+    if not proof and words >= 30 and qt in ("behavioural", "experience", "design", "troubleshoot", "intro", "concept", "strength", "describe"):
         flags.append("no_example")
     if wpm and wpm > 185:
         flags.append("fast")
@@ -5340,7 +5375,7 @@ class Engine:
     def coach_role(self):
         mode = self.cfg["meeting_mode"]
         return COACH_ROLES["interview" if mode in ("tech", "hr") else "work" if mode == "work"
-                           else "lecture" if mode == "lecture" else "auto"]
+                           else "exam" if mode == "exam" else "client" if mode == "client" else "lecture" if mode == "lecture" else "auto"]
 
     def coach_background(self, limit=2500):
         c = self.cfg
@@ -7355,6 +7390,7 @@ class App:
             except OSError:
                 pass
         self.hub = Hub()
+        self.overlay = Overlay(self)
         LOG_LISTENERS.append(lambda entry: self.hub.publish("log", entry=entry))
         self.stats = Stats()
         self.resumable = Session.load_last(self.cfg)   # the last meeting: "Continue" goes on with it
@@ -7453,7 +7489,7 @@ class App:
                 "usage": usage_copy(),
                 "local": LOCAL.info(), "llm": LLM.info(),
                 "download": self.download.state if self.download else None,
-                "paused": bool(eng and eng.paused), "summary": s.summary if s else "",
+                "overlay": self.overlay.on, "paused": bool(eng and eng.paused), "summary": s.summary if s else "",
                 "feedback": s.feedback if s else "",
                 "resume": self.resume_info(),
                 "hide": self.hide_state,
@@ -8375,6 +8411,12 @@ class App:
             return {"ok": False, "error": "The file could not be saved: " + short(e, 120)}
         self._reveal(path, select=True)
         return {"ok": True, "path": path, "name": os.path.basename(path)}
+
+    def api_overlay(self, on=None):
+        """The see-through, click-through window with the question and the answer (also the global key Ctrl+Alt+O)."""
+        want = (not self.overlay.on) if on is None else bool(on)
+        err = self.overlay.start() if want else self.overlay.stop()
+        return {"ok": not err, "on": self.overlay.on, **({"error": err} if err else {})}
 
     def api_pause(self, on=None):
         eng = self.engine
@@ -9583,6 +9625,7 @@ class App:
                     s.save_if_dirty()
             if self.download:
                 self.download.cancel.set()
+            self.overlay.stop(restore=False)
             rec = self.recording
             if rec:
                 rec.cancel.set()
@@ -10086,6 +10129,212 @@ def open_window(url):
     webbrowser.open(url)
 
 
+# ----------------------------------------------------------------------------
+# The see-through answer window (overlay)
+# A second window of the page (?overlay=1) shows only the question and the answer. Windows makes it always-on-top,
+# see-through and click-through (mouse and keyboard reach the program below it); the normal window is minimized.
+# One global key (Ctrl+Alt+O) turns it on and off; Ctrl+Alt+Up/Down scroll it, Ctrl+Alt+Left/Right change the answer.
+# ----------------------------------------------------------------------------
+OV_TITLE = "MA-Overlay"
+OV_KEYS = {"toggle": (0x4F, "O"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right")}
+
+
+class Overlay:
+    def __init__(self, app):
+        self.app = app
+        self.on = False
+        self.lock = threading.RLock()
+        self.main_windows = []
+        self.stop_flag = threading.Event()
+        self.keys_thread = None
+        self.cmds = queue.Queue()
+        self._u = None
+
+    # -- Windows helpers --
+    def user32(self):
+        if self._u is None:
+            import ctypes
+            from ctypes import wintypes as wt
+            u = ctypes.windll.user32
+            u.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+            u.IsWindowVisible.argtypes = [wt.HWND]
+            u.IsWindow.argtypes = [wt.HWND]
+            u.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+            u.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+            u.SetForegroundWindow.argtypes = [wt.HWND]
+            u.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+            u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+            u.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
+            u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+            u.SetLayeredWindowAttributes.argtypes = [wt.HWND, wt.COLORREF, ctypes.c_ubyte, wt.DWORD]
+            u.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
+            self._u = u
+        return self._u
+
+    def find(self, match):
+        """Visible top-level windows whose title passes match(title)."""
+        import ctypes
+        from ctypes import wintypes as wt
+        u, out = self.user32(), []
+        proto = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+        def cb(hwnd, _lp):
+            if u.IsWindowVisible(hwnd):
+                buf = ctypes.create_unicode_buffer(260)
+                u.GetWindowTextW(hwnd, buf, 260)
+                if buf.value and match(buf.value):
+                    out.append(hwnd)
+            return True
+        u.EnumWindows(proto(cb), 0)
+        return out
+
+    def geometry(self):
+        import ctypes
+        u = self.user32()
+        sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+        w, h = max(600, int(sw * 0.62)), max(260, int(sh * 0.36))
+        x = (sw - w) // 2
+        y = 12 if self.app.cfg.get("overlay_pos") != "bottom" else max(0, sh - h - 70)
+        return x, y, w, h
+
+    def style(self, hwnd):
+        """Always on top, see-through, click-through, no frame, not in the taskbar, never takes the keyboard."""
+        u = self.user32()
+        alpha = int(min(100, max(30, int(self.app.cfg.get("overlay_alpha") or 80))) * 255 / 100)
+        st = u.GetWindowLongPtrW(hwnd, -16)
+        st &= ~(0xC00000 | 0x40000 | 0x80000 | 0x20000 | 0x10000)     # caption, thick frame, system menu, min/max boxes
+        u.SetWindowLongPtrW(hwnd, -16, st)
+        ex = u.GetWindowLongPtrW(hwnd, -20)
+        ex |= 0x80000 | 0x20 | 0x80 | 0x8000000 | 0x8                 # layered, click-through, tool window, no-activate, topmost
+        ex &= ~0x40000                                                # app window (taskbar button)
+        u.SetWindowLongPtrW(hwnd, -20, ex)
+        u.SetLayeredWindowAttributes(hwnd, 0, alpha, 2)
+        x, y, w, h = self.geometry()
+        u.SetWindowPos(hwnd, -1, x, y, w, h, 0x20 | 0x10 | 0x40)      # frame changed, no activate, show
+
+    def start(self):
+        """Returns an error text, or '' when the overlay is on."""
+        if sys.platform != "win32":
+            return "The see-through window works on Windows only."
+        with self.lock:
+            if self.on:
+                return ""
+            exe = find_browser()
+            if not exe:
+                return "Microsoft Edge (or Chrome) was not found."
+            try:
+                x, y, w, h = self.geometry()
+                url = self.app.url + "&overlay=1"
+                subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={WINDOW_PROFILE}", "--no-first-run",
+                                  "--no-default-browser-check", "--disable-extensions", "--disable-sync",
+                                  "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+                                  "--disable-backgrounding-occluded-windows",
+                                  f"--window-size={w},{h}", f"--window-position={x},{y}"])
+                hwnd = None
+                end = time.time() + 20
+                while time.time() < end and not hwnd:
+                    time.sleep(0.3)
+                    found = self.find(lambda t: OV_TITLE in t)
+                    hwnd = found[0] if found else None
+                if not hwnd:
+                    return "The see-through window did not open."
+                self.style(hwnd)
+                self.main_windows = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
+                for m in self.main_windows:
+                    self.user32().ShowWindow(m, 6)                   # minimize
+                self.on = True
+            except Exception as e:
+                log("overlay problem:", traceback.format_exc(), level="warn")
+                return "The see-through window could not start: " + short(e, 120)
+        self.stop_flag.clear()
+        threading.Thread(target=self._keeper, daemon=True, name="overlay-keeper").start()
+        self.app.hub.publish("overlay", on=True)
+        return ""
+
+    def stop(self, restore=True):
+        if sys.platform != "win32":
+            return ""
+        with self.lock:
+            was = self.on
+            self.on = False
+            self.stop_flag.set()
+            try:
+                u = self.user32()
+                for h in self.find(lambda t: OV_TITLE in t):
+                    u.PostMessageW(h, 0x10, 0, 0)                    # WM_CLOSE
+                if restore and was:
+                    for m in self.main_windows:
+                        if u.IsWindow(m):
+                            u.ShowWindow(m, 9)                       # restore
+                    if self.main_windows and u.IsWindow(self.main_windows[0]):
+                        u.SetForegroundWindow(self.main_windows[0])
+            except Exception as e:
+                log("overlay stop problem:", short(e, 120), level="debug")
+            self.main_windows = []
+        if was:
+            self.app.hub.publish("overlay", on=False)
+        return ""
+
+    def _keeper(self):
+        """While it is on: keep the style (a page reload can reset it) and notice if the window was closed."""
+        gone = 0
+        while not self.stop_flag.wait(1.5):
+            try:
+                found = self.find(lambda t: OV_TITLE in t)
+                if found:
+                    gone = 0
+                    self.style(found[0])
+                else:
+                    gone += 1
+                    if gone >= 3:
+                        self.stop()
+                        return
+            except Exception:
+                pass
+
+    # -- global keys --
+    def start_keys(self):
+        if sys.platform != "win32" or self.keys_thread:
+            return
+        self.keys_thread = threading.Thread(target=self._keys, daemon=True, name="overlay-keys")
+        self.keys_thread.start()
+
+    def _keys(self):
+        import ctypes
+        from ctypes import wintypes as wt
+        u = ctypes.windll.user32
+        u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+        u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
+        names = {}
+        for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
+            if cmd != "toggle":
+                continue                                             # the others are registered only while it is on
+            if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4000, vk):    # Ctrl + Alt, no repeat
+                names[i] = cmd
+            else:
+                log(f"The key Ctrl+Alt+{label} is used by another program: use the Overlay button instead.", level="warn")
+        arrows = {}
+        msg = wt.MSG()
+        while not self.app.closing.is_set():
+            if self.on and not arrows:
+                for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
+                    if cmd != "toggle" and u.RegisterHotKey(None, i, 0x2 | 0x1, vk):
+                        arrows[i] = cmd
+            elif not self.on and arrows:
+                for i in list(arrows):
+                    u.UnregisterHotKey(None, i)
+                arrows = {}
+            while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):      # WM_HOTKEY
+                cmd = names.get(msg.wParam) or arrows.get(msg.wParam)
+                if cmd == "toggle":
+                    threading.Thread(target=self.app.api_overlay, daemon=True).start()
+                elif cmd:
+                    self.app.hub.publish("ov_cmd", cmd=cmd)
+            time.sleep(0.04)
+        for i in list(names) + list(arrows):
+            u.UnregisterHotKey(None, i)
+
+
 def message_box(text):
     log("fatal:", text)
     if sys.platform == "win32":
@@ -10266,6 +10515,7 @@ def main():
     if TIDIED:
         log("Tidied up: moved " + ", ".join(TIDIED) + f" into {DATA_DIR}")
     open_window(app.url)
+    app.overlay.start_keys()
     try:
         app.closing.wait()
     except KeyboardInterrupt:

@@ -2,6 +2,16 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.7]
+
+A see-through answer window, and more kinds of meetings.
+
+- **See-through answer window (Overlay)**: one button (or the key **Ctrl+Alt+O**, which works from any program) minimizes the program and shows a rectangle that stays on top of everything and shows only what they said (with its translation) and the answer to say. It is see-through, and the mouse and keyboard work on the program below it as if it were not there. Press the same key again to come back to the normal window. While it is on: Ctrl+Alt+Up/Down scroll a long answer, Ctrl+Alt+Left/Right show an earlier or newer answer. Setup › Display: how see-through it is, and top or bottom of the screen. It is an Edge window, so screen sharing can see it.
+- **New meeting type "Language or oral exam (IELTS, TOEFL, level test)"**: answers are made for speaking a test at the level you set in Answer style (B2 if empty): answer first, then a reason and a short example, linking phrases, and a simple frame for "Describe..." talks. The coach watches length and fluency, and the review judges fluency, structure, vocabulary and grammar clues.
+- **New meeting type "Client, sales or negotiation call"**: short confident answers, objections, prices, deadlines, next steps.
+- New question kind "Describe / talk" (for example "Describe a place you like", "You should say...") with a 1-2 minute guide. Test phrases such as "I'd like you to talk about...", "Do you agree or disagree", "cue card" are answered.
+- 83 automated tests.
+
 ## [6.6]
 
 A real coach next to you: it knows the kind of question, how long to speak, what you said before, and it helps until the last minute.

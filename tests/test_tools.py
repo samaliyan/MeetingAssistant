@@ -1038,3 +1038,27 @@ def test_help_key_is_single_flight(app):
     eng._help_lock.release()
     eng.cfg["coach"] = False
     assert "off" in a.api_coach_help("x")["error"]
+
+
+def test_exam_mode_and_describe_questions(app):
+    assert "exam" in app.MODES and "client" in app.MODES and app.CHOICES["meeting_mode"] == tuple(app.MODES)
+    assert "IELTS" in app.MODES["exam"]["name"] and "level" in app.MODES["exam"]["answer"]
+    assert app.classify_question("Describe a place you like to visit")[0] == "describe"
+    assert app.classify_question("You should say where it is and why you like it")[0] == "describe"
+    assert app.classify_question("Describe a time you failed at work")[0] == "behavioural"
+    for t in ("Now I'd like you to talk about your hometown.", "Do you agree or disagree with this statement", "Let's move to part two"):
+        assert app.looks_askable(t, "en"), t
+    assert "speaking-test" in app.COACH_ROLES["exam"] and "negotiation" in app.COACH_ROLES["client"]
+
+
+def test_overlay_api_off_windows(app):
+    a = app.App.__new__(app.App)
+    a.cfg = dict(app.DEFAULTS)
+    a.hub = type("H", (), {"publish": lambda self, *x, **k: None})()
+    a.url = "http://127.0.0.1:1/?t=x"
+    a.closing = __import__("threading").Event()
+    a.overlay = app.Overlay(a)
+    r = a.api_overlay()
+    assert r["ok"] is False and "Windows" in r["error"] and r["on"] is False
+    assert a.api_overlay(False)["ok"] is True
+    assert app.DEFAULTS["overlay_alpha"] == 80 and app.CHOICES["overlay_pos"] == ("top", "bottom")

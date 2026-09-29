@@ -1,4 +1,13 @@
-# Meeting Assistant — User Guide (version 6.6)
+# Meeting Assistant — User Guide (version 6.7)
+
+## Version 6.7: see-through answer window, exams
+
+- **Overlay**: press the **Overlay** button or **Ctrl+Alt+O** (from any program). The program minimizes and a see-through rectangle stays on top of everything with only the other side's words (with translation) and the answer. The mouse and keyboard work on the program under it as if it were not there. Press **Ctrl+Alt+O** again to come back.
+- While it is on: **Ctrl+Alt+↑ / ↓** scroll a long answer, **Ctrl+Alt+← / →** earlier or newer answer.
+- Setup › Display: how see-through it is and whether it sits at the top or the bottom of the screen.
+- The overlay is an Edge window, so screen sharing can see it. If the key is used by another program, use the button.
+- **Type of meeting › Language or oral exam (IELTS, TOEFL, level test)**: suggested answers at your level (write it in Answer style, for example "B2"), answer first, then reason and example. The coach watches length and fluency.
+- **Type of meeting › Client, sales or negotiation call.**
 
 ## Version 6.6: a real coach next to you
 

@@ -259,6 +259,14 @@ button.chip:hover{filter:brightness(.97)}
 @keyframes fresh{from{background:var(--amber-soft);box-shadow:0 0 0 8px var(--amber-soft)}to{background:transparent;box-shadow:0 0 0 8px transparent}}
 .answer-empty span{font-size:.85rem;max-width:300px;line-height:1.55}
 .answer-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+body.ov{background:#0b1020;color:#f3f4f6;overflow:hidden}
+body.ov #ovBox{position:fixed;inset:0;display:flex;flex-direction:column;padding:6px 10px;background:#0b1020;border:2px solid #4f46e5;box-sizing:border-box}
+body.ov #newQ{margin:0 0 6px}
+body.ov .answer-body{padding:8px 10px}
+body.ov .q-block{background:#151b30;border-color:#2a3358;margin-bottom:10px}
+body.ov .q-orig{font-size:1.05rem;color:#e5e7eb}
+body.ov .answer-empty{color:#cbd5e1}
+#ovBtn.on{color:var(--primary);border-color:var(--primary)}
 .coach{max-height:38vh;overflow-y:auto;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.8rem}
 .co-live{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-2)}
 .co-live .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
@@ -708,6 +716,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="meter them off" id="mThem" title="Computer sound (the other side)"><span data-icon="volume"></span><span class="meter-label">Other side</span><span class="bar"><i></i></span></div>
     </div>
     <button class="btn ghost" id="pauseBtn" hidden title="Pause listening: nothing is written or sent until you continue (F8)"><span data-icon="pause"></span><span id="pauseLabel">Pause</span><kbd class="hide-sm">F8</kbd></button>
+    <button class="btn ghost" id="ovBtn" title="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it (Ctrl+Alt+O, even from another program)"><span data-icon="eye"></span><span class="hide-sm">Overlay</span></button>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
     <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm">Shift+F9</kbd></button>
@@ -1102,6 +1111,12 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="help">Shortcuts: <kbd>Ctrl</kbd> <kbd>+</kbd> and <kbd>Ctrl</kbd> <kbd>−</kbd>. The answer has its own size buttons (A− / A+).</div>
       </div>
       <div class="field">
+        <label for="fOvA">See-through answer window (Overlay) <b id="ovAVal">80%</b></label>
+        <div class="range-row"><span>More see-through</span><input type="range" id="fOvA" min="30" max="100" step="5" data-key="overlay_alpha"><span>More solid</span></div>
+        <div class="seg" data-key="overlay_pos"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
+        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows only what they said and the answer. It stays on top, the mouse and keyboard go to the program under it. Press the same keys to come back. It is an Edge window: screen sharing can see it.</div>
+      </div>
+      <div class="field">
         <span class="label">Screen sharing</span>
         <label class="toggle"><input type="checkbox" id="hideToggle"><span class="switch"></span><span class="tt"><b>Hide this window from screen sharing</b><span>Zoom, Teams, Meet and screen recordings will not show it. Applies after you close the program and open it again.</span></span></label>
         <div class="help" id="hideStatus"></div>
@@ -1138,6 +1153,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="hrow"><kbd>Shift+F9</kbd><span>Continue the last meeting (same transcript)</span></div>
   <div class="hrow"><kbd>F2</kbd><span>Answer the last thing they said</span></div>
   <div class="hrow"><kbd>F3</kbd><span>Read the screen (a question or code shown there)</span></div>
+  <div class="hrow"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>O</kbd><span>See-through answer window on / off (works from any program). While it is on: <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd> scroll, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>←</kbd><kbd>→</kbd> earlier / newer answer.</span></div>
   <div class="hrow"><kbd>F4</kbd><span>Ask the coach: what should I do or say now?</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
@@ -1208,6 +1224,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
 <script>
 "use strict";
 const TOKEN = "__TOKEN__";
+const OVERLAY = /[?&]overlay=1/.test(location.search);      // the see-through answer window
 try{ if(location.search) history.replaceState(null, "", "/"); }catch{}      // the key is not left in the address bar
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -1330,6 +1347,14 @@ function handle(m){
     case "devices_in_use": S.inUse = m; return;
     case "session": return newSession(m);
     case "speech_mode": S.speechMode = m; renderFooter(); renderSttMode(); return;
+    case "overlay": S.overlay = !!m.on; renderOverlayBtn(); return;
+    case "ov_cmd":
+      if(OVERLAY){
+        const b = $("#answerBody");
+        if(m.cmd === "up" || m.cmd === "down") b.scrollBy({top: (m.cmd === "down" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"});
+        else if(m.cmd === "prev") stepAnswer(-1); else if(m.cmd === "next") stepAnswer(1);
+      }
+      return;
     case "coach": S.coach = m.coach; renderCoach(); return;
     case "answer_check": S.check = m.check; renderCoach(); return;
     case "coach_notes": S.notes = m.notes; if(TM.kind === "coach") openNotes(true); return;
@@ -1360,7 +1385,7 @@ function newSession(m){
 }
 function onHello(m){
   $("#sbVer").textContent = "v" + (m.version || ""); $("#setupVer").textContent = "version " + (m.version || "");
-  document.title = "Meeting Assistant " + (m.version || "");
+  document.title = OVERLAY ? "MA-Overlay" : "Meeting Assistant " + (m.version || "");
   S.cfg = m.config; S.running=m.running; S.stopping=m.stopping; S.monitoring=m.monitoring; S.startedAt=m.started_at;
   S.sessionFile=m.session_file||""; S.meetingsDir=m.meetings_dir; S.proxy=m.proxy||["",""]; S.net=m.net||{};
   S.stats=m.stats||{}; S.quota=m.quota; S.audioOk=m.audio_ok; S.speechMode = m.speech_mode; S.usage = m.usage || {};
@@ -1369,7 +1394,7 @@ function onHello(m){
   S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
   S.recName = m.recording && ["starting","reading","finishing"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
   clearTranscript(); renderTitle();
-  S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {};
+  S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {}; S.overlay = !!m.overlay; renderOverlayBtn();
   (m.entries||[]).forEach(e=>upsertEntry(e, true));
   $("#logBox").innerHTML = ""; (m.log||[]).forEach(l => addLog(l, false));
   applyConfig(); fillDrawer(true); renderRunning(); renderFooter(); renderAnswer(); renderHide();
@@ -1392,7 +1417,7 @@ function applyConfig(){
   $$(".myl").forEach(x => { x.textContent = ml.name; });
   document.documentElement.style.setProperty("--font-tr", ml.rtl ? "var(--font-fa)" : "var(--font)");
   const sb = $("#sumBody"); sb.dir = ml.rtl ? "rtl" : "ltr"; sb.lang = ml.code;
-  document.documentElement.dataset.theme = c.theme;
+  document.documentElement.dataset.theme = OVERLAY ? "dark" : c.theme;
   document.documentElement.style.setProperty("--scale", c.text_size/100);
   document.documentElement.style.setProperty("--answer-size", c.answer_size+"px");
   const t = $("#topicLine");
@@ -1707,9 +1732,23 @@ setInterval(() => { if(S.queued != null){ if(!iAmSpeaking()) takeQueued(); else 
 const PHASES = {intro: "Introduction", background: "Your background", technical: "Technical", behavioural: "Behavioural", coding: "Coding / task",
                 scenario: "Scenario", candidate_questions: "Your questions", closing: "Closing", smalltalk: "Small talk", other: "Discussion",
                 opening: "Opening", discussion: "Discussion", decision: "Decision", action_items: "Action items", q_and_a: "Q & A", explanation: "Explanation"};
-const QLABEL = {candidate_q: "Your questions", salary: "Salary", availability: "Availability", intro: "Introduction", motivation: "Motivation",
+const QLABEL = {describe: "Describe / talk", candidate_q: "Your questions", salary: "Salary", availability: "Availability", intro: "Introduction", motivation: "Motivation",
                 weakness: "Weakness", strength: "Strengths", behavioural: "Behavioural", coding: "Coding / task", design: "Design",
                 troubleshoot: "Troubleshooting", experience: "Experience", concept: "Concept", opinion: "Opinion", yesno: "Yes / no"};
+function renderOverlayBtn(){ const b = $("#ovBtn"); if(b) b.classList.toggle("on", !!S.overlay); }
+$("#ovBtn").onclick = async () => {
+  const r = await api("overlay", {});
+  if(!r.ok) toast("warn", r.error || "The see-through window could not open.");
+  else if(r.on) toast("info", "Overlay is on. Press Ctrl+Alt+O to come back.");
+};
+if(OVERLAY){                    // this page is the see-through window: only the question and the answer
+  document.body.classList.add("ov");
+  const box = document.createElement("div"); box.id = "ovBox";
+  box.append($("#newQ"), $("#answerBody"));
+  [...document.body.children].forEach(c => { if(c.tagName !== "SCRIPT") c.style.display = "none"; });
+  document.body.prepend(box);
+  document.title = "MA-Overlay";
+}
 const NUDGE = {fa: "بعد از جواب شما سکوت شده. می‌توانید بپرسید: «مایلید بیشتر توضیح بدهم؟»",
                en: "It is quiet after your answer. You can ask: “Would you like me to go into more detail?”"};
 const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
@@ -2338,7 +2377,7 @@ function fillDrawer(force){
     else if(el.tagName === "SELECT"){ /* filled by loadDevices */ if([...el.options].some(o=>o.value===v)) el.value = v; }
     else if(el.value !== String(v ?? "")) el.value = v ?? "";
   });
-  $("#gainVal").textContent = (c.mic_gain || 100) + "%";
+  $("#gainVal").textContent = (c.mic_gain || 100) + "%"; $("#ovAVal").textContent = (c.overlay_alpha || 80) + "%";
   const kh = $("#keyHint");
   kh.hidden = !c.has_key; kh.innerHTML = c.has_key ? `${icon("check")} Key saved (${esc(c.key_hint||"")}). Paste a new one to replace it.` : "";
   $("#keyWelcome").hidden = c.has_key;
@@ -2380,7 +2419,7 @@ $$("[data-key]").forEach(el => {
   } else if(el.type === "checkbox"){
     el.onchange = () => { if(!S.cfg) return; S.cfg[k] = el.checked; queueSave({[k]: el.checked}); };
   } else if(el.type === "range"){
-    el.oninput = () => { if(!S.cfg) return; S.cfg[k] = +el.value; if(k === "text_size") applyConfig(); if(k === "mic_gain") $("#gainVal").textContent = el.value + "%"; queueSave({[k]: +el.value}); };
+    el.oninput = () => { if(!S.cfg) return; S.cfg[k] = +el.value; if(k === "text_size") applyConfig(); if(k === "mic_gain") $("#gainVal").textContent = el.value + "%"; if(k === "overlay_alpha") $("#ovAVal").textContent = el.value + "%"; queueSave({[k]: +el.value}); };
   } else if(el.tagName === "SELECT"){
     el.onchange = () => { if(!S.cfg) return; S.cfg[k] = el.value; queueSave({[k]: el.value}); };
   } else {
