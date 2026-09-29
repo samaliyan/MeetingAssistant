@@ -1,8 +1,34 @@
-# Meeting Assistant — User Guide (version 6.3)
+# Meeting Assistant — User Guide (version 6.6)
+
+## Version 6.6: a real coach next to you
+
+- **Kind of question**: the coach card shows what kind of question it is (introduction, salary, behavioural, coding, design, troubleshooting, experience, concept, opinion, yes/no, "your questions to us"), one line on how to answer it, and a time guide. While you speak a bar fills; when it turns red, finish with one closing sentence.
+- **Your reply is checked** when you stop speaking (only from the transcript): too long, too short, no example or number, too fast, too many soft words, or good.
+- **The coach remembers** the meeting: facts you said, topics, promises, people, what went well, what is open. If you contradict something you said before, a warning appears. Open the notes: tools menu › **Coach notes**. They are saved with the meeting.
+- **Preparation**: when you press Start, the coach reads your CV and the meeting text and writes key messages, strengths, risks and questions to ask them (in Coach notes).
+- **F4** = "what should I do or say now?". Or click **Ask coach** and type your own question. F4 with Alt or Ctrl does nothing.
+- The coach changes with the meeting type (interview, work meeting, lecture). Turn it off in Setup › Meeting.
+- Cost: one small request about every 45 seconds, only when nothing else is being written.
+
+## Version 6.5: the program knows what is happening
+
+- **Interview situation card** (above the suggested answer): the live state (they are asking, you are answering with a timer, the answer is being written, your turn), the stage of the interview, the topic, the level of the questions (1-5, with an arrow if it goes up or down), a sign "Going well / Steady / Needs care", and one short tip in your language.
+- **Question asked again**: if they ask the same question again after your answer, the line shows "Asked again" and the new suggested answer is written to fix the earlier one (direct answer first, then one example). It also sees what you said the first time.
+- The card costs one small request about every 30 seconds and only when nothing else is being written. Turn it off in Setup › Meeting.
+
+## Version 6.4: an interview with only Start
+
+- **Just press Start** (F9). Before it starts, the program checks the internet, the key and the sound device of the other side, and tells you at once if something is wrong. Pressing Start a second time starts anyway.
+- **One answer for each question.** If the interviewer says a question in pieces, the program waits about one second and answers once for the whole question. A line that ends with a question mark is answered almost immediately.
+- **No wasted answers.** Statements such as "We are a company founded in 2010" or "Thank you" are not sent to the AI, so the free limits last for the real questions. Requests like "Tell me about yourself" are answered. For any other line use "Answer this" or F2.
+- **No late answers.** After a network break, old lines and questions you have already answered are skipped.
+- **Recovery by itself**: answers are tried again twice after a short problem; live text (Deepgram) reconnects; the audio reopens after the PC wakes up.
+- If they mention the screen ("look at this code"), a hint tells you to press F3.
 
 ## Version 6.3
 
 ### Hands-free answers
+- While you are speaking, a new question from the other side does not replace the answer you are reading. A yellow "New question" bar appears; when you stop speaking the new answer opens by itself (or click the bar).
 - The answer panel now follows the conversation by itself: the newest answer is always shown, with no click on "Show suggested answer". An answer you choose on purpose (arrow keys or a click) stays until a newer question is answered.
 - **Ctrl + Left / Ctrl + Right**: earlier / newer answer. **Ctrl + Up / Ctrl + Down**: scroll a long answer. **F2**: answer the last thing they said. **F3**: read the screen. **F8**: pause. Nothing needs the mouse during an interview.
 - Above the "Answer now" button a small "2 / 5" counter shows which answer you are looking at (orange = not the newest).

@@ -652,3 +652,389 @@ def test_live_service_hears_the_mic_only_during_speech(app):
     for _ in range(20):
         cap._got(quiet, 16000)
     assert got and max(got) == 0.0                              # a quiet room is sent as silence
+
+
+def test_looks_askable(app):
+    ask = ["Tell me about yourself.", "Walk me through your last project", "How does BGP choose a path",
+           "and why?", "Can you give an example", "Describe how you would design a backup plan.",
+           "Erzählen Sie mir von Ihrer Erfahrung", "Was ist der Unterschied zwischen TCP und UDP"]
+    quiet = ["We are a company founded in 2010 in Berlin.", "Great, thank you.", "Our team has twelve people and we ship monthly."]
+    for s in ask:
+        assert app.looks_askable(s, "en"), s
+    for s in quiet:
+        assert not app.looks_askable(s, "en"), s
+    assert app.looks_askable("Please introduce yourself", "en") and app.looks_askable("Walk us through your CV", "en")
+    assert app.looks_askable("سلام معرفی کنید", "")                # unknown language, not plain English: never dropped
+    assert app.looks_askable("سلام خوش آمدید", "fa")           # other languages: always yes
+
+
+class _Hub:
+    def publish(self, *a, **k): pass
+    def toast(self, *a, **k): pass
+
+
+class _FakeApp:
+    def __init__(self, app):
+        self.cfg = app.sanitize({})
+        self.hub = _Hub()
+        self.stats = app.Stats()
+        self.captures = []
+        self.running = False
+        self.engine = None
+    def provider(self, pid): return None
+
+
+def _engine(app):
+    fa = _FakeApp(app)
+    sess = app.Session(fa.cfg)
+    eng = app.Engine(fa, sess, workers=False)
+    calls = []
+    eng._answer = lambda eid, force=False, question=None, _retry=0: calls.append((eid, force, question))
+    eng._submit_tr = lambda eid: True
+    return eng, sess, calls
+
+
+def _say(app, eng, text, when=None):
+    now = when or __import__("time").time()
+    eng.accept_text("them", text, "en", now - 2, now - 0.1, [next(app._seg_counter)],
+                    {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "x", "model": "x"})
+
+
+def test_question_in_pieces_gets_one_answer(app):
+    import time
+    eng, sess, calls = _engine(app)
+    try:
+        _say(app, eng, "Tell me about a time")
+        time.sleep(0.4)
+        _say(app, eng, "when you led a team through an outage")
+        time.sleep(1.8)
+        assert len(calls) == 1, calls
+        assert "Tell me about a time" in calls[0][2] and "outage" in calls[0][2]
+        first = sess.ordered()[0]
+        assert first["ans_state"] == "none"                     # the first piece was merged into the second
+    finally:
+        eng.stop_event.set()
+
+
+def test_statements_and_old_lines_are_not_answered(app):
+    import time
+    eng, sess, calls = _engine(app)
+    try:
+        _say(app, eng, "We are a company founded in 2010 in Berlin.")
+        _say(app, eng, "Great, thank you.")
+        eng.accept_text("them", "How would you monitor a database?", "en", time.time() - 200, time.time() - 199, [next(app._seg_counter)],
+                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "x", "model": "x"})
+        time.sleep(1.6)
+        assert calls == []
+    finally:
+        eng.stop_event.set()
+
+
+def test_question_mark_is_answered_quickly(app):
+    import time
+    eng, sess, calls = _engine(app)
+    try:
+        _say(app, eng, "How would you monitor a database?")
+        time.sleep(0.7)
+        assert len(calls) == 1 and calls[0][2] is None
+    finally:
+        eng.stop_event.set()
+
+
+def test_answer_button_cancels_a_waiting_automatic_answer(app):
+    import time
+    eng, sess, calls = _engine(app)
+    try:
+        _say(app, eng, "Explain how OSPF elects a DR")
+        eng.answer_now()
+        time.sleep(1.6)
+        assert [c[1] for c in calls] == [True]                  # only the forced one
+    finally:
+        eng.stop_event.set()
+
+
+def test_stopped_meeting_leaves_no_answer_writing(app):
+    import time
+    eng, sess, calls = _engine(app)
+    _say(app, eng, "Explain how OSPF elects a DR")
+    eng.stop_event.set()                                        # the meeting ends during the short wait
+    time.sleep(1.6)
+    assert calls == []
+    assert sess.ordered()[0]["ans_state"] == "none"
+
+
+def test_retry_does_not_override_a_forced_answer(app):
+    eng, sess, calls = _engine(app)
+    try:
+        _say(app, eng, "How would you monitor a database?")
+        eid = sess.ordered()[0]["id"]
+        eng.ans_gen[eid] += 1                                   # the user pressed F2 meanwhile (a newer request)
+        eng._retry_answer(eid, None, 1, 0)                      # the old retry wakes up
+        assert calls == []
+    finally:
+        eng.stop_event.set()
+
+
+def test_repeated_question_is_found(app):
+    import time
+    eng, sess, calls = _engine(app)
+    now = time.time()
+    a = sess.add("them", now - 200, now - 195, "How would you design a backup strategy for a large Oracle database?", "en", [], None)
+    sess.add("me", now - 190, now - 150, "I would use RMAN and take backups every night, that is it.", "en", [], None)
+    b = sess.add("them", now - 20, now - 15, "So how would you design a backup strategy for a big Oracle database?", "en", [], None)
+    n, prev, said = eng.find_repeats(b, None)
+    assert n == 1 and prev["id"] == a["id"] and "RMAN" in said
+    c = sess.add("them", now - 5, now - 2, "Tell me about your experience with OSPF and BGP routing", "en", [], None)
+    assert eng.find_repeats(c, None)[0] == 0
+    # the same question in two pieces (no answer between) is not "asked again"
+    d1 = sess.add("them", now + 1, now + 3, "How would you monitor replication lag on a standby", "en", [], None)
+    d2 = sess.add("them", now + 4, now + 6, "How would you monitor replication lag on a standby database", "en", [], None)
+    assert eng.find_repeats(d2, None)[0] == 0
+
+
+def test_repeat_is_never_skipped_and_reaches_the_prompt(app):
+    import time
+    eng, sess, calls = _engine(app)
+    eng.__dict__.pop("_answer", None)                            # use the real _answer
+    seen = {}
+
+    def fake_chat(chain, messages, max_tokens, temperature, on_text):
+        seen["user"] = messages[-1]["content"]
+        seen["system"] = messages[0]["content"]
+        return "NO_REPLY"
+    eng.run_chat = fake_chat
+    eng.chat_targets = lambda task: [("groq", "m", None)]
+    now = time.time()
+    sess.add("them", now - 200, now - 195, "How would you design a backup strategy for a large Oracle database?", "en", [], None)
+    sess.add("me", now - 190, now - 150, "I would use RMAN nightly.", "en", [], None)
+    b = sess.add("them", now - 20, now - 15, "How would you design a backup strategy for a large Oracle database?", "en", [], None)
+    eng._answer(b["id"])
+    assert "REPEATED QUESTION" in seen["user"] and "RMAN nightly" in seen["user"]
+    assert sess.get(b["id"])["repeat"] == 1
+    assert sess.get(b["id"])["ans_state"] == "done"              # NO_REPLY is not accepted for an asked-again question
+
+
+def test_situation_card_reads_the_model_answer(app):
+    eng, sess, calls = _engine(app)
+    import time
+    now = time.time()
+    sess.add("them", now - 50, now - 45, "Tell me about yourself", "en", [], None)
+    sess.add("me", now - 40, now - 20, "I am a network engineer.", "en", [], None)
+    sess.add("them", now - 10, now - 5, "How does OSPF elect a designated router", "en", [], None)
+    published = []
+    eng.hub = type("H", (), {"publish": lambda self, *a, **k: published.append((a, k)), "toast": lambda *a, **k: None})()
+    eng.chat_targets = lambda task: [("groq", "m", None)]
+    eng.run_chat = lambda *a, **k: 'Sure: {"phase": "technical", "topic": "OSPF DR election", "difficulty": 7, "trend": "up", "signal": "meh", "tip": "Answer directly."}'
+    eng._coach_run()
+    st = eng.coach_state
+    assert st["phase"] == "technical" and st["difficulty"] == 5 and st["trend"] == "up" and st["signal"] == "neutral"
+    assert published and published[0][0][0] == "coach"
+    eng.run_chat = lambda *a, **k: "not json at all"
+    eng._coach_run()                                             # a bad reply changes nothing and raises nothing
+    assert eng.coach_state is st
+
+
+def test_similar_frames_are_not_repeats(app):
+    sim = app.Engine._sim
+    assert sim("How would you back up the production database?", "How would you restore the production database?") < app.REPEAT_SIM
+    assert sim("Tell me about your experience with Oracle", "Tell me about your experience with Kubernetes") < app.REPEAT_SIM
+    assert sim("Can you walk me through how you would design the backup?", "Can you walk me through how you would test the backup?") < app.REPEAT_SIM
+    assert sim("How would you design a backup strategy for a large Oracle database?",
+               "So how would you design a backup strategy for a big Oracle database?") >= app.REPEAT_SIM
+    assert sim("Why did you leave your last job", "Why did you leave your last job") >= app.REPEAT_SIM
+
+
+def test_coach_reply_parsing_is_forgiving(app):
+    import time
+    eng, sess, calls = _engine(app)
+    now = time.time()
+    sess.add("them", now - 50, now - 45, "Tell me about yourself", "en", [], None)
+    sess.add("them", now - 10, now - 5, "How does OSPF elect a designated router", "en", [], None)
+    eng.chat_targets = lambda task: [("groq", "a", None), ("groq", "b", None)]
+    used = []
+    eng.hub = type("H", (), {"publish": lambda *a, **k: None, "toast": lambda *a, **k: None})()
+
+    def chat(chain, *a, **k):
+        used.append(chain)
+        return '```json\n{"phase": "intro", "topic": "x", "difficulty": 2} trailing } text\n```'
+    eng.run_chat = chat
+    eng._coach_run()
+    assert eng.coach_state["phase"] == "intro"
+    assert used[0] == [("groq", "b", None)]                     # its own model, not the first one the answers use
+    eng.run_chat = lambda *a, **k: "[1, 2]"
+    eng._coach_run()                                             # a list is not a situation
+    assert eng.coach_state["phase"] == "intro"
+
+
+def test_question_types_and_targets(app):
+    cases = {"Tell me about yourself": "intro", "Tell me about a time you disagreed with your manager": "behavioural",
+             "How would you design a backup strategy for a large database?": "design",
+             "What would you do if the database suddenly becomes slow?": "troubleshoot",
+             "What is the difference between TCP and UDP?": "concept",
+             "Do you have any questions for us?": "candidate_q", "What are your salary expectations?": "salary",
+             "What is your notice period?": "availability", "What is your greatest weakness?": "weakness",
+             "Have you worked with Oracle Data Guard?": "experience", "Can you write a function that reverses a list?": "coding",
+             "Why do you want to work here?": "motivation", "Do you know Linux?": "yesno"}
+    for text, want in cases.items():
+        got = app.classify_question(text)[0]
+        assert got == want, (text, got, want)
+    assert app.classify_question("We are a company founded in 2010")[0] == ""
+    name, lo, hi = app.classify_question("Tell me about yourself")
+    assert (lo, hi) == (60, 90) and app.qtype_hint("intro", "fa") and app.qtype_hint("intro", "en") != app.qtype_hint("intro", "fa")
+
+
+def _rows(app, spec):
+    """spec: [(source, t0, t_end, text, extra)] -> entries with ids"""
+    out = []
+    for i, (src, a, b, text, extra) in enumerate(spec, 1):
+        out.append({"id": i, "source": src, "t0": a, "t_end": b, "text": text, **extra})
+    return out
+
+
+def test_reply_check_flags(app):
+    q = {"id": 1, "source": "them", "t0": 0, "t_end": 3, "text": "Tell me about a time you led a team", "qtype": "behavioural", "qmin": 90, "qmax": 120}
+    long_text = "I think maybe it was kind of a hard project and I guess we probably did some things, you know. " * 6
+    rows = [q, {"id": 2, "source": "me", "t0": 5, "t_end": 45, "text": long_text, "extra": 1}]
+    rows += [{"id": 3, "source": "me", "t0": 46, "t_end": 86, "text": long_text, "extra": 1},
+             {"id": 4, "source": "me", "t0": 87, "t_end": 127, "text": long_text, "extra": 1},
+             {"id": 5, "source": "me", "t0": 128, "t_end": 168, "text": long_text, "extra": 1}]
+    c = app.check_answer(rows, q)
+    assert "long" in c["flags"] and "hedging" in c["flags"] and "no_example" in c["flags"], c
+    good = [q, {"id": 2, "source": "me", "t0": 5, "t_end": 60,
+                "text": "At my last company I led a team of six during a migration. We moved forty databases in three months and reduced downtime by 90 percent, "
+                        "which the management noticed. I set the plan, split the work and reviewed every cutover with the team.", }]
+    c = app.check_answer(good, q)
+    assert c["flags"] == ["good"], c
+    assert app.check_answer([q], q) is None
+
+
+def test_notes_are_cleaned(app):
+    n = app.clean_notes({"me_facts": ["8 years OSPF", "", 5, {"x": 1}], "topics": "not a list", "brief": {"key_messages": ["a", "b"], "junk": 1},
+                         "commitments": ["send the report on Friday"] * 30})
+    assert n["me_facts"] == ["8 years OSPF", "5"] and "topics" not in n
+    assert len(n["commitments"]) == 8 and n["brief"] == {"key_messages": ["a", "b"]}
+    assert app.clean_notes("x") == {} and app.clean_notes(None) == {}
+
+
+def test_coach_writes_notes_and_alert(app):
+    import time
+    eng, sess, calls = _engine(app)
+    now = time.time()
+    sess.add("them", now - 90, now - 85, "How many years of OSPF experience do you have", "en", [], None)
+    sess.add("me", now - 80, now - 70, "I have five years of OSPF experience", "en", [], None)
+    sess.add("them", now - 30, now - 25, "And how long did you work with BGP", "en", [], None)
+    sess.add("me", now - 20, now - 10, "Eight years of OSPF and BGP", "en", [], None)
+    published = []
+    eng.hub = type("H", (), {"publish": lambda self, *a, **k: published.append((a[0], k)), "toast": lambda *a, **k: None})()
+    eng.chat_targets = lambda task: [("groq", "a", None), ("groq", "b", None)]
+    seen = {}
+
+    def chat(chain, messages, *a, **k):
+        seen["sys"], seen["user"] = messages[0]["content"], messages[1]["content"]
+        return ('{"phase": "technical", "topic": "OSPF", "difficulty": 3, "trend": "same", "signal": "neutral", '
+                '"tip": "Clarify: five or eight years?", "alert": "You said 5 years, then 8 years of OSPF", '
+                '"notes": {"me_facts": ["5 years OSPF (said first)", "8 years OSPF and BGP (said later)"], "topics": ["OSPF", "BGP"]}}')
+    eng.run_chat = chat
+    eng._coach_run()
+    assert eng.coach_state["alert"].startswith("You said 5 years")
+    assert sess.coach_notes["me_facts"][0].startswith("5 years") and "coach_notes" in [p[0] for p in published]
+    assert "interview" in seen["sys"].lower() or "meeting" in seen["sys"].lower()
+    assert "Tips already shown" not in seen["user"]
+    # (second run shows the earlier tip so it is not repeated)
+    eng.coach_last = 0
+    eng._coach_run()
+    assert "Clarify: five or eight years?" in seen["user"]
+    assert "5 years OSPF" in eng.notes_text()
+
+
+def test_coach_help_and_brief(app):
+    import time
+    eng, sess, calls = _engine(app)
+    eng.cfg["about_me"] = "Network engineer, 8 years OSPF and BGP, Oracle DBA."
+    eng.chat_targets = lambda task: [("groq", "a", None), ("groq", "b", None)]
+    got = {}
+
+    def chat(chain, messages, *a, **k):
+        got["chain"], got["user"] = chain, messages[-1]["content"]
+        if "prepare a user" in messages[0]["content"]:
+            return '{"key_messages": ["Show OSPF depth"], "strengths": ["8 years"], "risks": ["No cloud: say what you learn"], "ask_them": ["What does success look like?"]}'
+        return "  Say the direct answer first, then one example.  "
+    eng.run_chat = chat
+    eng.coach_brief()
+    assert sess.coach_notes["brief"]["key_messages"] == ["Show OSPF depth"]
+    assert "8 years OSPF" in got["user"]
+    now = time.time()
+    sess.add("them", now - 10, now - 5, "Explain OSPF areas", "en", [], None)
+    out = eng.coach_help("what now?")
+    assert out == "Say the direct answer first, then one example."
+    assert len(got["chain"]) == 2 and "what now?" in got["user"]         # the help key uses the whole chain
+    eng.stop_event.set()
+
+
+def test_question_types_negatives_and_german(app):
+    not_behavioural = ["Have you ever used Terraform?", "Can you give me an example of an index?", "How do you resolve a merge conflict in git?",
+                       "What happens on a node failure in a cluster?", "How does RMAN handle a block failure?"]
+    for t in not_behavioural:
+        assert app.classify_question(t)[0] != "behavioural", t
+    assert app.classify_question("Have you ever used Terraform?")[0] == "experience"
+    assert app.classify_question("How much do you know about our company?")[0] != "salary"
+    assert app.classify_question("How much do you expect to earn?")[0] == "salary"
+    assert app.classify_question("What design patterns do you know?")[0] != "design"
+    assert app.classify_question("How would you tune a slow SQL query?")[0] not in ("coding", "behavioural")
+    assert app.classify_question("Have you ever had a conflict with a colleague?")[0] == "behavioural"
+    assert app.classify_question("Wie gehen Sie mit Konflikten um?")[0] == "behavioural"
+    assert app.classify_question("Wie viel Gehalt erwarten Sie?")[0] == "salary"
+    assert app.classify_question("Stellen Sie sich bitte kurz vor")[0] == "intro"
+    assert app.classify_question("Haben Sie noch Fragen an uns?")[0] == "candidate_q"
+
+
+def test_reply_check_scope_and_speed(app):
+    q1 = {"id": 1, "source": "them", "t0": 0, "t_end": 3, "text": "Tell me about a time you led a team", "qtype": "behavioural", "qmin": 90, "qmax": 120}
+    ans = "At my last job I led six people and we cut the downtime by 90 percent in three months. " * 5
+    q2 = {"id": 3, "source": "them", "t0": 200, "t_end": 204, "text": "Where are you based at the moment please"}
+    late = {"id": 4, "source": "me", "t0": 206, "t_end": 209, "text": "I am in Berlin now, close to the office."}
+    rows = [q1, {"id": 2, "source": "me", "t0": 5, "t_end": 65, "text": ans}, q2, late]
+    c = app.check_answer(rows, q1)
+    assert c["secs"] == 60 and "long" not in c["flags"], c                # the later short reply is not added to the first answer
+    c2 = app.check_answer(rows, q2)
+    assert c2["words"] < 12 and c2["qid"] == 3
+    one = [q1, {"id": 2, "source": "me", "t0": 5, "t_end": 95, "text": "word " * 150}]
+    c = app.check_answer(one, q1)
+    assert c["secs"] == 90 and c["wpm"] == 100 and "fast" not in c["flags"], c   # a long single line keeps its real duration
+    de = [q1, {"id": 2, "source": "me", "t0": 5, "t_end": 60, "lang": "de", "text": "Ich habe sechs Leute geführt und wir haben das Projekt pünktlich abgeschlossen. " * 3}]
+    assert "no_example" not in app.check_answer(de, q1)["flags"]         # English word lists: no verdict on German
+
+
+def test_notes_merge_and_stale_check(app):
+    import time
+    eng, sess, calls = _engine(app)
+    now = time.time()
+    sess.add("them", now - 90, now - 85, "How many years of OSPF experience do you have", "en", [], None)
+    sess.add("them", now - 60, now - 55, "And how long did you work with BGP", "en", [], None)
+    sess.coach_notes = {"me_facts": ["8 years OSPF"], "topics": ["OSPF"], "brief": {"key_messages": ["x"]}}
+    eng.hub = type("H", (), {"publish": lambda self, *a, **k: None, "toast": lambda *a, **k: None})()
+    eng.chat_targets = lambda task: [("groq", "a", None)]
+    eng.run_chat = lambda *a, **k: '{"phase": "technical", "difficulty": 1e999, "alert": "None", "notes": {"topics": ["BGP"]}}'
+    eng._coach_run()
+    assert sess.coach_notes["me_facts"] == ["8 years OSPF"] and sess.coach_notes["topics"] == ["BGP"]   # an omitted list is kept
+    assert sess.coach_notes["brief"]["key_messages"] == ["x"] and eng.coach_state["alert"] == ""
+    eng.last_check = {"qid": 1, "secs": 10, "words": 20, "wpm": None, "flags": []}
+    assert eng.current_check() is None                                    # it belongs to an older question
+    eng.chat_targets = lambda task: [("llm", "local", None), ("groq", "a", None)]
+    assert eng.coach_chain() == [("llm", "local", None)]                  # the background text stays on the local model
+    eng.chat_targets = lambda task: []
+    assert eng.coach_chain() == []
+
+
+def test_help_key_is_single_flight(app):
+    eng, sess, calls = _engine(app)
+    class A: pass
+    a = app.App.__new__(app.App)
+    a.engine = eng
+    eng.cfg["coach"] = True
+    assert eng._help_lock.acquire(blocking=False)
+    r = a.api_coach_help("x")
+    assert not r["ok"] and "still" in r["error"]
+    eng._help_lock.release()
+    eng.cfg["coach"] = False
+    assert "off" in a.api_coach_help("x")["error"]

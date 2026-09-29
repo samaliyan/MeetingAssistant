@@ -259,6 +259,54 @@ button.chip:hover{filter:brightness(.97)}
 @keyframes fresh{from{background:var(--amber-soft);box-shadow:0 0 0 8px var(--amber-soft)}to{background:transparent;box-shadow:0 0 0 8px transparent}}
 .answer-empty span{font-size:.85rem;max-width:300px;line-height:1.55}
 .answer-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+.coach{max-height:38vh;overflow-y:auto;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.8rem}
+.co-live{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-2)}
+.co-live .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
+.co-live.ask .dot{background:var(--them);animation:pulse 1.2s infinite}
+.co-live.me .dot{background:var(--me);animation:pulse 1.2s infinite}
+.co-live.ready .dot{background:var(--ok)}
+.co-live.wait .dot{background:var(--amber)}
+.co-live .co-time{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:500}
+.co-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.co-chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text-2);font-size:.75rem;font-weight:600}
+.co-chip.good{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
+.co-chip.warn{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.co-chip.bad{border-color:var(--danger-border);color:var(--danger);background:var(--danger-soft)}
+.co-diff{display:inline-flex;gap:2px;align-items:center}
+.co-diff i{width:6px;height:6px;border-radius:50%;background:var(--border)}
+.co-diff i.on{background:var(--amber)}
+.co-tip{padding:6px 9px;border-radius:8px;background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--text);font-size:.85rem;line-height:1.5}
+.co-top{display:flex;align-items:center;gap:8px}
+.co-top .co-live{flex:1;min-width:0}
+.co-fold{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:.9rem;padding:2px 6px;border-radius:6px}
+.co-fold:hover{background:var(--surface-3)}
+.coach.fold .co-body{display:none}
+.coach.fold .co-fold{transform:rotate(-90deg)}
+.co-body{display:grid;gap:6px;max-height:34vh;overflow-y:auto;padding-right:2px}
+.co-how{padding:6px 9px;border-radius:8px;background:var(--surface);border:1px solid var(--border);font-size:.82rem;line-height:1.5}
+.co-how b{color:var(--accent)}
+.co-bar{height:5px;border-radius:3px;background:var(--surface-3);margin-top:5px;overflow:hidden;position:relative}
+.co-bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .4s linear,background .3s}
+.co-bar i.mid{background:var(--warn)} .co-bar i.over{background:var(--danger)}
+.co-bar u{position:absolute;top:0;bottom:0;width:2px;background:var(--faint);opacity:.7}
+.co-check{padding:6px 9px;border-radius:8px;background:var(--surface);border:1px solid var(--border);font-size:.8rem;line-height:1.5}
+.co-check .cc-h{font-weight:700;color:var(--text-2)}
+.co-check ul{margin:3px 0 0;padding:0 16px}
+.co-check.good{border-color:var(--ok);background:var(--ok-soft)}
+.co-alert{padding:6px 9px;border-radius:8px;background:var(--danger-soft);border:1px solid var(--danger-border);color:var(--danger);font-size:.82rem;font-weight:600}
+.co-help{padding:8px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);font-size:.86rem;line-height:1.6;position:relative}
+.co-help .x{position:absolute;top:2px;right:6px;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:1rem}
+.co-actions{display:flex;gap:6px;flex-wrap:wrap}
+.co-askrow{display:flex;gap:6px}
+.co-askrow .input{flex:1;height:32px}
+.notes-sec{margin:0 0 12px}
+.notes-sec h4{margin:0 0 4px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.notes-sec ul{margin:0;padding:0 18px;line-height:1.7}
+.rep-note{padding:7px 10px;margin:0 0 10px;border-radius:8px;background:var(--danger-soft);border:1px solid var(--danger-border);color:var(--danger);font-size:.82rem}
+@keyframes pulse{50%{opacity:.35}}
+.newq{display:flex;gap:8px;align-items:center;padding:8px 14px;background:var(--warn-soft);color:var(--text);border-top:1px solid var(--border);border-bottom:1px solid var(--border);font-size:.82rem;cursor:pointer}
+.newq span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.newq u{color:var(--accent);white-space:nowrap}
 .ans-nav{display:inline-flex;align-items:center;gap:2px;font-size:.78rem;color:var(--muted)}
 .ans-nav .btn{width:26px;height:26px;font-size:1.1rem;line-height:1;padding:0}
 .ans-nav.old #ansPos{color:var(--warn);font-weight:600}
@@ -682,6 +730,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="toolpop" id="toolPop" hidden role="menu">
         <button data-tool="screen" role="menuitem"><span data-icon="eye"></span><span class="tp-text">Read my screen<small>A question or code on screen → the answer</small></span><kbd>F3</kbd></button>
         <button data-tool="say" role="menuitem"><span data-icon="edit"></span><span class="tp-text">Help me say…<small>Your rough idea → what to say</small></span></button>
+        <button data-tool="coach" role="menuitem"><span data-icon="sparkles"></span><span class="tp-text">Coach notes<small>What the coach remembers and prepared</small></span></button>
         <button data-tool="feedback" role="menuitem"><span data-icon="sparkles"></span><span class="tp-text">How did I do?<small>Review of the meeting, with tips</small></span></button>
         <button data-tool="search" role="menuitem"><span data-icon="list"></span><span class="tp-text">Search past meetings…<small>Find what was said before</small></span></button>
         <button data-tool="export" role="menuitem"><span data-icon="file"></span><span class="tp-text">Export…<small>Word, PDF, subtitles, text</small></span></button>
@@ -706,6 +755,20 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         </div>
         <button class="btn icon ghost" id="copyBtn" title="Copy answer" aria-label="Copy answer"><span data-icon="copy"></span></button>
       </div>
+      <div class="coach" id="coach" hidden>
+        <div class="co-top"><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-fold" id="coFold" aria-expanded="true" title="Show or hide the coach details" aria-label="Show or hide the coach details">▾</button></div>
+        <div class="co-body" id="coBody">
+          <div class="co-how" id="coHow" hidden></div>
+          <div class="co-chips" id="coChips"></div>
+          <div class="co-check" id="coCheck" hidden></div>
+          <div class="co-alert" id="coAlert" hidden></div>
+          <div class="co-tip" id="coTip" hidden></div>
+          <div class="co-help" id="coHelp" hidden></div>
+          <div class="co-actions"><button class="btn sm ghost" id="coAsk"><span data-icon="sparkles"></span>Ask coach <kbd>F4</kbd></button><button class="btn sm ghost" id="coNotes"><span data-icon="list"></span>Coach notes</button></div>
+          <div class="co-askrow" id="coAskRow" hidden><input class="input" id="coAskText" dir="auto" maxlength="400" placeholder="Ask the coach anything about now…"><button class="btn sm primary" id="coAskGo">Send</button></div>
+        </div>
+      </div>
+      <div class="newq" id="newQ" hidden role="button" tabindex="0"><b>New question</b><span id="newQText"></span><u>Show now</u></div>
       <div class="answer-body" id="answerBody"></div>
       <div class="answer-foot">
         <span class="ans-nav" id="ansNav" hidden><button class="btn icon ghost" id="ansPrev" title="Earlier answer (Ctrl + Left)" aria-label="Earlier answer">‹</button><span id="ansPos"></span><button class="btn icon ghost" id="ansNext" title="Newer answer (Ctrl + Right)" aria-label="Newer answer">›</button></span>
@@ -765,6 +828,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <textarea class="input" id="fGloss" data-key="glossary" rows="3" placeholder="OSPF, BGP, RMAN, Data Guard, kubectl …"></textarea>
         <div class="help">Names, products and abbreviations that will be spoken (one per line or separated by commas). They are spelled right in the transcript and translations, and speech recognition listens for them. Up to 60.</div>
       </div>
+      <label class="toggle"><input type="checkbox" data-key="coach"><span class="switch"></span><span class="tt"><b>Interview situation card</b><span>Shows the stage of the interview, how hard the questions are, questions asked again, and one short tip. It uses about one small request every 30 seconds.</span></span></label>
       <div class="field">
         <span class="label">Languages spoken in the meeting</span>
         <div class="langs" id="langChips"></div>
@@ -1074,6 +1138,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="hrow"><kbd>Shift+F9</kbd><span>Continue the last meeting (same transcript)</span></div>
   <div class="hrow"><kbd>F2</kbd><span>Answer the last thing they said</span></div>
   <div class="hrow"><kbd>F3</kbd><span>Read the screen (a question or code shown there)</span></div>
+  <div class="hrow"><kbd>F4</kbd><span>Ask the coach: what should I do or say now?</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
   <div class="hrow"><kbd>F8</kbd><span>Pause / continue listening</span></div>
@@ -1186,7 +1251,7 @@ function paintIcons(root=document){ root.querySelectorAll("[data-icon]").forEach
 /* ---------- state ---------- */
 const S = {
   cfg:null, running:false, stopping:false, monitoring:false, startedAt:null,
-  entries:new Map(), pend:new Map(), panelId:null, pinned:false,
+  entries:new Map(), pend:new Map(), panelId:null, pinned:false, queued:null, meAt:0,
   proxy:["",""], net:{ok:null}, stats:{}, quota:null, sessionFile:"", meetingsDir:"",
   online:false, everOnline:false, busy:false, audioOk:true, firstHello:true,
 };
@@ -1265,6 +1330,9 @@ function handle(m){
     case "devices_in_use": S.inUse = m; return;
     case "session": return newSession(m);
     case "speech_mode": S.speechMode = m; renderFooter(); renderSttMode(); return;
+    case "coach": S.coach = m.coach; renderCoach(); return;
+    case "answer_check": S.check = m.check; renderCoach(); return;
+    case "coach_notes": S.notes = m.notes; if(TM.kind === "coach") openNotes(true); return;
     case "local": S.local = m.local; renderLocal(); renderSttMode(); return;
     case "llm": S.llm = m.llm; renderLlm(); return;
     case "download": S.download = m.download; renderDownload(); if(["done","error","cancelled"].includes(m.download.state)){ if(m.download.kind === "llm") loadLlm(); else loadLocal(); } return;
@@ -1279,11 +1347,11 @@ function handle(m){
   }
 }
 function clearTranscript(){
-  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.pinned = false; S.ctxHidden = null; $("#ctxBar").hidden = true;
+  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.coach = null; S.check = null; S.coHelp = null; S.coTok = (S.coTok || 0) + 1; S.meStart = 0; S.coLiveHtml = S.coChipHtml = ""; S.pinned = false; S.queued = null; $("#newQ").hidden = true; S.ctxHidden = null; $("#ctxBar").hidden = true;
   $("#jump").hidden = true;
 }
 function newSession(m){
-  clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false;
+  clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false; S.notes = m.coach_notes || {};
   (m.entries || []).forEach(e => upsertEntry(e, true));
   if((m.entries || []).length) feed.scrollTop = feed.scrollHeight;
   S.sumState = ""; $("#sumBody").innerHTML = ""; $("#sumNote").innerHTML = ""; $("#sumModal").hidden = true;
@@ -1301,6 +1369,7 @@ function onHello(m){
   S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
   S.recName = m.recording && ["starting","reading","finishing"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
   clearTranscript(); renderTitle();
+  S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {};
   (m.entries||[]).forEach(e=>upsertEntry(e, true));
   $("#logBox").innerHTML = ""; (m.log||[]).forEach(l => addLog(l, false));
   applyConfig(); fillDrawer(true); renderRunning(); renderFooter(); renderAnswer(); renderHide();
@@ -1409,6 +1478,7 @@ function onLevel(m){
     const v = m[src];
     const el = $(id); el.classList.toggle("off", v==null); setBar(el, v); setBar($(big), v);
   }
+  if(m.me != null && m.thr_me != null && m.me > m.thr_me) S.meAt = Date.now();
   if(m.thr_me != null) $("#thrMe").style.left = Math.min(99, m.thr_me * 100) + "%";
 }
 
@@ -1576,6 +1646,7 @@ function fillEntry(el, e){
     row.innerHTML = `<button class="chip err">${icon("alert")}Answer failed · retry</button>`;
     row.firstChild.onclick = () => answerNow(e.id);
   } else row.innerHTML = "";
+  if(e.repeat) row.insertAdjacentHTML("afterbegin", `<span class="chip err" title="The other side asked this again after your answer">${icon("alert")}Asked again · ${e.repeat + 1}×</span> `);
 }
 function upsertEntry(e, silent){
   S.entries.set(e.id, e);
@@ -1586,6 +1657,10 @@ function upsertEntry(e, silent){
     if(!el){ el = entryShell(e); insertSorted(el); }
     fillEntry(el, e);
   }, added && !silent);
+  if(added && e.source === "them" && /\b(on (the|my|your) screen|look at (this|the|my)|share (my|your|the) screen|sharing (my|the) screen|this (code|diagram|schema|query|table|slide)|can you see (my|the|this)|see (this|the) (code|screen|diagram))\b/i.test(e.text || "")
+     && Date.now() - (S.scrTip || 0) > 60000 && S.running){
+    S.scrTip = Date.now(); toast("info", "They mention the screen. Press F3 and the program reads it and suggests the answer.");
+  }
   // the newest answer goes to the answer panel automatically
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
   const cur = S.panelId != null ? S.entries.get(S.panelId) : null;
@@ -1596,8 +1671,12 @@ function upsertEntry(e, silent){
     if(wanted && e.ans_state === "done") S.forceId = null;
     const newest = newestAnswered();
     const pinnedNow = S.pinned && cur && cur.answer && !(newest && newest.t0 > cur.t0);
-    if(wanted) { S.pinned = false; S.panelId = e.id; refreshChips(); }
-    else if(!pinnedNow && newest && S.panelId !== newest.id){ S.pinned = false; S.panelId = newest.id; refreshChips(); }
+    if(wanted) { S.pinned = false; S.panelId = e.id; clearQueued(); refreshChips(); }
+    else if(!pinnedNow && newest && S.panelId !== newest.id){
+      // you are speaking (reading your answer): the new question waits in a bar instead of replacing the text under your eyes
+      if(iAmSpeaking() && cur && cur.answer){ S.queued = newest.id; showQueued(); }
+      else { S.pinned = false; S.panelId = newest.id; clearQueued(); refreshChips(); }
+    }
     else if(!cur || !cur.answer){ S.panelId = e.id; refreshChips(); }
   }
   if(e.id === S.panelId && !has && e.ans_state === "none"){ /* keep the last shown answer */ }
@@ -1608,11 +1687,159 @@ function upsertEntry(e, silent){
   markLatest(); renderSumBtn();
   groupTurns(); updateCtx(); updateNav();
 }
+function iAmSpeaking(){ return S.running && Date.now() - S.meAt < 2500; }
+function showQueued(){
+  const e = S.queued != null ? S.entries.get(S.queued) : null, box = $("#newQ");
+  if(!e || !e.answer){ box.hidden = true; return; }
+  $("#newQText").textContent = "“" + (e.question || e.text).slice(0, 140) + "”";
+  box.hidden = false;
+}
+function clearQueued(){ S.queued = null; $("#newQ").hidden = true; }
+function takeQueued(){
+  if(S.queued == null){ $("#newQ").hidden = true; return; }
+  const id = S.queued; S.queued = null; $("#newQ").hidden = true;
+  S.pinned = false; S.panelId = id; renderAnswer(); refreshChips(); updateNav();
+}
+$("#newQ").onclick = takeQueued;
+$("#newQ").onkeydown = ev => { if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); takeQueued(); } };
+setInterval(() => { if(S.queued != null){ if(!iAmSpeaking()) takeQueued(); else showQueued(); } }, 500);     // when you stop speaking, the newest question comes up by itself
+/* ---------- the coach ---------- */
+const PHASES = {intro: "Introduction", background: "Your background", technical: "Technical", behavioural: "Behavioural", coding: "Coding / task",
+                scenario: "Scenario", candidate_questions: "Your questions", closing: "Closing", smalltalk: "Small talk", other: "Discussion",
+                opening: "Opening", discussion: "Discussion", decision: "Decision", action_items: "Action items", q_and_a: "Q & A", explanation: "Explanation"};
+const QLABEL = {candidate_q: "Your questions", salary: "Salary", availability: "Availability", intro: "Introduction", motivation: "Motivation",
+                weakness: "Weakness", strength: "Strengths", behavioural: "Behavioural", coding: "Coding / task", design: "Design",
+                troubleshoot: "Troubleshooting", experience: "Experience", concept: "Concept", opinion: "Opinion", yesno: "Yes / no"};
+const NUDGE = {fa: "بعد از جواب شما سکوت شده. می‌توانید بپرسید: «مایلید بیشتر توضیح بدهم؟»",
+               en: "It is quiet after your answer. You can ask: “Would you like me to go into more detail?”"};
+const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+function curQuestion(){
+  return [...S.entries.values()].filter(x => x.source === "them" && (x.qtype || x.answer || x.ans_state === "thinking" || x.ans_state === "streaming")).sort((a, b) => a.t0 - b.t0).pop() || null;
+}
+function coachLive(){
+  if(!S.running){ S.meStart = 0; return null; }
+  const them = [...S.pend.values()].some(p => p.dataset.src === "them");
+  const me = iAmSpeaking();
+  if(me){ if(!S.meStart) S.meStart = Date.now(); S.meLast = Date.now(); }
+  else if(S.meStart && Date.now() - (S.meLast || 0) > 6000) S.meStart = 0;
+  const list = [...S.entries.values()].sort((a, b) => a.t0 - b.t0);
+  const lastThem = [...list].reverse().find(x => x.source === "them");
+  const lastMe = [...list].reverse().find(x => x.source === "me");
+  const writing = list.some(x => x.ans_state === "thinking" || x.ans_state === "streaming");
+  if(me) return {cls: "me", text: "You are answering", time: S.meStart ? Math.floor((Date.now() - S.meStart) / 1000) : 0};
+  if(them) return {cls: "ask", text: "They are asking…"};
+  if(writing) return {cls: "wait", text: "Writing the answer…"};
+  if(lastThem && lastThem.answer && (!lastMe || lastMe.t0 < lastThem.t0)) return {cls: "ready", text: "Your turn · the answer is ready"};
+  if(lastMe && (!lastThem || lastMe.t0 > lastThem.t0)) return {cls: "wait", text: "Waiting for their reaction"};
+  return {cls: "", text: "Listening"};
+}
+function setH(el, html){ if(el._h !== html){ el._h = html; el.innerHTML = html; } }
+function renderCoach(){
+  const box = $("#coach"); if(!box) return;
+  const on = S.cfg && S.cfg.coach !== false && S.running;
+  box.hidden = !on; if(!on) return;
+  const folded = coFolded();
+  box.classList.toggle("fold", folded); $("#coFold").setAttribute("aria-expanded", folded ? "false" : "true");
+  const lv = coachLive();
+  $("#coLive").className = "co-live " + (lv ? lv.cls : "");
+  setH($("#coLive"), `<span class="dot"></span><span>${esc(lv ? lv.text : "")}</span>` + (lv && lv.time ? `<span class="co-time" aria-hidden="true">${mmss(lv.time)}</span>` : ""));
+  const q = curQuestion(), c = S.coach, speaking = iAmSpeaking();
+  const lang = (S.cfg && S.cfg.my_language) || "en";
+  // how to answer this kind of question, with a time guide while you speak
+  const how = $("#coHow");
+  if(q && q.qhint){
+    const lo = q.qmin || 0, hi = q.qmax || 0, el = S.meStart && speaking ? Math.floor((Date.now() - S.meStart) / 1000) : 0;
+    let h = `<div ${rtlAttr()}><b>${esc(QLABEL[q.qtype] || "Question")}</b> · ${esc(q.qhint)}</div>`;
+    if(hi){
+      const pct = Math.min(100, Math.round(100 * el / (hi * 1.25))), cls = el > hi * 1.25 ? "over" : el > hi ? "mid" : "";
+      h += `<div class="help" style="margin-top:3px">Aim for ${mmss(lo)}–${mmss(hi)}${el ? ` · now ${mmss(el)}` : ""}${el > hi ? " · wrap up with one closing sentence" : ""}</div>` +
+           `<div class="co-bar"><i class="${cls}" style="width:${el ? pct : 0}%"></i><u style="left:${Math.round(100 * lo / (hi * 1.25))}%"></u><u style="left:80%"></u></div>`;
+    }
+    how.hidden = false; setH(how, h);
+  } else { how.hidden = true; }
+  // chips: stage, topic, level, signal, asked again
+  const chips = [];
+  const rep = Math.max(0, ...[...S.entries.values()].filter(x => x.source === "them").sort((a, b) => a.t0 - b.t0).slice(-2).map(x => x.repeat || 0));
+  if(c){
+    chips.push(`<span class="co-chip">${esc(PHASES[c.phase] || "Discussion")}</span>`);
+    if(c.topic) chips.push(`<span class="co-chip" dir="auto">${esc(c.topic)}</span>`);
+    if(c.difficulty) chips.push(`<span class="co-chip ${c.difficulty >= 4 ? "warn" : ""}" title="How demanding the latest questions are">Level <span class="co-diff">${[1,2,3,4,5].map(i => `<i class="${i <= c.difficulty ? "on" : ""}"></i>`).join("")}</span>${c.trend === "up" ? " ↑" : c.trend === "down" ? " ↓" : ""}</span>`);
+    chips.push(c.signal === "good" ? `<span class="co-chip good">Going well</span>` : c.signal === "struggling" ? `<span class="co-chip warn">Needs care</span>` : `<span class="co-chip">Steady</span>`);
+  }
+  if(rep) chips.push(`<span class="co-chip bad" title="A question was asked again after your answer">Asked again ${rep + 1}×</span>`);
+  setH($("#coChips"), chips.join(""));
+  // how your last reply went (from the transcript)
+  const ck = $("#coCheck"), chk = S.check;
+  if(chk && q && chk.qid === q.id && !speaking){
+    const fl = Array.isArray(chk.flags) ? chk.flags : [], nt = Array.isArray(chk.notes) ? chk.notes : [];
+    const good = fl.length === 1 && fl[0] === "good";
+    ck.hidden = false; ck.className = "co-check" + (good ? " good" : "");
+    setH(ck, `<div class="cc-h">Your reply · ${mmss(Number(chk.secs) || 0)} · ${Number(chk.words) || 0} words${Number(chk.wpm) ? " · " + Number(chk.wpm) + " words/min" : ""}</div>` +
+             (nt.length ? `<ul ${rtlAttr()}>${nt.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""));
+  } else ck.hidden = true;
+  const al = $("#coAlert"), alt = c && c.alert && (!c.t || Date.now() / 1000 - c.t < 300) ? c.alert : "";
+  al.hidden = !alt; if(alt && al.textContent !== alt){ al.setAttribute("dir", "auto"); al.textContent = alt; }
+  // one line to act on: a quiet moment after your answer, otherwise the coach's tip
+  const tip = $("#coTip");
+  const ends = [...S.entries.values()].map(x => x.t_end || 0), lastEnd = ends.length ? Math.max(...ends) : 0;
+  const lastRow = [...S.entries.values()].sort((a, b) => (a.t_end || 0) - (b.t_end || 0)).pop();
+  const quiet = lastEnd ? Date.now() / 1000 - lastEnd : 0;
+  const nudge = lv && !speaking && S.cfg && ["tech", "hr"].includes(S.cfg.meeting_mode) && lastRow && lastRow.source === "me" && quiet > 10 && quiet < 90 && !lv.time ? (NUDGE[lang] || NUDGE.en) : "";
+  const txt = nudge || (c && c.tip ? c.tip : "");
+  tip.hidden = !txt;
+  if(txt && tip.textContent !== txt){ tip.setAttribute("dir", "auto"); tip.textContent = txt; }
+  // help you asked for
+  const hp = $("#coHelp"), h = S.coHelp;
+  hp.hidden = !h;
+  if(h){
+    setH(hp, `<button class="x" aria-label="Close">×</button>` + (h.busy ? `<span class="spinner"></span> The coach is thinking…` : h.err ? `<span style="color:var(--danger)">${esc(h.err)}</span>` : `<div dir="auto">${esc(h.text)}</div>`));
+    const x = hp.querySelector(".x"); if(x) x.onclick = () => { S.coHelp = null; renderCoach(); };
+  }
+}
+setInterval(renderCoach, 1000);
+function coFolded(){ let f = S.coFold; try{ const v = localStorage.getItem("ma.coach.fold"); if(v !== null) f = v === "1"; }catch{} return !!f; }
+function setCoFold(f){ S.coFold = !!f; try{ localStorage.setItem("ma.coach.fold", f ? "1" : "0"); }catch{} }
+async function askCoach(text){
+  if(!S.running){ toast("info", "Start the meeting first."); return; }
+  if(S.cfg && S.cfg.coach === false){ toast("info", "The coach is off (Settings)."); return; }
+  if(S.coHelp && S.coHelp.busy){ toast("info", "The coach is still answering."); return; }
+  const tok = S.coTok = (S.coTok || 0) + 1;
+  S.coHelp = {busy: true}; setCoFold(false); renderCoach();
+  const r = await api("coach_help", {text: text || ""});
+  if(tok !== S.coTok) return;                                         // the meeting was cleared meanwhile: drop the old answer
+  S.coHelp = r.ok ? {text: r.text} : {err: r.error || "The coach could not answer."};
+  renderCoach();
+}
+$("#coAsk").onclick = () => { const row = $("#coAskRow"); row.hidden = !row.hidden; if(!row.hidden) $("#coAskText").focus(); };
+$("#coAskGo").onclick = () => {
+  if(S.coHelp && S.coHelp.busy){ toast("info", "The coach is still answering."); return; }
+  const v = $("#coAskText").value.trim(); $("#coAskText").value = ""; $("#coAskRow").hidden = true; askCoach(v);
+};
+$("#coAskText").onkeydown = ev => { if(ev.key === "Enter" && !ev.isComposing){ ev.preventDefault(); $("#coAskGo").click(); } };
+$("#coFold").onclick = () => { setCoFold(!coFolded()); renderCoach(); };
+$("#coNotes").onclick = () => openNotes(false);
+function openNotes(auto){
+  const n = S.notes || {}, b = n.brief && typeof n.brief === "object" ? n.brief : {};
+  const key = JSON.stringify(n);
+  if(auto){ if(TM.kind !== "coach" || S.notesShown === key) return; }   // a refresh from the coach: only when something changed
+  const keep = auto ? $("#toolBody").scrollTop : 0;
+  if(!auto || TM.kind !== "coach") openTool("coach", "Coach notes", "sparkles");
+  S.notesShown = key;
+  const item = x => esc(typeof x === "string" ? x : JSON.stringify(x));
+  const sec = (title, arr) => Array.isArray(arr) && arr.length ? `<div class="notes-sec"><h4>${esc(title)}</h4><ul ${rtlAttr()}>${arr.map(x => `<li>${item(x)}</li>`).join("")}</ul></div>` : "";
+  const html = sec("Prepared for you: key messages", b.key_messages) + sec("Strengths to show", b.strengths) + sec("Watch out", b.risks) +
+    sec("Facts you have stated (stay consistent)", n.me_facts) + sec("Topics so far", n.topics) + sec("Promises and to-dos", n.commitments) +
+    sec("People", n.people) + sec("What went well", n.strong) + sec("Weak or still open", n.weak) + sec("Good questions to ask them", Array.isArray(n.ask_them) && n.ask_them.length ? n.ask_them : b.ask_them);
+  $("#toolBody").innerHTML = html || `<p class="help">The coach writes its notes while the meeting goes on (about every minute). Nothing has been noted yet.</p>`;
+  $("#toolBody").scrollTop = keep;
+  $("#toolNote").innerHTML = ""; toolActions([{icon: "copy", text: "Copy", disabled: !html, run: () => copyText($("#toolBody").innerText.trim(), "Notes copied.")}]);
+}
 function answeredList(){
   return [...S.entries.values()].filter(x => x.answer && (x.ans_state === "streaming" || x.ans_state === "done")).sort((a, b) => a.t0 - b.t0);
 }
 function newestAnswered(){ const l = answeredList(); return l.length ? l[l.length - 1] : null; }
 function showAnswerOf(id, pin){
+  S.queued = null; $("#newQ").hidden = true;
   const l = answeredList(), last = l[l.length - 1];
   S.panelId = id; S.pinned = !!pin && !(last && last.id === id);       // choosing the newest answer means "follow again"
   renderAnswer(); refreshChips(); updateNav();
@@ -1707,7 +1934,7 @@ function renderAnswer(){
   }
   const streaming = e.ans_state === "streaming";
   const showFa = S.cfg?.answer_fa && e.answer_fa;
-  const key = [e.id, !!showFa, !!(e.translation && !e.question), e.question || e.text, e.forced, S.running].join("|");
+  const key = [e.id, !!showFa, !!(e.translation && !e.question), e.question || e.text, e.forced, S.running, e.repeat || 0].join("|");
   if(body.dataset.key === key && body.querySelector(".a-text")){
     const at = body.querySelector(".a-text");
     if(at.textContent !== e.answer) at.textContent = e.answer;
@@ -1720,12 +1947,14 @@ function renderAnswer(){
     return;
   }
   body.dataset.key = key;
+  if(body.dataset.eid !== String(e.id)){ body.scrollTop = 0; body.dataset.eid = String(e.id); }     // a new answer starts at its top
   body.innerHTML = `
     <div class="q-block">
       <div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc(label(e.source, e.speaker))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>
       <p class="q-orig" dir="auto"></p>
       ${e.translation && !e.question ? `<p class="q-fa" ${trAttr()}></p>` : ""}
     </div>
+    ${e.repeat ? `<div class="rep-note">${icon("alert")} They asked this again (asked ${e.repeat + 1} times). This answer is written to be more direct than the last one: say the point in the first sentence, then one example.</div>` : ""}
     <p class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></p>
     ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
   body.querySelector(".q-orig").textContent = e.question || e.text;
@@ -2870,6 +3099,14 @@ document.addEventListener("keydown", ev => {
     if(!a?.isContentEditable && !["INPUT", "TEXTAREA", "SELECT"].includes(a?.tagName)) answerNow();
   }
   else if(ev.key === "F3"){ ev.preventDefault(); readScreen(); }
+  else if(ev.key === "F4" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey){
+    ev.preventDefault();
+    if(!ev.repeat){
+      const t = $("#coAskText"), typed = !$("#coAskRow").hidden ? t.value.trim() : "";
+      if(typed){ t.value = ""; $("#coAskRow").hidden = true; }
+      askCoach(typed);
+    }
+  }
   else if((ev.ctrlKey || ev.metaKey) && !ev.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(ev.key)
           && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && !document.activeElement?.isContentEditable
           && $("#drawer").getAttribute("aria-hidden") === "true" && $("#toolModal").hidden){
@@ -2914,7 +3151,7 @@ $("#toolModal").onclick = ev => { if(ev.target.id === "toolModal") closeTool(); 
 /* the tools menu */
 $("#toolsBtn").onclick = ev => { ev.stopPropagation(); renderToolBtns(); $("#toolPop").hidden = !$("#toolPop").hidden; };
 document.addEventListener("click", ev => { if(!$("#toolPop").hidden && !ev.target.closest("#toolPop")) $("#toolPop").hidden = true; });
-const TOOL_RUN = {screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
+const TOOL_RUN = {coach: () => openNotes(), screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
 $$("#toolPop [data-tool]").forEach(b => b.onclick = () => { $("#toolPop").hidden = true; TOOL_RUN[b.dataset.tool](); });
 function renderToolBtns(){
   const f = $('#toolPop [data-tool="feedback"]'), x = $('#toolPop [data-tool="export"]');

@@ -2,6 +2,48 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.6]
+
+A real coach next to you: it knows the kind of question, how long to speak, what you said before, and it helps until the last minute.
+
+- **Kind of question and how to answer it**: the card shows the kind (introduction, salary, behavioural, coding, design, troubleshooting, experience, concept, opinion, yes/no, your questions to them ...), one line on how to answer that kind, and a time guide with a bar that fills while you speak, so you know when to stop.
+- **Your reply is checked** after you speak, from the transcript only: too long, too short, no example or number, too fast, too many soft words ("maybe", "I think"), or good. Only the lines between this question and the next one count. For non-English replies only the length and speed are judged.
+- **The coach remembers**: facts you said (so you do not contradict yourself), topics, promises and to-dos, people, what went well, what is still open. It warns you when you contradict something you said earlier. Notes are saved with the meeting and come back when you resume it. Open them from the tools menu, "Coach notes".
+- **Preparation at Start**: from your CV and the meeting text, a short card with key messages, strengths to show, risks, and questions to ask them.
+- **F4 = ask the coach** ("what should I do or say now?"), or click "Ask coach" and type your own question. Only one request runs at a time.
+- **It fits the meeting type**: an interview coach, a work-meeting coach (decisions, action items), or a lecture coach.
+- The review after the meeting uses the coach notes and the repeated questions.
+- Cost care: about one small request every 45 seconds, only when idle; it uses one model of its own. If your main model is the local one, the coach and its background text stay on the local model.
+- Fixes found by an independent review: better question-type rules (for example "Have you ever used Terraform?" is an experience question, not a story question), German questions, a stale check is never shown for a new question, notes are merged instead of replaced, the "None" alert is ignored, F4 with Alt or Ctrl does nothing, the notes window keeps its scroll position, and a small window keeps room for the answer.
+- 81 automated tests.
+
+## [6.5]
+
+The program now knows what is happening in the interview.
+
+- **Interview situation card** above the suggested answer: what is happening now (they are asking / you are answering with a timer / the answer is being written / your turn), the stage of the interview (introduction, technical, behavioural, coding, ...), the topic, how demanding the questions are (level 1-5 with an arrow up or down), a "Going well / Steady / Needs care" sign, and one short tip in your language.
+- **A question asked again is noticed.** If the other side asks the same question again after you answered, the transcript shows "Asked again", and the new suggested answer is written to fix what was probably missing: it sees the earlier suggestion and what you actually said, and starts with the direct answer and one example. A question asked again is never skipped.
+- The situation analysis is one small request about every 30 seconds, only when the program is idle, and it uses its own model so it does not take the limits of the answers. Turn it off in Setup, Meeting, "Interview situation card".
+- 72 automated tests.
+
+## [6.4]
+
+Made for an interview where you only press Start.
+
+- **One answer per question**: a question spoken in pieces (short pauses) is answered once, from all its pieces. A line that ends with "?" is answered almost at once; others wait about one second for the rest.
+- **Free limits are kept for real questions**: statements (a company introduction, thanks, small talk) are not sent to the AI. Requests such as "Tell me about yourself" or "Walk me through..." are always answered. "Answer this" and F2 still work for any line.
+- **Old questions are not answered late**: after a network break, lines that arrive very late, or a question you have already answered yourself, are skipped.
+- **Answers retry by themselves** (twice) after a short network or service problem, instead of failing at once.
+- **Live text (Deepgram) reconnects by itself** after a network break or sleep, and the audio is reopened after the PC wakes up or a reader stops.
+- **Check before Start**: the program tests the services and the key first. A wrong key, no internet or a missing computer-sound device is reported before the interview begins; pressing Start again starts anyway.
+- **Mentioning the screen** ("look at this code", "on the screen") shows a hint to press F3.
+- A new answer opens at its top, not in the middle of the previous one.
+- 67 automated tests.
+
+## [6.3.1]
+
+- **You are speaking, a new question arrives**: the answer you are reading stays on screen. A yellow bar "New question" shows the new question; when you stop speaking (about 2.5 seconds of quiet) the new answer comes up by itself, or click the bar to see it at once.
+
 ## [6.3]
 
 - **Hands-free answers**: the answer panel follows the newest question by itself (no click on "Show suggested answer"). Ctrl+Left / Ctrl+Right move between answers, Ctrl+Up / Ctrl+Down scroll a long answer, and a "2 / 5" counter shows where you are.

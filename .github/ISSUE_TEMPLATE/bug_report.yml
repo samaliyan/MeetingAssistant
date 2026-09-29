@@ -11,7 +11,7 @@ body:
     attributes:
       label: Program version
       description: Shown at the bottom right of the window and in Setup.
-      placeholder: "e.g. 6.3"
+      placeholder: "e.g. 6.6"
     validations:
       required: true
   - type: textarea
