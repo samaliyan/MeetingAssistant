@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.10]
+
+A full independent audit, a health check button, and a real Windows check of the overlay.
+
+- **Check this computer** (Setup › Services): looks at Windows version, WebView2, the overlay keys, microphone and computer sound, services, proxy and ffmpeg, and says in plain words what is wrong. **Try the overlay (5 s)** opens the see-through window for a few seconds and reports whether it opened, how fast, and whether it is hidden from screen sharing. **Copy the report** puts the result on the clipboard.
+- **Overlay**: the window now uses real pixels at 125% / 150% screen scaling (positions and sizes no longer disagree), works on more than one monitor, closes by itself if the program ends or crashes, starts faster (the helper no longer tidies files or writes a second log), and the hotkeys never repeat while held.
+- **Speed**: a page with thousands of lines is built about 4 times faster after a reconnect or a resumed meeting, and streaming text no longer re-checks the whole page for every word. Live word-by-word translation never uses up a model's rate limit any more (it waits its turn), so real translations and answers are not blocked by previews. An empty reply from a model makes the next model try.
+- **Safer**: a meeting file that cannot be saved now shows a message (and another when it works again); a strange character can no longer lose the file; a Deepgram live stream is closed when Start fails; an API key pasted with hidden characters or quotes is cleaned; a failed key save is shown; the same page error is reported once a minute.
+- **Small**: the see-through window keeps `?overlay=1` on reload; selecting text in a window and releasing the mouse outside no longer closes it; the desktop shortcut works with Persian folder names.
+- New in the project: `TESTING.md` (what is tested how, and what only a real Windows machine can confirm) and a GitHub check that really opens the overlay on Windows (`.github/workflows/windows-check.yml`). 96 automated tests.
+
 ## [6.9.1]
 
 Fix: the see-through window could not be moved with the mouse in move mode (Ctrl+Alt+M). Now the program follows the mouse itself: hold the left button and drag to move, hold the right button and drag to resize. The keys (Ctrl+Alt+Shift + arrows, Home / End) still work.

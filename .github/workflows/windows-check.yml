@@ -1,0 +1,57 @@
+name: Windows overlay check
+
+# A real check on a real Windows machine: opens the see-through window and looks at it (hidden from screen sharing,
+# click-through, movable with the mouse, closes). It does not decide whether a release may go out.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "web/index.html"
+      - "tests/win_overlay_check.py"
+      - ".github/workflows/windows-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  overlay:
+    name: Overlay on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -r requirements.txt "pywebview>=5,<7"
+
+      - name: WebView2 runtime (the window that can hide from screen sharing)
+        continue-on-error: true
+        run: choco install webview2-runtime -y --no-progress
+
+      - name: Open the overlay and look at it
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_overlay_check.py | Tee-Object -FilePath overlay-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-report
+          path: |
+            overlay-report.txt
+            Data/app.log
+          if-no-files-found: ignore
+          retention-days: 14

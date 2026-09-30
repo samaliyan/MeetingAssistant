@@ -962,10 +962,13 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="ov-foot"><button class="btn sm primary" id="testAll"><span data-icon="zap"></span><span>Test all parts</span></button>
           <button class="btn sm ghost" id="creditBtn"><span data-icon="gauge"></span><span>Credit &amp; limits</span></button>
           <button class="btn sm ghost" id="modelsBtn"><span data-icon="refresh"></span><span>Check models</span></button>
+          <button class="btn sm ghost" id="selfBtn"><span data-icon="gauge"></span><span>Check this computer</span></button>
+          <button class="btn sm ghost" id="selfOvBtn"><span data-icon="eye"></span><span>Try the overlay (5 s)</span></button>
           <span class="help">Test runs each task once for real — do it before an important meeting.</span></div>
         <div id="testResults" class="test-results ov-results"></div>
         <div id="creditResults" class="test-results ov-results"></div>
-        <div id="modelResults" class="test-results ov-results"></div></div>
+        <div id="modelResults" class="test-results ov-results"></div>
+        <div id="selfResults" class="test-results ov-results"></div></div>
 
       <div class="step">
         <div class="step-head"><span class="step-num">1</span><div><h3>Your services</h3>
@@ -1258,7 +1261,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
 "use strict";
 const TOKEN = "__TOKEN__";
 const OVERLAY = /[?&]overlay=1/.test(location.search);      // the see-through answer window
-try{ if(location.search) history.replaceState(null, "", "/"); }catch{}      // the key is not left in the address bar
+try{ if(location.search) history.replaceState(null, "", /[?&]overlay=1/.test(location.search) ? "/?overlay=1" : "/"); }catch{}      // the key is not left in the address bar
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 
@@ -1307,7 +1310,7 @@ const S = {
 };
 
 // actions that really take long (they run tests or wait for services); everything else answers quickly
-const SLOW_API = {job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
+const SLOW_API = {selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
                   audio_check: 90, test_proxy: 60, test_connection: 60, local_delete: 60, stop: 60, start: 60,
                   say: 75, search_meetings: 75, export: 60, about_file: 60};
 async function api(name, body={}){
@@ -1411,7 +1414,7 @@ function clearTranscript(){
 }
 function newSession(m){
   clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false; S.notes = m.coach_notes || {};
-  (m.entries || []).forEach(e => upsertEntry(e, true));
+  replayEntries(m.entries);
   if((m.entries || []).length) feed.scrollTop = feed.scrollHeight;
   S.sumState = ""; $("#sumBody").innerHTML = ""; $("#sumNote").innerHTML = ""; $("#sumModal").hidden = true;
   renderTitle();
@@ -1429,7 +1432,7 @@ function onHello(m){
   S.recName = m.recording && ["starting","reading","finishing"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
   clearTranscript(); renderTitle();
   S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {}; S.overlay = !!m.overlay; renderOverlayBtn();
-  (m.entries||[]).forEach(e=>upsertEntry(e, true));
+  replayEntries(m.entries);
   $("#logBox").innerHTML = ""; (m.log||[]).forEach(l => addLog(l, false));
   applyConfig(); fillDrawer(true); renderRunning(); renderFooter(); renderAnswer(); renderHide();
   if(S.lastTab === "audio" && $("#drawer").classList.contains("open")) loadDevices();
@@ -1610,12 +1613,12 @@ $("#ctxBar").addEventListener("click", ev => {
 feed.addEventListener("scroll", updateCtx, {passive: true});
 window.addEventListener("resize", updateCtx);
 
-function insertSorted(el){
+function insertSorted(el, quiet){
   const t = +el.dataset.t;
   let node = list.lastElementChild;
   while(node && +node.dataset.t > t) node = node.previousElementSibling;
   list.insertBefore(el, node ? node.nextSibling : list.firstChild);
-  groupTurns(); updateCtx();
+  if(!quiet){ groupTurns(); updateCtx(); }
 }
 
 function onSpeaking(m){
@@ -1708,11 +1711,25 @@ function fillEntry(el, e){
   } else row.innerHTML = "";
   if(e.repeat) row.insertAdjacentHTML("afterbegin", `<span class="chip err" title="The other side asked this again after your answer">${icon("alert")}Asked again · ${e.repeat + 1}×</span> `);
 }
-function upsertEntry(e, silent){
+// many lines at once (a reconnect, a resumed meeting): the screen is put together once, not once per line
+function replayEntries(list){
+  (list || []).forEach(e => upsertEntry(e, true, true));
+  const newest = newestAnswered();
+  if(newest){ S.panelId = newest.id; S.pinned = false; }
+  feed.scrollTop = feed.scrollHeight;
+  renderAnswer(); renderThinking(); renderEmpty(); markLatest(); renderSumBtn(); groupTurns(); updateCtx(); updateNav(); refreshChips();
+}
+let housekeepAt = 0;
+function housekeepSoon(){                                  // a streaming word does not need the whole page re-checked
+  if(housekeepAt) return;
+  housekeepAt = requestAnimationFrame(() => { housekeepAt = 0; markLatest(); groupTurns(); updateCtx(); updateNav(); });
+}
+function upsertEntry(e, silent, batch){
   S.entries.set(e.id, e);
   (e.seg_ids||[]).forEach(id => { const p = S.pend.get(id); if(p){ p.remove(); S.pend.delete(id); } });
   let el = document.getElementById("e"+e.id);
   const added = !el;
+  if(batch){ if(!el){ el = entryShell(e); insertSorted(el, true); } fillEntry(el, e); return; }
   keepBottom(() => {
     if(!el){ el = entryShell(e); insertSorted(el); }
     fillEntry(el, e);
@@ -1747,8 +1764,8 @@ function upsertEntry(e, silent){
   renderThinking();
   if(added) renderEmpty();
   if(!has) renderAnswerIfIdle();
-  markLatest(); renderSumBtn();
-  groupTurns(); updateCtx(); updateNav();
+  renderSumBtn();
+  if(added){ markLatest(); groupTurns(); updateCtx(); updateNav(); } else housekeepSoon();
 }
 function iAmSpeaking(){ return S.running && Date.now() - S.meAt < 2500; }
 function showQueued(){
@@ -2491,6 +2508,7 @@ $("#fKey").addEventListener("input", () => {
   keyTimer = setTimeout(async () => {
     const r = await api("save_config", {api_key: v});
     if(r.ok){ S.cfg = r.config; $("#fKey").value = ""; $("#fKey").type = "password"; applyConfig(); fillDrawer(true); testConnection(); }
+    else toast("error", r.error || "The key could not be saved. Try again.");
   }, 600);
 });
 $("#showKey").onclick = () => { const k = $("#fKey"); k.type = k.type === "password" ? "text" : "password"; };
@@ -3088,6 +3106,23 @@ $("#testAll").onclick = async () => {
       <span class="sub">${esc(x.ok ? x.detail || "Works." : x.error || "Failed.")}</span></div></div>`).join("");
 };
 
+async function runSelfCheck(live){
+  const b = $(live ? "#selfOvBtn" : "#selfBtn"), box = $("#selfResults"), b2 = $(live ? "#selfBtn" : "#selfOvBtn");
+  b.disabled = b2.disabled = true;
+  box.innerHTML = `<div class="trow"><span class="spinner"></span><span>${live ? "Opening the overlay for a few seconds…" : "Checking this computer…"}</span></div>`;
+  const r = await api("selfcheck", {overlay_live: !!live});
+  b.disabled = b2.disabled = false;
+  if(!r.ok || !Array.isArray(r.items)){ box.innerHTML = ""; return toast("error", r.error || "The check failed."); }
+  const ST = {ok: ["ok", "check"], warn: ["bad", "alert"], bad: ["bad", "alert"], info: ["", "info"]};
+  box.innerHTML = r.items.map(x => { const [cls, ic] = ST[x.state] || ["", "info"];
+    return `<div class="trow ${cls}">${icon(ic)}<div><b>${esc(x.name)}</b><span class="sub" style="display:block" dir="auto">${esc(x.detail)}</span></div></div>`; }).join("")
+    + `<div style="margin-top:6px"><button class="btn sm ghost" id="selfCopy"><span data-icon="copy"></span><span>Copy the report</span></button></div>`;
+  paintIcons();
+  $("#selfCopy").onclick = () => copyText(r.report || "", "Report copied. You can send it to whoever helps you.");
+}
+$("#selfBtn").onclick = () => runSelfCheck(false);
+$("#selfOvBtn").onclick = () => runSelfCheck(true);
+
 function showModelReport(r){
   const box = $("#modelResults"), ST = {ok: ["ok", "check"], auto: ["ok", "check"], local: ["ok", "check"], missing: ["bad", "alert"], live: ["", "info"], unchecked: ["", "info"], off: ["", "info"]};
   const chips = (l, n = 14) => l.length ? l.slice(0, n).map(m => `<code>${esc(m)}</code>`).join(" ") + (l.length > n ? ` <span class="sub">+${l.length - n}</span>` : "") : `<span class="sub">none</span>`;
@@ -3236,7 +3271,9 @@ async function copyText(t, msg){
   try{ await navigator.clipboard.writeText(t); toast("ok", msg || "Copied."); }catch{ toast("error", "Could not copy."); }
 }
 $("#toolClose").onclick = closeTool;
-$("#toolModal").onclick = ev => { if(ev.target.id === "toolModal") closeTool(); };
+let toolDown = null;
+$("#toolModal").onmousedown = ev => { toolDown = ev.target; };
+$("#toolModal").onclick = ev => { if(ev.target.id === "toolModal" && toolDown === ev.target) closeTool(); };   // a text selection that ends outside the card does not close it
 
 /* the tools menu */
 $("#toolsBtn").onclick = ev => { ev.stopPropagation(); renderToolBtns(); $("#toolPop").hidden = !$("#toolPop").hidden; };
@@ -3716,7 +3753,15 @@ $("#hideNo").onclick = () => closeHideAsk(false);
 $("#hideModal").onclick = ev => { if(ev.target.id === "hideModal") closeHideAsk(false); };
 
 /* ---------- errors from this page go to app.log ---------- */
-function reportError(err){ try{ api("ui_error", {message: String(err && err.message || err), stack: String(err && err.stack || "")}); }catch{} }
+const reported = new Map();
+function reportError(err){
+  try{
+    const message = String(err && err.message || err), now = Date.now();
+    if(now - (reported.get(message) || 0) < 60000) return;      // the same problem is told once a minute, not every second
+    reported.set(message, now); if(reported.size > 50) reported.clear();
+    api("ui_error", {message, stack: String(err && err.stack || "")});
+  }catch{}
+}
 window.addEventListener("error", e => reportError(e.error || e.message));
 window.addEventListener("unhandledrejection", e => reportError(e.reason));
 

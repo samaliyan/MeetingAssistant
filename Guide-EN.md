@@ -1,4 +1,10 @@
-# Meeting Assistant — User Guide (version 6.9.1)
+# Meeting Assistant — User Guide (version 6.10)
+
+## Version 6.10: health check
+
+- **Setup › Services › Check this computer**: shows what works and what does not (Windows version, WebView2, keys, microphone, computer sound, services). **Copy the report** and send it if you need help.
+- **Try the overlay (5 s)**: opens the see-through window for a few seconds and tells you if it opened, how fast, and if it is hidden from screen sharing.
+- The overlay now works at 125% / 150% scaling and on several monitors, and closes by itself if the program ends.
 
 ## Version 6.9.1
 

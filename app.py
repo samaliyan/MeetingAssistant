@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.9.1"
+VERSION = "6.10"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -86,7 +86,7 @@ def _writable(folder):
 
 # Everything the program writes (settings, meetings, log, models, window cache) lives in ONE folder,
 # "Data", next to the program — nothing else is created beside the exe.
-MAKE_SHORTCUT = "--make-shortcut" in sys.argv or "--window" in sys.argv   # (only the desktop icon / the hidden-window helper: no files, no log)
+MAKE_SHORTCUT = "--make-shortcut" in sys.argv or "--window" in sys.argv or "--overlay" in sys.argv   # (only the desktop icon / the hidden-window helper: no files, no log)
 DATA_DIR = os.path.join(APP_DIR, "Data")
 APP_DIR_MOVED = ""
 OLD_DATA_ITEMS = ("config.json", "config.json.bak", "app.log", "app.log.old", "meetings", "models", ".window", ".port")
@@ -562,6 +562,12 @@ def relocate_model(p):
     return p
 
 
+def clean_key(v):
+    """An API key as plain visible characters: no spaces, quotes or hidden direction marks from a copy (they break the header)."""
+    t = re.sub(r"[\s\u200b-\u200f\u202a-\u202e\u2060\ufeff\"'“”‘’«»]", "", str(v or ""))
+    return "".join(ch for ch in t if ord(ch) < 128)
+
+
 def sanitize(cfg):
     out = dict(DEFAULTS)
     for k, default in DEFAULTS.items():
@@ -624,7 +630,7 @@ def sanitize(cfg):
     out["screen_provider"] = sp if sp in ("", "groq", "llm") or sp in ids else ""
     out["screen_model"] = out["screen_model"].strip()[:120]
     out["config_version"] = CONFIG_VERSION
-    out["api_key"] = out["api_key"].strip()
+    out["api_key"] = clean_key(out["api_key"])
     return out
 
 
@@ -641,7 +647,7 @@ def clean_providers(v):
                     "preset": str(p.get("preset") or "custom")[:20],
                     "name": (str(p.get("name") or "").strip() or pid)[:40],
                     "base_url": str(p.get("base_url") or "").strip().rstrip("/")[:300],
-                    "api_key": str(p.get("api_key") or "").strip(),
+                    "api_key": clean_key(p.get("api_key")),
                     "use_proxy": (p.get("use_proxy").strip().lower() in ("1", "true", "yes", "on")
                                   if isinstance(p.get("use_proxy"), str) else bool(p.get("use_proxy", True))),
                     "kind": "live" if str(p.get("preset")) == "deepgram" else "openai",
@@ -4422,6 +4428,16 @@ def about_info(cfg):
     return info
 
 
+def save_alert(kind, msg):
+    """A message on screen for a problem that would otherwise only be in the log."""
+    try:
+        app = getattr(Handler, "app", None)
+        if app is not None:
+            app.hub.toast(kind, msg)
+    except Exception:
+        pass
+
+
 class Session:
     def __init__(self, cfg, recording=""):
         self.cfg = cfg
@@ -4632,12 +4648,22 @@ class Session:
             out += ["---", "", f"## Screen / صفحه {datetime.datetime.fromtimestamp(sc['t']):%H:%M:%S}", "", sc["text"], ""]
         try:
             tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8", errors="replace") as f:      # (a stray half character never loses the file)
                 f.write("\n".join(out))
             os.replace(tmp, self.path)
-        except OSError as e:
+            if getattr(self, "save_bad", False):
+                self.save_bad = False
+                save_alert("info", "The meeting is saved again.")
+        except Exception as e:
             self.dirty = True
             log("save failed:", e)
+            try:
+                os.remove(self.path + ".tmp")
+            except OSError:
+                pass
+            if not getattr(self, "save_bad", False):
+                self.save_bad = True
+                save_alert("error", "The meeting file could not be saved (" + short(e, 80) + "). Free some space or check the folder; it tries again.")
             return
         if final or time.time() - getattr(self, "state_t", 0) > 20:
             self.state_dirty = False
@@ -6025,7 +6051,7 @@ class Engine:
                 self.hub.publish("speaking", seg=key, source=source, phase="speaking", translation=t.strip())
             return None
         try:
-            out = self.run_chat(self.chat_targets("tr"), messages, 300, 0.2, on_text)
+            out = self.run_chat(self.chat_targets("tr"), messages, 300, 0.2, on_text, soft=True)
             if key not in self.done_segs:
                 self.hub.publish("speaking", seg=key, source=source, phase="speaking", translation=out.strip())
         except Exception as e:
@@ -6586,23 +6612,30 @@ class Engine:
             out += [("groq", m, effort_for(m)) for m in self.app.groq_extra if not any(o[:2] == ("groq", m) for o in out)]
         return out
 
-    def run_chat(self, chain, messages, max_tokens, temperature, on_text):
-        last = None
-        for rnd in range(2):
-            for pid, model, effort in chain:
+    def run_chat(self, chain, messages, max_tokens, temperature, on_text, soft=False):
+        """soft=True: a preview. It never uses up a model's rate limit for the real work (no cooldown, no retry, no wait)."""
+        last, blank = None, None
+        if soft and any(not self.models.ok(f"{p}|{m}") for p, m, _ in chain[:1]):
+            raise APIError("preview skipped: the model is resting")
+        for rnd in range(1 if soft else 2):
+            for pid, model, effort in (chain[:1] if soft else chain):
                 key = f"{pid}|{model}"
                 if not self.models.ok(key):
                     continue
-                for attempt in range(2):
+                for attempt in range(1 if soft else 2):
                     if self.stop_event.is_set() and last is not None:
                         raise last
                     try:
                         client = self.app.get_api(pid)
                         text = chat_compat(client, model, messages, max_tokens, temperature, effort, on_text)
                         self.app.note_request()
+                        if not (text or "").strip() and len(chain) > 1:
+                            blank = text                       # an empty reply (a model that only 'thought'): the next model tries
+                            break
                         return text
                     except RateLimited as e:
-                        self.models.cooldown(key, e.retry_after)
+                        if not soft:
+                            self.models.cooldown(key, e.retry_after)
                         last = e
                         break
                     except BadRequest as e:
@@ -6624,10 +6657,12 @@ class Engine:
                     except Transient as e:
                         last = e
                         continue                             # one quick retry on the same model
-            if rnd == 0:
+            if rnd == 0 and not soft:
                 wait = self.models.soonest([f"{p}|{m}" for p, m, _ in chain])
                 if wait is None or wait > 8 or self.stop_event.wait(wait):
                     break
+        if blank is not None:
+            return blank
         raise last or APIError("No model available right now. Check Setup › Services.")
 
     def _publish(self, eid, **fields):
@@ -7798,7 +7833,7 @@ class App:
             for k, v in values.items():
                 if k == "api_key":
                     if isinstance(v, str) and v.strip():
-                        new["api_key"] = v.strip()
+                        new["api_key"] = clean_key(v)
                 elif k == "clear_api_key":
                     if v:
                         new["api_key"] = ""
@@ -8054,8 +8089,6 @@ class App:
 
     def api_start(self, resume=False):
         """resume=True: go on with the last meeting (same file, same transcript) instead of a new one."""
-        self.practice_until = 0.0                    # a practice window left open never mutes a real meeting
-        self.started_at = time.time()
         if not self.running and not self.stopping and not self.missing_tasks():
             bad = self.preflight()
             if bad:
@@ -8073,6 +8106,8 @@ class App:
                 return {"ok": False, "error": "Still finishing the previous meeting — try again in a moment."}
             if self.recording:
                 return {"ok": False, "error": "A recording is being transcribed. Wait for it, or stop it first."}
+            self.practice_until = 0.0                # a practice window left open never mutes a real meeting
+            self.started_at = time.time()
             self._stop_captures()
             self.monitor_until = 0.0
             try:
@@ -8087,6 +8122,11 @@ class App:
             def undo(msg):
                 self._stop_captures()
                 if self.engine is not None:
+                    for lv in list(getattr(self.engine, "live", {}).values()):      # an open Deepgram stream must not stay
+                        try:
+                            lv.stop()
+                        except Exception:
+                            pass
                     self.engine.close()
                 self.engine = None
                 self.session = None
@@ -8690,6 +8730,108 @@ class App:
         err = self.overlay.start() if want else self.overlay.stop()
         return {"ok": not err, "on": self.overlay.on, **({"error": err} if err else {})}
 
+    def api_selfcheck(self, overlay_live=False):
+        """Checks the parts of this computer the program depends on and says what is wrong in plain words.
+        overlay_live=True also opens the see-through window for a few seconds and reports what happened."""
+        items = []
+
+        def add(name, state, detail):
+            items.append({"name": name, "state": state, "detail": str(detail)})
+        add("Program", "ok", f"version {VERSION}, {'exe' if FROZEN else 'Python ' + sys.version.split()[0]}")
+        try:
+            free = shutil.disk_usage(DATA_DIR).free / 1e9
+            add("Data folder", "ok" if free >= 1 and _writable(DATA_DIR) else "bad",
+                f"{DATA_DIR} - {free:.1f} GB free" + ("" if _writable(DATA_DIR) else " - the folder cannot be written"))
+        except OSError as e:
+            add("Data folder", "bad", short(e, 120))
+        if sys.platform != "win32":
+            add("Windows", "info", "This is not Windows: the checks for the see-through window, keys and sound are skipped.")
+        else:
+            try:
+                v = sys.getwindowsversion()
+                add("Windows version", "ok" if v.build >= 19041 else "warn",
+                    f"build {v.build}" + ("" if v.build >= 19041 else " - older than 2004: the overlay cannot be hidden from screen sharing (it shows as a black box)"))
+            except Exception as e:
+                add("Windows version", "warn", short(e, 100))
+            wv = ""
+            try:
+                import winreg
+                for root, sub in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+                                  (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+                                  (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")):
+                    try:
+                        with winreg.OpenKey(root, sub) as k:
+                            wv = str(winreg.QueryValueEx(k, "pv")[0])
+                            break
+                    except OSError:
+                        continue
+            except Exception:
+                pass
+            add("WebView2 (the see-through window)", "ok" if wv and wv != "0.0.0.0" else "bad",
+                wv or "not installed: the window that hides from screen sharing cannot open. Install 'Microsoft Edge WebView2 Runtime' from Microsoft.")
+            try:
+                import webview  # noqa: F401
+                add("pywebview", "ok", "loaded")
+            except Exception as e:
+                add("pywebview", "bad", "not loaded: " + short(e, 100))
+            if not self.overlay.on:
+                import ctypes
+                from ctypes import wintypes as wt
+                u = ctypes.windll.user32
+                u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+                bad = []
+                for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items()):
+                    if cmd == "toggle":
+                        continue
+                    if u.RegisterHotKey(None, 9000 + i, 0x2 | 0x1 | 0x4000, vk):
+                        u.UnregisterHotKey(None, 9000 + i)
+                    else:
+                        bad.append("Ctrl+Alt+" + label)
+                add("Overlay keys", "ok" if not bad else "warn",
+                    "free" if not bad else "used by another program: " + ", ".join(bad) + ". Use the buttons instead.")
+            else:
+                add("Overlay keys", "info", "The overlay is on now, so its keys are in use by the program.")
+            try:
+                dev = list_devices()
+                if dev.get("error"):
+                    add("Sound", "bad", dev["error"])
+                else:
+                    add("Microphone", "ok" if dev["mics"] else "bad", f"{len(dev['mics'])} found" + (f"; default: {dev['default_mic']}" if dev.get("default_mic") else ""))
+                    add("Computer sound (their voice)", "ok" if dev["speakers"] else "bad",
+                        f"{len(dev['speakers'])} found" + (f"; default: {dev['default_speaker']}" if dev.get("default_speaker") else ""))
+            except Exception as e:
+                add("Sound", "bad", short(e, 120))
+        c = self.cfg
+        keys = [p["name"] for p in c.get("providers", []) if p.get("api_key")] + (["Groq"] if c.get("api_key") else [])
+        add("Services with a key", "ok" if keys else "bad", ", ".join(keys) if keys else "none yet: Setup > Services")
+        add("Proxy", "info", "set" if c.get("proxy") else "none (if the services do not answer from your country, set one)")
+        add("ffmpeg (for recordings)", "ok" if shutil.which("ffmpeg") or os.path.isfile(os.path.join(APP_DIR, "ffmpeg.exe")) else "info",
+            "found" if shutil.which("ffmpeg") or os.path.isfile(os.path.join(APP_DIR, "ffmpeg.exe")) else "not found: only mp3 and wav recordings can be read")
+        if overlay_live and sys.platform == "win32":
+            if self.overlay.on:
+                add("Overlay test", "info", "The overlay is already on. Turn it off first (Ctrl+Alt+O).")
+            else:
+                t0 = time.time()
+                err = self.overlay.start()
+                took = time.time() - t0
+                if err:
+                    add("Overlay opens", "bad", short(err, 200))
+                else:
+                    st = read_hide_status(OVERLAY_STATUS_PATH) or {}
+                    add("Overlay opens", "ok" if took < 8 else "warn", f"in {took:.1f} s" + ("" if took < 8 else " (slow: antivirus scanning the program?)"))
+                    mode = st.get("mode")
+                    add("Hidden from screen sharing", "ok" if mode == "hidden" else "warn",
+                        {"hidden": "yes: Windows hides the window from a shared screen", "shown": "no: " + (st.get("error") or "the window is visible to others")}.get(mode, "not known (the simple window is used: it is visible)"))
+                    time.sleep(3)
+                    self.overlay.stop()
+        elif overlay_live:
+            add("Overlay test", "info", "Only on Windows.")
+        rank = {"bad": 3, "warn": 2, "info": 1, "ok": 0}
+        worst = max((rank[i["state"]] for i in items), default=0)
+        report = "\n".join(f"[{i['state'].upper()}] {i['name']}: {i['detail']}" for i in items)
+        log("----- health check -----\n" + report, level="diag")
+        return {"ok": True, "items": items, "worst": worst, "report": report}
+
     def api_job_prep(self, ad=""):
         ad = str(ad or "").strip() or str(self.cfg.get("job_ad") or "").strip()
         if len(ad) < 40:
@@ -8994,8 +9136,8 @@ class App:
                 if u != p["base_url"]:
                     p["models"] = []
                 p["base_url"] = u
-            if isinstance(api_key, str) and api_key.strip():
-                p["api_key"] = api_key.strip()
+            if isinstance(api_key, str) and clean_key(api_key):
+                p["api_key"] = clean_key(api_key)
             if use_proxy is not None:
                 p["use_proxy"] = bool(use_proxy)
             res = self._save_and_publish()
@@ -10422,12 +10564,59 @@ def run_window_helper(argv):
     return 0
 
 
+def make_dpi_aware():
+    """Pixels everywhere are real pixels (per-monitor v2); without this, at 125% or 150% scaling the positions
+    Windows reports and the sizes we set are in different units. Harmless when it is already set."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        if not ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+
+def watch_parent(pid, stop, status):
+    """The overlay window must never outlive the program that owns it (a crash or Task Manager would leave a
+    click-through window nobody can close)."""
+    if sys.platform != "win32" or pid <= 0:
+        return
+    def run():
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            k.OpenProcess.restype = ctypes.c_void_p
+            k.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            hp = k.OpenProcess(0x100000, False, pid)          # SYNCHRONIZE
+            if not hp:
+                return
+            while not stop.is_set():
+                r = k.WaitForSingleObject(hp, 1000)
+                if r == 0:                                    # the parent has ended
+                    try:
+                        os.remove(status)
+                    except OSError:
+                        pass
+                    os._exit(0)
+                elif r != 0x102:                              # not "still running": do not spin
+                    stop.wait(1)
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True, name="overlay-parent").start()
+
+
 def run_overlay_helper(argv):
     """`--overlay URL --storage FOLDER --status FILE --geom x,y,w,h`: the see-through answer window. This process owns the
     window: always on top, see-through, click-through, hidden from screen sharing, movable with keys or in 'move mode'."""
     def opt(name, default=""):
         return argv[argv.index(name) + 1] if name in argv and argv.index(name) + 1 < len(argv) else default
     url, storage, status = opt("--overlay"), opt("--storage"), opt("--status")
+    global CONFIG_PATH, OVERLAY_POS_PATH
+    if opt("--data"):                                        # this process does not tidy or create files: it is told where the data is
+        CONFIG_PATH = os.path.join(opt("--data"), "config.json")
+        OVERLAY_POS_PATH = os.path.join(opt("--data"), ".overlay_pos.json")
+    make_dpi_aware()
     try:
         x, y, w, h = [int(v) for v in opt("--geom", "100,20,1000,320").split(",")]
     except ValueError:
@@ -10453,12 +10642,12 @@ def run_overlay_helper(argv):
     u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
     u.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
     u.GetAsyncKeyState.argtypes = [ctypes.c_int]
-    sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+    vx, vy, sw, sh = u.GetSystemMetrics(76), u.GetSystemMetrics(77), u.GetSystemMetrics(78), u.GetSystemMetrics(79)   # all screens together
     try:                                                     # where it was left last time
         with open(OVERLAY_POS_PATH, "r", encoding="utf-8") as f:
             d = json.load(f)
         px, py, pw, ph = int(d["x"]), int(d["y"]), int(d["w"]), int(d["h"])
-        if 300 <= pw <= sw and 120 <= ph <= sh and -pw + 80 < px < sw - 80 and 0 <= py < sh - 40:
+        if 300 <= pw <= sw and 120 <= ph <= sh and vx - pw + 80 < px < vx + sw - 80 and vy <= py < vy + sh - 40:
             x, y, w, h = px, py, pw, ph
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -10510,10 +10699,12 @@ def run_overlay_helper(argv):
                 set_aff(hwnd, WDA_MONITOR)
 
     def mark_move(on):
-        try:
-            webview.windows[0].evaluate_js(f"document.body.classList.toggle('mv', {'true' if on else 'false'})")
-        except Exception:
-            pass
+        def run():                                            # the page may be slow: never hold the keys and the drag back
+            try:
+                webview.windows[0].evaluate_js(f"document.body.classList.toggle('mv', {'true' if on else 'false'})")
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
 
     def worker():
         try:
@@ -10530,7 +10721,7 @@ def run_overlay_helper(argv):
             write_hide_status(status, True, "hidden" if hide and mode_ok else "shown",
                               "" if mode_ok else "Windows would not hide the see-through window from screen sharing: it is visible.")
             keys = {}
-            for i, (vk, mod) in enumerate([(0x4D, 0x2 | 0x1), (0x25, 0x2 | 0x1 | 0x4), (0x27, 0x2 | 0x1 | 0x4),
+            for i, (vk, mod) in enumerate([(0x4D, 0x2 | 0x1 | 0x4000), (0x25, 0x2 | 0x1 | 0x4), (0x27, 0x2 | 0x1 | 0x4),
                                            (0x26, 0x2 | 0x1 | 0x4), (0x28, 0x2 | 0x1 | 0x4),
                                            (0x24, 0x2 | 0x1 | 0x4), (0x23, 0x2 | 0x1 | 0x4)], 1):
                 if u.RegisterHotKey(None, 100 + i, mod, vk):
@@ -10544,12 +10735,12 @@ def run_overlay_helper(argv):
                         if not st["move"]:
                             read_rect(hwnd)
                             save_pos()
-                        mark_move(st["move"])
                         apply(hwnd, *settings())
+                        mark_move(st["move"])
                     elif isinstance(k, tuple):
                         read_rect(hwnd)
-                        st["x"] = min(sw - 80, max(-st["w"] + 80, st["x"] + k[0] * 40))
-                        st["y"] = min(sh - 40, max(0, st["y"] + k[1] * 40))
+                        st["x"] = min(vx + sw - 80, max(vx - st["w"] + 80, st["x"] + k[0] * 40))
+                        st["y"] = min(vy + sh - 40, max(vy, st["y"] + k[1] * 40))
                         u.SetWindowPos(hwnd, -1, st["x"], st["y"], 0, 0, 0x1 | 0x10)
                         save_pos()
                     elif k in ("bigger", "smaller"):
@@ -10573,8 +10764,8 @@ def run_overlay_helper(argv):
                             nw, nh = int(min(sw, max(400, ow + pt.x - x0))), int(min(sh, max(140, oh + pt.y - y0)))
                             u.SetWindowPos(hwnd, -1, ox, oy, nw, nh, 0x10)
                         else:                                      # left button: move
-                            nx = int(min(sw - 80, max(-ow + 80, ox + pt.x - x0)))
-                            ny = int(min(sh - 40, max(0, oy + pt.y - y0)))
+                            nx = int(min(vx + sw - 80, max(vx - ow + 80, ox + pt.x - x0)))
+                            ny = int(min(vy + sh - 40, max(vy, oy + pt.y - y0)))
                             u.SetWindowPos(hwnd, -1, nx, ny, 0, 0, 0x1 | 0x10)
                     elif drag:
                         drag = None
@@ -10593,23 +10784,27 @@ def run_overlay_helper(argv):
         except Exception as e:
             write_hide_status(status, False, "", "The see-through window failed: " + str(e)[:150])
 
+    failed = False
     try:
-        kw = dict(width=w, height=h, x=x, y=y, frameless=True, on_top=True, easy_drag=True, text_select=False, resizable=False)
+        kw = dict(width=w, height=h, x=x, y=y, frameless=True, on_top=True, easy_drag=False, text_select=False, resizable=False)
         try:
             webview.create_window(OV_TITLE, url, focus=False, **kw)
         except TypeError:
             webview.create_window(OV_TITLE, url, **kw)
         threading.Thread(target=worker, daemon=True, name="overlay-worker").start()
+        watch_parent(int(opt("--parent", "0") or 0) if opt("--parent", "0").isdigit() else 0, stop, status)
         webview.start(gui="edgechromium", storage_path=storage or None, private_mode=False)
     except Exception as e:
+        failed = True
         write_hide_status(status, False, "", "The see-through window could not start: " + str(e)[:150])
-        return 4
+        return 4                                           # the reason stays in the file for the main program
     finally:
         stop.set()
-        try:
-            os.remove(status)
-        except OSError:
-            pass
+        if not failed:
+            try:
+                os.remove(status)
+            except OSError:
+                pass
     return 0
 
 
@@ -10832,7 +11027,7 @@ class Overlay:
         x, y, w, h = self.geometry()
         cmd = ([sys.executable] if FROZEN else [sys.executable, os.path.abspath(__file__)]) + \
             ["--overlay", self.app.url + "&overlay=1", "--storage", HIDDEN_STORAGE, "--status", OVERLAY_STATUS_PATH,
-             "--geom", f"{x},{y},{w},{h}"]
+             "--geom", f"{x},{y},{w},{h}", "--data", DATA_DIR, "--parent", str(os.getpid())]
         try:
             self.proc = subprocess.Popen(cmd, env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"), close_fds=True)
         except OSError as e:
@@ -10943,6 +11138,16 @@ class Overlay:
             log("overlay key problem:", short(e, 120), level="debug")
 
     def _keys(self):
+        try:
+            self._keys_run()
+        except Exception as e:                                       # never a silent end of all keys
+            log("overlay keys stopped:", short(e, 150), level="warn")
+            try:
+                self.app.hub.toast("warn", "The overlay keys stopped working. Use the Overlay button.")
+            except Exception:
+                pass
+
+    def _keys_run(self):
         import ctypes
         from ctypes import wintypes as wt
         u = ctypes.windll.user32
@@ -10964,7 +11169,7 @@ class Overlay:
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
                     if cmd == "toggle":
                         continue
-                    once = 0x4000 if cmd in ("screen", "answer", "coach") else 0       # no auto-repeat for these
+                    once = 0x4000 if cmd in ("screen", "answer", "coach", "more", "less") else 0       # no auto-repeat for these
                     if u.RegisterHotKey(None, i, 0x2 | 0x1 | once, vk):
                         arrows[i] = cmd
                     else:
@@ -11025,7 +11230,7 @@ def make_shortcut():
           + "$s.Save()")
     env = {**os.environ, "MA_TARGET": target, "MA_ARGS": args, "MA_DIR": APP_DIR, "MA_ICON": icon}
     r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-                       capture_output=True, text=True, env=env)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     msg = "Desktop shortcut created." if r.returncode == 0 else "Could not create the shortcut: " + r.stderr[-300:]
     log(msg)
     try:
@@ -11132,6 +11337,7 @@ def main():
         return sys.exit(run_overlay_helper(sys.argv))
     if "--make-shortcut" in sys.argv:
         return make_shortcut()
+    make_dpi_aware()
     existing = running_url()
     if existing:                                  # already running -> just show its window
         open_window(existing)

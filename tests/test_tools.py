@@ -1242,3 +1242,46 @@ def test_round2_fixes(app):
         assert a.api_practice_grade(question="Q?", answer="a", kind={"a": 1}, secs=float("inf")).get("ok") in (True, False)
         a.running, a.started_at = True, __import__("time").time()
         assert a.api_practice_mode(on=True).get("ignored") is True and a.practice_until == 0.0
+
+
+def test_selfcheck_and_new_fixes(app):
+    a = app.App()
+    r = a.api_selfcheck()
+    assert r["ok"] and any(i["name"] == "Program" for i in r["items"]) and "Program" in r["report"]
+    assert all(i["state"] in ("ok", "warn", "bad", "info") for i in r["items"])
+    assert a.api_selfcheck(overlay_live=True)["ok"]                          # off Windows: skipped, no window
+    assert app.clean_key(" “gsk_abc‏123” \n") == "gsk_abc123" and app.clean_key("گ") == ""
+    assert app.sanitize({"api_key": "gsk_‏x y"})["api_key"] == "gsk_xy"
+
+
+def test_blank_reply_tries_next_model_and_preview_is_soft(app):
+    eng, sess, calls = _engine(app)
+    eng.app.get_api = lambda pid=None: object()
+    eng.app.note_request = lambda: None
+    outs = iter(["", "second model text"])
+    orig = app.chat_compat
+    app.chat_compat = lambda *a, **k: next(outs)
+    try:
+        chain = [("groq", "m1", None), ("groq", "m2", None)]
+        assert eng.run_chat(chain, [], 10, 0.1, lambda t: None) == "second model text"
+        eng.models.cooldown("groq|m1", 60)
+        try:
+            eng.run_chat(chain, [], 10, 0.1, lambda t: None, soft=True)      # a preview does not use a resting model
+            assert False
+        except app.APIError:
+            pass
+        assert not eng.models.ok("groq|m1") and eng.models.ok("groq|m2")
+    finally:
+        app.chat_compat = orig
+        eng.stop_event.set()
+
+
+def test_session_save_survives_odd_text_and_tells(app, tmp_path):
+    told = []
+    app.save_alert = lambda kind, msg: told.append((kind, msg))
+    eng, sess, calls = _engine(app)
+    sess.add("them", 1.0, 2.0, "hello \ud83d there", "en", [1])
+    sess.dirty = True
+    sess._save()                                                              # a lone surrogate does not lose the file
+    assert os.path.isfile(sess.path)
+    eng.stop_event.set()
