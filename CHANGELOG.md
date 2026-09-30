@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.9]
+
+Practice interview, job-ad preparation, scores in the review. Everything is an option; nothing that worked before changes.
+
+- **Practice interview** (Tools › Practice interview): the coach asks questions one by one (general, behavioural, technical, English level test, or your weak spots again). You type or speak the answer; you get scores (clarity, structure, depth, proof, and language for the English test), the real numbers (seconds, words, pace), tips, a stronger answer and the follow-up an interviewer would ask. Weak questions are saved and can be re-drilled. Suggested answers and the coach stay quiet while you practise.
+- **Prepare for the job** (Tools › Prepare for the job): paste the job advert in Setup (or here) and get what they look for and likely questions. The advert is also used for answers and by the coach (capped at 8000 characters).
+- **Scores in the review** (Setup › Review, option "Scores in the review", on by default): after the written review, one small extra request gives clarity, structure, depth, proof and follow-up as bars, with the most useful fixes. Needs at least 4 lines.
+- **Read the screen by itself** (option, off by default): when they say "look at this code" or "on my screen", the screen is read after the picture delay.
+- **Overlay keys**: Ctrl+Alt+S read the screen, Ctrl+Alt+A answer now, Ctrl+Alt+H ask the coach; the screen result and coach help show inside the overlay. These keys are taken only while the overlay is on.
+- Longer time limits for the slow requests, a practice window left open never keeps a real meeting quiet, and several small robustness fixes. 93 automated tests.
+
 ## [6.8.1]
 
 Fix: an automatic test opened a real window on Windows and failed the release check. No change for users; everything in 6.8 is included.

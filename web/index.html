@@ -272,11 +272,11 @@ body.ov .a-fa{margin-top:8px}
 body.ov .a-fa p{color:#d3d9e3}
 body.ov .answer-empty{color:#c9d0db;opacity:.8}
 body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
-#ovCoach{flex:none;font-size:.82rem;color:#c0c8d6;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.1);margin-top:4px;opacity:calc(var(--ovtext,85) / 100)}
+#ovCoach{flex:none;max-height:6.4em;overflow:hidden;font-size:.82rem;color:#c0c8d6;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.1);margin-top:4px;opacity:calc(var(--ovtext,85) / 100)}
 #ovCoach.alert{color:#f0c9a8}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
 body.ov.mv #ovBox::after{content:"Drag to move · Ctrl+Alt+M to lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
-#ovBtn.on{color:var(--primary);border-color:var(--primary)}
+#ovBtn.on{color:var(--accent);border-color:var(--accent)}
 .coach{max-height:38vh;overflow-y:auto;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.8rem}
 .co-live{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-2)}
 .co-live .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
@@ -317,6 +317,17 @@ body.ov.mv #ovBox::after{content:"Drag to move · Ctrl+Alt+M to lock";position:a
 .co-actions{display:flex;gap:6px;flex-wrap:wrap}
 .co-askrow{display:flex;gap:6px}
 .co-askrow .input{flex:1;height:32px}
+.score-box{margin:0 0 14px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.score-row{display:grid;grid-template-columns:110px 1fr 28px;gap:8px;align-items:center;font-size:.82rem;margin:3px 0}
+.score-bar{height:8px;border-radius:5px;background:var(--border);overflow:hidden}
+.score-bar i{display:block;height:100%;background:var(--accent)}
+.score-bar i.low{background:#d97706}
+.score-big{font-size:1.5rem;font-weight:700}
+.pr-q{font-size:1.15rem;line-height:1.55;font-weight:600;margin:6px 0 10px}
+.pr-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:.82rem}
+.pr-better{padding:8px 10px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);margin:6px 0;line-height:1.6;white-space:pre-wrap}
+#ovScreen{flex:1;min-height:0;overflow-y:auto;font-size:1rem;line-height:1.5}
+#ovScreen[hidden]{display:none}
 .notes-sec{margin:0 0 12px}
 .notes-sec h4{margin:0 0 4px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .notes-sec ul{margin:0;padding:0 18px;line-height:1.7}
@@ -749,6 +760,8 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="toolpop" id="toolPop" hidden role="menu">
         <button data-tool="screen" role="menuitem"><span data-icon="eye"></span><span class="tp-text">Read my screen<small>A question or code on screen → the answer</small></span><kbd>F3</kbd></button>
         <button data-tool="say" role="menuitem"><span data-icon="edit"></span><span class="tp-text">Help me say…<small>Your rough idea → what to say</small></span></button>
+        <button data-tool="jobprep" role="menuitem"><span data-icon="list"></span><span class="tp-text">Prepare for the job<small>Paste the advert: likely questions and a checklist</small></span></button>
+        <button data-tool="practice" role="menuitem"><span data-icon="play"></span><span class="tp-text">Practice interview<small>Questions one by one, your answer is graded</small></span></button>
         <button data-tool="coach" role="menuitem"><span data-icon="sparkles"></span><span class="tp-text">Coach notes<small>What the coach remembers and prepared</small></span></button>
         <button data-tool="feedback" role="menuitem"><span data-icon="sparkles"></span><span class="tp-text">How did I do?<small>Review of the meeting, with tips</small></span></button>
         <button data-tool="search" role="menuitem"><span data-icon="list"></span><span class="tp-text">Search past meetings…<small>Find what was said before</small></span></button>
@@ -838,6 +851,11 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="help">First line: a short topic (it also helps recognition of technical words). Below it you can paste more — the job description, the company, what they are looking for. Answers are tailored to all of it. Facts about yourself go in Setup › Answers › About you.</div>
       </div>
       <div class="field">
+        <label for="fJobAd">Job advert (optional)</label>
+        <textarea class="input" id="fJobAd" data-key="job_ad" rows="4" placeholder="Paste the job advert here. The answers then stress the experience the job asks for (never invented), and Tools › Prepare for the job writes likely questions."></textarea>
+        <div class="input-row" style="margin-top:6px"><button class="btn sm ghost" id="jobPrepBtn"><span data-icon="sparkles"></span><span>Prepare for this job</span></button></div>
+      </div>
+      <div class="field">
         <label for="fMode">Type of meeting</label>
         <select class="input" id="fMode" data-key="meeting_mode"></select>
         <div class="help">Changes how answers, the summary and the review are written (for example an HR interview uses the STAR method; a work meeting suggests decisions and action items).</div>
@@ -847,6 +865,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <textarea class="input" id="fGloss" data-key="glossary" rows="3" placeholder="OSPF, BGP, RMAN, Data Guard, kubectl …"></textarea>
         <div class="help">Names, products and abbreviations that will be spoken (one per line or separated by commas). They are spelled right in the transcript and translations, and speech recognition listens for them. Up to 60.</div>
       </div>
+      <label class="toggle"><input type="checkbox" data-key="debrief_scores"><span class="switch"></span><span class="tt"><b>Scores in the review</b><span>"How did I do?" also gives scores (clarity, structure, depth, examples, follow-up) and the three most useful fixes. One extra small request.</span></span></label>
       <label class="toggle"><input type="checkbox" data-key="coach"><span class="switch"></span><span class="tt"><b>Interview situation card</b><span>Shows the stage of the interview, how hard the questions are, questions asked again, and one short tip. It uses about one small request every 45 seconds.</span></span></label>
       <div class="field">
         <span class="label">Languages spoken in the meeting</span>
@@ -1005,6 +1024,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         </div>
         <div class="arow" id="screenRow" style="margin-top:12px"><span class="astat"></span><span class="alabel">Reading the screen</span><select class="input select" id="scrProv" data-key="screen_provider"></select><input class="input" data-key="screen_model" list="dl-scr" spellcheck="false" placeholder="Model that reads pictures — empty = pick automatically"><datalist id="dl-scr"><option value="gpt-4o-mini"><option value="gpt-4.1-mini"><option value="gemini-2.5-flash"><option value="qwen/qwen3.8-27b"><option value="meta-llama/llama-4-scout-17b-16e-instruct"></datalist></div>
         <div class="help" style="margin:4px 0 8px">Used by Tools › Read my screen (F3). It needs an online service whose model can read pictures; the local models cannot. Picture delay:
+          <label class="toggle" style="margin:6px 0"><input type="checkbox" data-key="auto_screen"><span class="switch"></span><span class="tt"><b>Read the screen by itself</b><span>When they say "look at this code" or "on my screen", the screen is read after the picture delay, with no key. Off by default.</span></span></label>
           <select class="input select" data-key="screen_delay" style="width:auto;display:inline-block;padding:3px 8px" aria-label="Picture delay"><option value="0">at once</option><option value="2">2 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option></select></div>
         <label class="toggle" id="backupRow"><input type="checkbox" data-key="use_backup"><span class="switch"></span><span class="tt"><b>Use Groq as a backup</b><span id="backupHelp">If a chosen service fails or runs out of credit, Groq continues so the meeting never stops.</span></span></label>
       </div>
@@ -1166,7 +1186,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="hrow"><kbd>Shift+F9</kbd><span>Continue the last meeting (same transcript)</span></div>
   <div class="hrow"><kbd>F2</kbd><span>Answer the last thing they said</span></div>
   <div class="hrow"><kbd>F3</kbd><span>Read the screen (a question or code shown there)</span></div>
-  <div class="hrow"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>O</kbd><span>See-through answer window on / off (from any program). While on: <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd> scroll, <kbd>←</kbd><kbd>→</kbd> earlier / newer answer, <kbd>PgUp</kbd><kbd>PgDn</kbd> see-through, <kbd>M</kbd> move.</span></div>
+  <div class="hrow"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>O</kbd><span>See-through answer window on / off (from any program). While on: <kbd>S</kbd> read the screen, <kbd>A</kbd> answer now, <kbd>H</kbd> coach help, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd> scroll, <kbd>←</kbd><kbd>→</kbd> earlier / newer answer, <kbd>PgUp</kbd><kbd>PgDn</kbd> see-through, <kbd>M</kbd> move.</span></div>
   <div class="hrow"><kbd>F4</kbd><span>Ask the coach: what should I do or say now?</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
@@ -1287,7 +1307,7 @@ const S = {
 };
 
 // actions that really take long (they run tests or wait for services); everything else answers quickly
-const SLOW_API = {check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
+const SLOW_API = {job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
                   audio_check: 90, test_proxy: 60, test_connection: 60, local_delete: 60, stop: 60, start: 60,
                   say: 75, search_meetings: 75, export: 60, about_file: 60};
 async function api(name, body={}){
@@ -1363,9 +1383,10 @@ function handle(m){
     case "overlay": S.overlay = !!m.on; renderOverlayBtn(); return;
     case "ov_cmd":
       if(OVERLAY){
-        const b = $("#answerBody");
+        const sc = $("#ovScreen"), b = sc && !sc.hidden ? sc : $("#answerBody");
         if(m.cmd === "up" || m.cmd === "down") b.scrollBy({top: (m.cmd === "down" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"});
         else if(m.cmd === "prev") stepAnswer(-1); else if(m.cmd === "next") stepAnswer(1);
+        else if(m.cmd === "coach") askCoach("");
       }
       return;
     case "coach": S.coach = m.coach; renderCoach(); return;
@@ -1404,7 +1425,7 @@ function onHello(m){
   S.stats=m.stats||{}; S.quota=m.quota; S.audioOk=m.audio_ok; S.speechMode = m.speech_mode; S.usage = m.usage || {};
   S.local = m.local || {}; S.download = m.download; loadLocal();
   S.llm = m.llm || {}; loadLlm();
-  S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
+  S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbScores = m.feedback_scores || {}; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
   S.recName = m.recording && ["starting","reading","finishing"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
   clearTranscript(); renderTitle();
   S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {}; S.overlay = !!m.overlay; renderOverlayBtn();
@@ -1696,9 +1717,12 @@ function upsertEntry(e, silent){
     if(!el){ el = entryShell(e); insertSorted(el); }
     fillEntry(el, e);
   }, added && !silent);
+  if(OVERLAY && added && e.source === "them" && S.ovScreenUntil && !silent && (e.qtype || ["thinking", "streaming"].includes(e.ans_state))) S.ovScreenUntil = 1;   // a new question: back to the answer
   if(added && e.source === "them" && /\b(on (the|my|your) screen|look at (this|the|my)|share (my|your|the) screen|sharing (my|the) screen|this (code|diagram|schema|query|table|slide)|can you see (my|the|this)|see (this|the) (code|screen|diagram))\b/i.test(e.text || "")
-     && Date.now() - (S.scrTip || 0) > 60000 && S.running){
-    S.scrTip = Date.now(); toast("info", "They mention the screen. Press F3 and the program reads it and suggests the answer.");
+     && Date.now() - (S.scrTip || 0) > 60000 && S.running && !silent){
+    S.scrTip = Date.now();
+    if(S.cfg && S.cfg.auto_screen && !OVERLAY && !S.scrBusy && !TM.kind){ toast("info", "They mention the screen. Reading it…"); readScreen(); }
+    else toast("info", "They mention the screen. Press F3 and the program reads it and suggests the answer.");
   }
   // the newest answer goes to the answer panel automatically
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
@@ -1750,6 +1774,7 @@ const QLABEL = {describe: "Describe / talk", candidate_q: "Your questions", sala
                 weakness: "Weakness", strength: "Strengths", behavioural: "Behavioural", coding: "Coding / task", design: "Design",
                 troubleshoot: "Troubleshooting", experience: "Experience", concept: "Concept", opinion: "Opinion", yesno: "Yes / no"};
 function renderOverlayBtn(){ const b = $("#ovBtn"); if(b) b.classList.toggle("on", !!S.overlay); }
+$("#jobPrepBtn").onclick = () => { closeDrawer(); openJobPrep(); };
 $("#ovBtn").onclick = async () => {
   const r = await api("overlay", {});
   if(!r.ok) toast("warn", r.error || "The see-through window could not open.");
@@ -1759,7 +1784,9 @@ if(OVERLAY){                    // this page is the see-through window: only the
   document.body.classList.add("ov");
   const box = document.createElement("div"); box.id = "ovBox";
   const oc = document.createElement("div"); oc.id = "ovCoach"; oc.hidden = true;
-  box.append($("#newQ"), $("#answerBody"), oc);
+  const os = document.createElement("div"); os.id = "ovScreen"; os.hidden = true;
+  box.append($("#newQ"), $("#answerBody"), os, oc);
+  setInterval(() => { if(S.ovScreenUntil && Date.now() > S.ovScreenUntil){ S.ovScreenUntil = 0; os.hidden = true; $("#answerBody").style.display = ""; } }, 1000);
   [...document.body.children].forEach(c => { if(c.tagName !== "SCRIPT") c.style.display = "none"; });
   document.body.prepend(box);
   document.title = "MA-Overlay";
@@ -1844,7 +1871,9 @@ function renderCoach(){
   if(txt && tip.textContent !== txt){ tip.setAttribute("dir", "auto"); tip.textContent = txt; }
   if(OVERLAY){                                                        // one short line for the see-through window
     const oc = $("#ovCoach");
-    const t = alt || [lv && lv.time ? mmss(lv.time) + (q && q.qmax ? " / " + mmss(q.qmax) : "") : "", txt || (q && q.qhint) || ""].filter(Boolean).join(" · ");
+    const hp = S.coHelp && (S.coHelp.busy || (S.coHelpAt && Date.now() - S.coHelpAt < 45000)) ? (S.coHelp.busy ? "…" : S.coHelp.text || S.coHelp.err || "") : "";
+    let t = hp || alt || [lv && lv.time ? mmss(lv.time) + (q && q.qmax ? " / " + mmss(q.qmax) : "") : "", txt || (q && q.qhint) || ""].filter(Boolean).join(" · ");
+    if(t.length > 260) t = t.slice(0, 260).replace(/\s+\S*$/, "") + "…";       // the box is small: cut at a word
     oc.hidden = !t; oc.classList.toggle("alert", !!alt);
     if(oc.textContent !== t){ oc.setAttribute("dir", "auto"); oc.textContent = t; }
   }
@@ -1867,7 +1896,7 @@ async function askCoach(text){
   S.coHelp = {busy: true}; setCoFold(false); renderCoach();
   const r = await api("coach_help", {text: text || ""});
   if(tok !== S.coTok) return;                                         // the meeting was cleared meanwhile: drop the old answer
-  S.coHelp = r.ok ? {text: r.text} : {err: r.error || "The coach could not answer."};
+  S.coHelp = r.ok ? {text: r.text} : {err: r.error || "The coach could not answer."}; S.coHelpAt = Date.now();
   renderCoach();
 }
 $("#coAsk").onclick = () => { const row = $("#coAskRow"); row.hidden = !row.hidden; if(!row.hidden) $("#coAskText").focus(); };
@@ -3191,11 +3220,12 @@ $("#resumeBtn").onclick = () => toggleRun(true);
 /* ---------- tools: read the screen, review, help me say, search, export (6.2) ---------- */
 const TM = {kind: ""};
 function openTool(kind, title, iconName){
+  if(TM.kind === "practice" && kind !== "practice") practiceLeave();
   TM.kind = kind;
   $("#toolTitle").innerHTML = `${icon(iconName)}<span>${esc(title)}</span>`;
   $("#toolModal").hidden = false;
 }
-function closeTool(){ $("#toolModal").hidden = true; TM.kind = ""; }
+function closeTool(){ if(TM.kind === "practice") practiceLeave(); $("#toolModal").hidden = true; TM.kind = ""; }
 function toolActions(list){
   const box = $("#toolActions"); box.innerHTML = "";
   list.forEach(a => { const b = document.createElement("button"); b.className = "btn sm ghost"; b.id = a.id || ""; b.disabled = !!a.disabled;
@@ -3211,7 +3241,7 @@ $("#toolModal").onclick = ev => { if(ev.target.id === "toolModal") closeTool(); 
 /* the tools menu */
 $("#toolsBtn").onclick = ev => { ev.stopPropagation(); renderToolBtns(); $("#toolPop").hidden = !$("#toolPop").hidden; };
 document.addEventListener("click", ev => { if(!$("#toolPop").hidden && !ev.target.closest("#toolPop")) $("#toolPop").hidden = true; });
-const TOOL_RUN = {coach: () => openNotes(), screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
+const TOOL_RUN = {jobprep: () => openJobPrep(), practice: () => openPractice(), coach: () => openNotes(), screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
 $$("#toolPop [data-tool]").forEach(b => b.onclick = () => { $("#toolPop").hidden = true; TOOL_RUN[b.dataset.tool](); });
 function renderToolBtns(){
   const f = $('#toolPop [data-tool="feedback"]'), x = $('#toolPop [data-tool="export"]');
@@ -3238,7 +3268,14 @@ function showScreen(m){
   toolActions([{id: "scrAgain", icon: "refresh", text: "Read again", disabled: busy, run: readScreen},
                {icon: "copy", text: "Copy", disabled: !S.scrText, run: () => copyText(S.scrText, "Copied.")}]);
 }
+function ovScreen(m){                                    // the see-through window shows the screen result in place of the answer
+  const el = $("#ovScreen"), ab = $("#answerBody"); if(!el) return;
+  const txt = m.text ? mdLite(m.text) : `<p class="help">${esc(m.state === "done" ? "Nothing was read from the screen." : m.state === "error" ? (m.note || "The screen could not be read.") : (m.note || "Reading the screen…"))}</p>`;
+  el.hidden = false; ab.style.display = "none"; el.setAttribute("dir", "auto"); el.innerHTML = txt;
+  S.ovScreenUntil = Date.now() + (["done"].includes(m.state) ? 120000 : m.state === "error" ? 15000 : 60000);
+}
 function onScreen(m){
+  if(OVERLAY){ ovScreen(m); return; }
   if(m.text) S.scrText = m.text;
   if(["done", "error"].includes(m.state)) S.scrBusy = false;
   if(TM.kind === "screen") showScreen(m);
@@ -3269,21 +3306,236 @@ function showFeedback(m){
   if(TM.kind !== "feedback") openTool("feedback", "How did I do?", "sparkles");
   S.fbLast = m;
   const busy = ["working", "streaming"].includes(m.state);
-  $("#toolBody").innerHTML = statTiles(m.stats || S.fbStats) + `<div ${rtlAttr()} class="rtl-text">${m.text ? mdLite(m.text) : ""}</div>`;
+  $("#toolBody").innerHTML = statTiles(m.stats || S.fbStats) + scoreBox(S.fbScores) + `<div ${rtlAttr()} class="rtl-text">${m.text ? mdLite(m.text) : ""}</div>`;
   $("#toolNote").innerHTML = busy ? `<span class="spinner"></span>${esc(m.note || "Writing the review…")}`
     : m.state === "error" ? `${icon("alert")}${esc(m.note || "It failed.")}` : m.state === "done" ? `${icon("check")}Saved at the end of the meeting file.` : "";
   toolActions([{icon: "refresh", text: "Write again", disabled: busy, run: () => openFeedback(true)},
                {icon: "copy", text: "Copy", disabled: !m.text, run: () => copyText($("#toolBody").innerText.trim(), "Review copied.")}]);
 }
 function onFeedback(m){
+  if(m.state === "scores"){
+    if(m.session_file && S.sessionFile && m.session_file !== S.sessionFile) return;
+    S.fbScores = m.scores || {};
+    if(TM.kind === "feedback") showFeedback(S.fbLast || {state: "done", text: S.feedback, stats: m.stats});
+    return;
+  }
   if(["done", "error"].includes(m.state)) S.fbBusy = false;
   if(m.session_file && S.sessionFile && m.session_file !== S.sessionFile) return;
+  if(m.state === "working") S.fbScores = {};
   if(m.stats) S.fbStats = m.stats;
   if(m.state === "done") S.feedback = m.text;
   if(["done", "error"].includes(m.state)) S.fbBusy = false;
   S.fbLast = m;
   if(TM.kind === "feedback") showFeedback(m);
   else if(m.state === "done") toast("ok", "Your review is ready — Tools › How did I do?");
+}
+
+/* score box (review) */
+const SCORE_LABEL = {clarity: "Clarity", structure: "Structure", depth: "Depth", signals: "Proof (examples, numbers)", language: "Language", follow_up: "Follow-up"};
+function scoreRows(sc, keys){
+  return keys.filter(k => Number(sc[k]) > 0).map(k => {
+    const v = Math.min(5, Math.max(0, Number(sc[k]) || 0));
+    return `<div class="score-row" dir="ltr"><span>${esc(SCORE_LABEL[k] || k)}</span><div class="score-bar"><i class="${v < 3 ? "low" : ""}" style="width:${v * 20}%"></i></div><b>${v}</b></div>`;
+  }).join("");
+}
+function scoreBox(sc){
+  if(!sc || !Number(sc.overall)) return "";
+  const fixes = Array.isArray(sc.fixes) ? sc.fixes.filter(x => typeof x === "string") : [];
+  return `<div class="score-box"><div dir="ltr" style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px"><span class="score-big">${esc(String(Math.min(5, Math.max(0, Number(sc.overall)))))}</span><span class="help">/ 5 readiness score</span></div>` +
+    scoreRows(sc, ["clarity", "structure", "depth", "signals", "follow_up"]) +
+    (fixes.length ? `<div class="help" style="margin-top:8px">Most useful fixes</div><ul ${rtlAttr()} style="margin:2px 0;padding:0 18px;line-height:1.7">${fixes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "") +
+    (typeof sc.best === "string" && sc.best ? `<div class="help" ${rtlAttr()} style="margin-top:6px">Best moment: ${esc(sc.best)}</div>` : "") + `</div>`;
+}
+
+/* prepare for the job (from the advert) */
+function openJobPrep(){
+  openTool("jobprep", "Prepare for the job", "list");
+  $("#toolBody").innerHTML = `<div class="field"><label for="jpAd">Paste the job advert</label>
+    <textarea class="input" id="jpAd" rows="7" maxlength="8000" placeholder="Job title, tasks, requirements …"></textarea>
+    <div class="help">It uses your background (Setup › Meeting › About me). The advert is also kept, so the answers in the meeting stress the experience it asks for.</div></div>
+    <div class="input-row"><button class="btn primary" id="jpGo">${icon("sparkles")}Write the sheet</button></div><div id="jpOut" style="margin-top:12px"></div>`;
+  $("#jpAd").value = (S.cfg && S.cfg.job_ad) || "";
+  $("#toolNote").innerHTML = ""; toolActions([]);
+  let busy = false, last = "";
+  const jtok = S.jpTok = (S.jpTok || 0) + 1;
+  $("#jpGo").onclick = async () => {
+    if(busy) return;
+    const ad = $("#jpAd").value.trim();
+    if(ad.length < 40){ toast("warn", "Paste the job advert first (a few lines)."); return; }
+    busy = true; $("#jpGo").disabled = true;
+    if(S.cfg && ad !== (S.cfg.job_ad || "")){ S.cfg.job_ad = ad; const f = $("#fJobAd"); if(f) f.value = ad; queueSave({job_ad: ad}); }
+    $("#toolNote").innerHTML = `<span class="spinner"></span>Writing…`; $("#jpOut").innerHTML = "";
+    const r = await api("job_prep", {ad});
+    busy = false;
+    if(TM.kind !== "jobprep" || S.jpTok !== jtok) return;
+    $("#jpGo").disabled = false; $("#toolNote").innerHTML = "";
+    if(!r.ok){ $("#toolNote").innerHTML = `${icon("alert")}${esc(r.error || "It failed.")}`; return; }
+    last = typeof r.text === "string" ? r.text : "";
+    $("#jpOut").innerHTML = `<div ${rtlAttr()} class="rtl-text">${mdLite(last)}</div>`;
+    toolActions([{icon: "copy", text: "Copy", run: () => copyText(last, "The sheet was copied.")}]);
+  };
+}
+
+/* practice interview */
+const PR = {timer: null, beat: null};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const wordCount = t => (String(t || "").match(/\S+/g) || []).length;
+function practiceLeave(){
+  clearInterval(PR.timer); clearInterval(PR.beat); PR.timer = PR.beat = null;
+  if(S.pr && $("#prText")) S.pr.draft = $("#prText").value;        // an accidental Escape keeps what was typed
+  if(S.pr){ S.pr.tok = (S.pr.tok || 0) + 1; S.pr.busy = false; api("practice_mode", {on: false}); }     // late answers are dropped
+  try{ speechSynthesis.cancel(); }catch{}
+}
+function prNote(html){ $("#toolNote").innerHTML = html || ""; }
+async function openPractice(){
+  openTool("practice", "Practice interview", "play");
+  if(S.pr && ["ask", "result"].includes(S.pr.phase) && Array.isArray(S.pr.qs) && S.pr.qs.length){ return S.pr.phase === "ask" ? prAsk(true) : prResult(); }
+  S.pr = {phase: "setup"}; prSetup();
+}
+async function prSetup(){
+  const my = S.pr;
+  $("#toolBody").innerHTML = `<p class="help">Loading…</p>`; toolActions([]); prNote("");
+  const info = await api("practice_info");
+  if(S.pr !== my || TM.kind !== "practice") return;
+  if(!info || !info.ok || !info.kinds){ $("#toolBody").innerHTML = `<p class="help">${icon("alert")}The practice could not start. Try again.</p>`; return; }
+  const kinds = info.kinds;
+  const last = info && info.history && info.history.length ? info.history[info.history.length - 1] : null;
+  $("#toolBody").innerHTML = `<div class="field"><label for="prKind">Kind of interview</label>
+      <select class="input select" id="prKind">${Object.entries(kinds).map(([k, v]) => `<option value="${esc(k)}"${k === "redrill" && !info.weak ? " disabled" : ""}>${esc(v)}${k === "redrill" ? ` (${esc(String(info.weak || 0))} questions)` : ""}</option>`).join("")}</select></div>
+    <div class="field"><label for="prN">Number of questions</label>
+      <select class="input select" id="prN" style="width:auto"><option>3</option><option selected>5</option><option>7</option><option>10</option></select></div>
+    <label class="toggle"><input type="checkbox" id="prSpeak"><span class="switch"></span><span class="tt"><b>Read each question aloud</b><span>With the computer's voice.</span></span></label>
+    <div class="help" style="margin:8px 0">To answer by voice, press Start (F9) first and speak. Or type the answer in the box. While the practice is open the program only listens: no suggested answers. What you say is also written in the live transcript. Questions use your background and the job advert.</div>
+    ${last && last.avg ? `<div class="help">Last practice: ${esc(String(last.avg))} / 5 (${esc(kinds[last.kind] || last.kind || "")})</div>` : ""}
+    <div class="input-row" style="margin-top:8px"><button class="btn primary" id="prGo">${icon("play")}Start practice</button></div>`;
+  $("#prGo").onclick = () => prStart($("#prKind").value, +$("#prN").value, $("#prSpeak").checked);
+}
+async function prStart(kind, n, speak){
+  const my = S.pr; if(my.busy) return; my.busy = true;
+  const tok = my.tok = (my.tok || 0) + 1, go = () => $("#prGo");
+  if(go()) go().disabled = true;
+  prNote(`<span class="spinner"></span>Writing the questions…`);
+  const r = await api("practice_questions", {kind, n});
+  if(S.pr !== my || my.tok !== tok || TM.kind !== "practice") return;
+  my.busy = false;
+  const qs = Array.isArray(r.questions) ? r.questions.filter(x => x && typeof x.q === "string" && x.q.trim()) : [];
+  if(!r.ok || !qs.length){ prNote(`${icon("alert")}${esc(r.error || "The coach could not write questions. Try again.")}`); if(go()) go().disabled = false; return; }
+  S.pr = {phase: "ask", kind, qs, i: 0, results: [], speak, t0: Date.now(), tok: 0};
+  prAsk();
+}
+function prAsk(resume){
+  const p = S.pr, q = p.qs[p.i];
+  if(!resume || !p.t0) p.t0 = Date.now();
+  p.phase = "ask"; p.busy = false; p.tok = (p.tok || 0) + 1; p.askAt = Date.now();
+  api("practice_mode", {on: true});
+  clearInterval(PR.beat); PR.beat = setInterval(() => {
+    if(TM.kind === "practice" && S.pr && S.pr.phase === "ask") api("practice_mode", {on: true});
+    else { clearInterval(PR.beat); PR.beat = null; }                 // the window is gone: never keep the meeting muted
+  }, 60000);
+  $("#toolBody").innerHTML = `<div class="pr-meta"><span>Question ${p.i + 1} / ${p.qs.length}</span><span>${esc(Object.prototype.hasOwnProperty.call(QLABEL, q.type) ? QLABEL[q.type] : "")}</span><span id="prTime" dir="ltr">0:00</span></div>
+    <div class="pr-q" dir="auto">${esc(q.q)}</div>
+    <textarea class="input" id="prText" rows="4" dir="auto" maxlength="3000" placeholder="${S.running ? "Speak your answer, or type it here…" : "Type your answer here (or press Start, F9, to speak it)…"}"></textarea>
+    <div class="help">${S.running ? "Speak now. Press “Done answering” when you finish. Suggested answers are muted while you practise." : "The meeting is not running, so your voice is not heard. Type the answer, or press Start (F9) and speak."}</div>`;
+  prNote("");
+  toolActions([{icon: "check", text: "Done answering", run: prDone}, {icon: "play", text: "Skip", run: () => prSkip()},
+               {icon: "x", text: "Stop", run: () => prStop()}]);
+  const ta = $("#prText"); if(resume && p.draft) ta.value = p.draft; ta.focus();
+  ta.onkeydown = ev => { if(ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && !ev.isComposing){ ev.preventDefault(); prDone(); } };
+  prTick(p);
+  if(p.speak){ try{ speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(q.q); u.lang = /[\u0600-\u06FF]/.test(q.q) ? "fa-IR" : (p.kind === "english" ? "en-US" : ""); speechSynthesis.speak(u); }catch{} }
+}
+function prTick(p){
+  clearInterval(PR.timer);
+  PR.timer = setInterval(() => { const el = $("#prTime"); if(el && S.pr === p && p.phase === "ask") el.textContent = mmss(Math.floor((Date.now() - p.t0) / 1000)); }, 1000);
+}
+async function prDone(){
+  const p = S.pr; if(!p || p.phase !== "ask" || p.busy || Date.now() - (p.askAt || 0) < 400) return;   // a double click
+  p.draft = ""; p.busy = true; clearInterval(PR.timer);
+  const tok = p.tok = (p.tok || 0) + 1, live = () => S.pr === p && p.tok === tok && TM.kind === "practice";
+  toolActions([]);
+  try{ speechSynthesis.cancel(); }catch{}
+  const q = p.qs[p.i], typed = ($("#prText") ? $("#prText").value : "").trim();
+  let answer = typed, secs = 0, spoken = false;
+  if(wordCount(typed) < 3 && S.running){
+    prNote(`<span class="spinner"></span>Finishing your last words…`);
+    await sleep(2500);
+    const r = await api("practice_spoken", {since: p.t0 / 1000 - 1});
+    if(!live()) return;
+    if(r.ok && r.text){ answer = r.text; secs = Number(r.secs) || 0; spoken = true; }
+  }
+  prNote(`<span class="spinner"></span>Grading your answer…`); toolActions([]);
+  const g = await api("practice_grade", {question: q.q, answer, kind: p.kind, secs});
+  if(!live()) return;
+  p.busy = false;
+  if(g.ok && (!g.result || typeof g.result !== "object")){ g.ok = false; g.error = "The coach did not return a grade. Try again."; }
+  if(!g.ok){                                            // the box still holds a typed answer; a spoken one is read again
+    prNote(`${icon("alert")}${esc(g.error || "It failed.")}`);
+    prTick(p);
+    toolActions([{icon: "refresh", text: "Try grading again", run: prDone}, {icon: "play", text: "Skip", run: () => prSkip()},
+                 {icon: "x", text: "Stop", run: () => prStop()}]);
+    return;
+  }
+  p.results.push({q: q.q, type: q.type, answer, spoken, ...g.result});
+  p.phase = "result"; api("practice_mode", {on: false}); clearInterval(PR.beat);
+  prResult();
+}
+function prSkip(){
+  const p = S.pr; if(!p || p.busy || Date.now() - (p.askAt || 0) < 400) return;
+  p.tok = (p.tok || 0) + 1; p.draft = "";
+  const q = p.qs[p.i];
+  p.results.push({q: q.q, type: q.type, answer: "", empty: true, skipped: true, notes: []});
+  prNext();
+}
+function prNext(){
+  const p = S.pr;
+  if(p.i + 1 >= p.qs.length) return prFinish();
+  p.i++; prAsk();
+}
+function prStop(){
+  const p = S.pr;
+  if(p){ p.tok = (p.tok || 0) + 1; p.busy = false; }
+  if(p && p.results.length) return prFinish();
+  clearInterval(PR.timer); practiceLeave(); S.pr = {phase: "setup"}; prSetup();
+}
+function prResult(){
+  const p = S.pr, r = p.results[p.results.length - 1], last = p.i + 1 >= p.qs.length;
+  prNote("");
+  let h = `<div class="pr-meta"><span>Question ${p.i + 1} / ${p.qs.length}</span></div><div class="pr-q" dir="auto">${esc(r.q)}</div>`;
+  if(r.empty){
+    h += `<p class="help">${r.skipped ? "You skipped this question." : "No answer was heard. Speak with the meeting running (F9), or type the answer."}</p>`;
+  } else {
+    const keys = ["clarity", "structure", "depth", "signals", "language"];
+    h += `<div class="score-box"><div dir="ltr" style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px"><span class="score-big">${esc(String(Number(r.avg) || 0))}</span><span class="help">/ 5 · ${Number(r.secs) ? mmss(Number(r.secs)) + " · " : ""}${Number(r.words) || 0} words${Number(r.wpm) ? " · " + Number(r.wpm) + " words/min" : ""}</span></div>${scoreRows(r.scores || {}, keys)}</div>`;
+    const notes = Array.isArray(r.notes) ? r.notes : [], tips = Array.isArray(r.tips) ? r.tips : [];
+    if(notes.length || tips.length) h += `<ul ${rtlAttr()} style="margin:4px 0;padding:0 18px;line-height:1.7">${notes.concat(tips).filter(x => typeof x === "string").map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
+    if(r.better) h += `<div class="help" style="margin-top:8px">A stronger answer you could give</div><div class="pr-better" dir="auto">${esc(r.better)}</div>`;
+    if(r.follow_up) h += `<div class="help">A follow-up they might ask</div><div class="pr-q" dir="auto" style="font-size:1rem">${esc(r.follow_up)}</div>`;
+  }
+  $("#toolBody").innerHTML = h;
+  const acts = [{icon: last ? "check" : "play", text: last ? "Finish" : "Next question", run: prNext},
+                {icon: "refresh", text: "Answer this again", run: () => { p.results.pop(); prAsk(); }}];
+  if(!r.empty && r.follow_up) acts.push({icon: "sparkles", text: "Answer the follow-up", run: () => { p.qs.splice(p.i + 1, 0, {q: r.follow_up, type: ""}); prNext(); }});
+  acts.push({icon: "x", text: "Stop", run: prStop});
+  toolActions(acts);
+}
+async function prFinish(){
+  const p = S.pr; clearInterval(PR.timer); clearInterval(PR.beat); p.phase = "done"; p.tok = (p.tok || 0) + 1;
+  api("practice_mode", {on: false});
+  prNote(`<span class="spinner"></span>Saving…`); toolActions([]);
+  const res = p.results.map(r => ({q: r.q, type: r.type || "", avg: r.empty ? null : r.avg}));
+  const f = await api("practice_finish", {kind: p.kind, results: res});
+  if(S.pr !== p || TM.kind !== "practice" || p.phase !== "done") return;
+  prNote("");
+  const rows = p.results.map(r => {
+    const a = r.empty ? null : Number(r.avg);
+    return `<div class="score-row" dir="ltr" style="grid-template-columns:1fr 40px"><span dir="auto" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.q)}">${esc(r.q)}</span><b>${a ? a : "–"}</b></div>`;
+  }).join("");
+  $("#toolBody").innerHTML = `<div class="score-box"><div dir="ltr" style="display:flex;align-items:baseline;gap:8px"><span class="score-big">${f.ok && f.avg ? esc(String(f.avg)) : "–"}</span><span class="help">/ 5 average · ${p.results.length} questions</span></div>${rows}</div>
+    <p class="help">${f.ok && f.weak ? `${esc(String(f.weak))} question(s) are saved as weak spots. “Re-drill my weak spots” asks them again.` : "No weak spots. Well done."}</p>`;
+  const acts = [{icon: "play", text: "Practice again", run: () => { S.pr = {phase: "setup"}; prSetup(); }}];
+  if(f.ok && f.weak) acts.push({icon: "refresh", text: "Re-drill my weak spots", run: () => { if(S.prRe) return; S.prRe = true; S.pr = {phase: "setup", busy: false}; prStart("redrill", 5, false).finally(() => { S.prRe = false; }); }});
+  acts.push({icon: "check", text: "Close", run: closeTool});
+  toolActions(acts);
 }
 
 /* help me say */

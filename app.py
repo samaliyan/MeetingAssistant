@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.8.1"
+VERSION = "6.9"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -210,6 +210,9 @@ DEFAULTS = {
     "translate_me": True,        # a translation under my own lines too
     "answer_me": False,          # test mode: suggest answers to your own lines too
     "answer_mode": "fast",       # fast | smart
+    "job_ad": "",                # the job advert (for prep and answers; optional)
+    "debrief_scores": True,      # scores (clarity, structure, ...) in the review after a meeting
+    "auto_screen": False,        # read the screen by itself when they say "look at the screen"
     "coach": True,               # the situation card: phase, difficulty, repeated questions, a tip
     "answer_fa": True,           # the meaning (in my language) under the suggested answer
     "mic_device": "",            # "" = Windows default
@@ -616,6 +619,7 @@ def sanitize(cfg):
     if not out["about_file"]:
         out["about_source"] = "text"
     out["glossary"] = out["glossary"][:3000]
+    out["job_ad"] = out["job_ad"][:8000]
     sp = re.sub(r"[^a-z0-9_-]", "", out["screen_provider"].lower())[:40]
     out["screen_provider"] = sp if sp in ("", "groq", "llm") or sp in ids else ""
     out["screen_model"] = out["screen_model"].strip()[:120]
@@ -4398,6 +4402,13 @@ def about_text(cfg):
     return cfg.get("about_me") or ""
 
 
+def job_note(cfg, limit=900):
+    """The job advert as a few lines for a prompt (empty when none was given)."""
+    ad = " ".join(str(cfg.get("job_ad") or "").split())
+    return ("\nJob advert (use it to choose which of the user's REAL experience to stress; never to invent experience): "
+            + short(ad, limit)) if ad else ""
+
+
 def about_info(cfg):
     """For the window: which source is used, and whether the file can be read."""
     f = cfg.get("about_file") or ""
@@ -4435,6 +4446,7 @@ class Session:
         self.resumes = []                           # times the meeting was continued after a stop
         self.feedback = ""                          # the review written after the meeting
         self.screens = []                           # notes from 'Read my screen': {t, text}
+        self.scores = {}                            # readiness scores of the review
         self.coach_notes = {}                       # what the coach remembers: facts you said, topics, promises, brief ...
 
     FIELDS = ("source", "t0", "t_end", "t_text", "text", "lang", "translation", "tr_state", "answer", "answer_fa",
@@ -4445,7 +4457,7 @@ class Session:
             rows = [{k: e.get(k) for k in self.FIELDS} for e in self.entries.values()]
             return {"path": self.path, "started": self.started.timestamp(), "summary": self.summary,
                     "resumes": list(self.resumes), "feedback": self.feedback, "screens": list(self.screens),
-                    "coach_notes": dict(self.coach_notes),
+                    "coach_notes": dict(self.coach_notes), "scores": dict(self.scores),
                     "entries": rows}
 
     @classmethod
@@ -4468,6 +4480,7 @@ class Session:
             s.summary = d.get("summary") if isinstance(d.get("summary"), str) else ""
             s.feedback = d.get("feedback") if isinstance(d.get("feedback"), str) else ""
             s.coach_notes = clean_notes(d.get("coach_notes"))
+            s.scores = clean_scores(d.get("scores"))
             s.screens = [{"t": float(x["t"]), "text": x["text"]} for x in (d.get("screens") if isinstance(d.get("screens"), list) else [])
                          if isinstance(x, dict) and num(x.get("t")) and isinstance(x.get("text"), str)][:30]
             s.resumes = [float(x) for x in (d.get("resumes") if isinstance(d.get("resumes"), list) else []) if num(x)]
@@ -4513,6 +4526,12 @@ class Session:
     def set_feedback(self, text):
         with self.lock:
             self.feedback = text
+            self.scores = {}                        # a new review: the old scores no longer belong to it
+            self.dirty = True
+
+    def set_scores(self, scores):
+        with self.lock:
+            self.scores = dict(scores)
             self.dirty = True
 
     def add_screen(self, text):
@@ -4849,6 +4868,132 @@ def check_answer(rows, question):
     if not flags and words >= 30:
         flags.append("good")
     return {"qid": question["id"], "secs": round(secs), "words": words, "wpm": wpm, "flags": flags}
+
+
+# ---- practice interview (mock interviews), scores of a meeting -------------------------------------------------------
+PRACTICE_KINDS = {
+    "general": ("General interview", "a general job interview (introduction, motivation, strengths, weaknesses, experience)"),
+    "technical": ("Technical interview", "a technical interview for the user's own field (concepts, commands, real experience)"),
+    "coding": ("Coding / problem solving", "a coding or problem-solving interview where the candidate explains the approach aloud"),
+    "design": ("System design", "a system design / architecture interview"),
+    "behavioural": ("Behavioural (STAR)", "a behavioural interview that asks for real stories (STAR)"),
+    "recruiter": ("Recruiter phone screen", "a short recruiter phone screen (background, availability, notice period, salary range, motivation)"),
+    "salary": ("Salary negotiation", "a salary and offer negotiation conversation"),
+    "english": ("English speaking test", "a spoken English test in the style of IELTS speaking (part 1 short personal questions, part 2 a talk, part 3 discussion)"),
+    "redrill": ("Re-drill my weak spots", "a general job interview"),
+}
+PRACTICE_PATH = os.path.join(DATA_DIR, "practice.json")
+_practice_lock = threading.RLock()
+
+
+def load_practice():
+    try:
+        with open(PRACTICE_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = {}
+    d = d if isinstance(d, dict) else {}
+    weak = []
+    for w in (d.get("weak") if isinstance(d.get("weak"), list) else []):
+        if isinstance(w, dict) and isinstance(w.get("q"), str) and w["q"].strip():
+            try:
+                t = float(w.get("t") or 0)
+            except (TypeError, ValueError, OverflowError):
+                t = 0.0
+            weak.append({"q": clip(w["q"], 300), "t": t if math.isfinite(t) else 0.0, "type": str(w.get("type") or "")[:20]})
+    weak = weak[:40]
+    hist = [{"t": float(h["t"]) if isinstance(h.get("t"), (int, float)) and math.isfinite(h["t"]) else 0.0,
+             "kind": str(h.get("kind") or "")[:20], "avg": h["avg"] if isinstance(h.get("avg"), (int, float)) and math.isfinite(h["avg"]) else None,
+             "n": h["n"] if isinstance(h.get("n"), int) else 0}
+            for h in (d.get("history") if isinstance(d.get("history"), list) else []) if isinstance(h, dict)][-30:]
+    return {"weak": weak, "history": hist}
+
+
+def save_practice(d):
+    with _practice_lock:
+        tmp = PRACTICE_PATH + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False)
+            os.replace(tmp, PRACTICE_PATH)
+        except OSError as e:
+            log("practice results not saved:", short(e, 100), level="debug")
+
+
+def clip(v, n):
+    """Text cut to n characters; empty stays empty (short() would turn '' into the word 'str')."""
+    t = " ".join(str(v or "").split())
+    return t if len(t) <= n else t[:n] + "…"
+
+
+def score_int(v, lo=1, hi=5):
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, str):
+        v = v.split("/")[0].strip()                            # "4/5" means 4
+    try:
+        n = int(round(float(v)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return 0 if n < lo else min(hi, n)                      # below the scale = no usable score
+
+
+SCORE_KEYS = ("clarity", "structure", "depth", "signals", "follow_up")
+
+
+def clean_scores(d):
+    """A readiness score as plain numbers 1-5 and short strings (model text is never trusted to have the right shape)."""
+    if not isinstance(d, dict):
+        return {}
+    out = {k: score_int(d.get(k)) for k in SCORE_KEYS}
+    out = {k: v for k, v in out.items() if v}
+    if len(out) < 3:
+        return {}
+    out["overall"] = round(sum(out.values()) / len(out), 1)
+    fixes = d.get("fixes")
+    out["fixes"] = [clip(x, 200) for x in (fixes if isinstance(fixes, list) else [])
+                    if isinstance(x, (str, int, float)) and not isinstance(x, bool) and str(x).strip()][:3]
+    out["best"] = clip(d.get("best"), 220)
+    return out
+
+
+def reply_numbers(text, secs, qtype="", lo=0, hi=0, lang="en"):
+    """Numbers and flags about one spoken reply (used by the practice interview)."""
+    words = len(re.findall(r"\w+", text))
+    secs = secs if isinstance(secs, (int, float)) and math.isfinite(secs) else 0
+    wpm = round(words / (secs / 60)) if secs >= 8 and words >= 12 else None
+    en = (lang or "en").lower().startswith("en")
+    hedges = len(_HEDGES.findall(text)) if en else 0
+    flags = []
+    if hi and secs > hi * 1.25:
+        flags.append("long")
+    elif lo and secs < lo * 0.4 and words < 25 and qtype in ("intro", "behavioural", "design", "troubleshoot", "experience", "describe"):
+        flags.append("short")
+    if en and not _PROOF.search(text) and words >= 30 and qtype in ("behavioural", "experience", "design", "troubleshoot", "intro", "concept", "strength", "describe"):
+        flags.append("no_example")
+    if wpm and wpm > 185:
+        flags.append("fast")
+    if words >= 20 and hedges >= 3 and hedges / max(words, 1) > 0.04:
+        flags.append("hedging")
+    if not flags and words >= 30:
+        flags.append("good")
+    return {"words": words, "secs": round(secs), "wpm": wpm, "flags": flags}
+
+
+def json_from(text, kind=dict):
+    """The first JSON object (or list) in a model reply, or None (a stray brace or bracket before it is skipped)."""
+    open_ch = "{" if kind is dict else "["
+    text = text or ""
+    pos, tries = text.find(open_ch), 0
+    while pos >= 0 and tries < 20:
+        try:
+            d, _ = json.JSONDecoder().raw_decode(text[pos:])
+            if isinstance(d, kind) and (kind is dict or (d and sum(isinstance(x, str) for x in d) * 2 >= len(d))):
+                return d                                        # a list must be mostly text (skips a stray "[1]")
+        except ValueError:
+            pass
+        pos, tries = text.find(open_ch, pos + 1), tries + 1
+    return None
 
 
 def clip_middle(text, limit):
@@ -5383,6 +5528,7 @@ class Engine:
         c = self.cfg
         return (f"About the user (background): {short(about_text(c), limit) or '(not given)'}\n"
                 f"About the meeting: {short(c['context'], 400) or '(not given)'}\n"
+                + (job_note(c, 1200).strip() + "\n" if c.get("job_ad") else "") +
                 f"Meeting type: {MODES.get(c['meeting_mode'], MODES['general'])['name']}")
 
     def notes_text(self, limit=900):
@@ -5446,7 +5592,7 @@ class Engine:
     def _coach_loop(self):
         while not self.stop_event.wait(5):
             try:
-                if (not self.coach_dirty or not self.cfg["coach"] or self.paused
+                if (not self.coach_dirty or not self.cfg["coach"] or self.paused or time.time() < getattr(self.app, "practice_until", 0.0)
                         or time.time() - self.coach_last < COACH_EVERY):
                     continue
                 rows = self.session.ordered()[-8:]
@@ -6271,6 +6417,9 @@ class Engine:
 
     def _plan_answer(self, e, lang=""):
         """One answer per question. A question spoken in pieces (short pauses) is answered once, from all its pieces."""
+        if time.time() < getattr(self.app, "practice_until", 0.0):
+            self._publish(e["id"], ans_state="none")             # practice interview: the program only listens
+            return
         text = e["text"]
         end_q = text.rstrip().endswith(("?", "؟"))
         delay = ANSWER_HOLD_Q if end_q else ANSWER_HOLD
@@ -6287,7 +6436,7 @@ class Engine:
             if old:
                 old["timer"].cancel()
                 self._publish(old["eid"], ans_state="none")   # merged into the newer piece
-            if parts and time.time() - old["t_first"] > 25:
+            if parts and old and time.time() - old["t_first"] > 25:
                 parts = []                                     # a very old piece is not part of this question
             parts.append(text)
             parts = parts[-3:]
@@ -6562,7 +6711,7 @@ class Engine:
                       question=(question if question and question != e["text"] else ""))
         hist = self.session.history(e["t0"], ANSWER_HISTORY if force else 6, exclude=eid)
         system = ANSWER_SYSTEM.format(
-            context=(c["context"] or "(not given)") + glossary_note(c),
+            context=(c["context"] or "(not given)") + job_note(c) + glossary_note(c),
             style=(c["answer_style"] or DEFAULT_STYLE) + ((" " + mode_text(c, "answer")) if mode_text(c, "answer") else ""),
             about=about_text(c) or "(not given)",
             first_rule=RULE_FORCE if sure else RULE_DECIDE,
@@ -6903,6 +7052,15 @@ class Engine:
             self.session.save_if_dirty()
             pub(state="done", text=out, stats=stats)
             log(f"Feedback written ({len(rows)} lines)")
+            if c["debrief_scores"] and len(rows) >= 4:
+                try:
+                    sc = self.debrief_scores(rows, stats)
+                    if sc and self.session.feedback == out:          # a newer review may have replaced this one meanwhile
+                        self.session.set_scores(sc)
+                        self.session.save_if_dirty()
+                        pub(state="scores", text=out, stats=stats, scores=sc)
+                except Exception as ex:
+                    log("review scores not written:", short(ex, 100), level="debug")
         except Exception as ex:
             log("feedback error:", short(ex))
             pub(state="error", text="", stats=stats, note="The review failed: " + short(ex, 160))
@@ -6965,6 +7123,109 @@ class Engine:
                                                        {"role": "user", "content": user}], 600, 0.5, lambda t: None)
         ans, fa = split_answer(out)
         return {"text": ans, "meaning": fa, "lang": target}
+
+    # ---- job advert prep, practice interview, scored review (all on demand only) ----------------------------
+    def job_prep(self, ad):
+        c = self.cfg
+        ml = c["my_language"]
+        il = meeting_langs(c)[0]
+        system = (f"You prepare {c['me_label']} (a {lang_name(ml)} speaker) for a job interview. From the job advert and the "
+                  f"user's background write a preparation sheet in {lang_full(ml)}; write the example questions in "
+                  f"{lang_name(il)} (the language of the interview). Keep technical terms as they are. Markdown, in this order:\n"
+                  "## What they look for\n- 4-7 bullets: skills, tools and qualities the advert stresses.\n"
+                  "## Likely questions\n- 10 bullets: the question, then ' — ' and one short line on which REAL experience of the "
+                  "user to use (or 'gap' when the background has nothing).\n"
+                  "## Gaps and how to answer honestly\n- up to 4 bullets.\n"
+                  "## Questions to ask them\n- 4 bullets.\n"
+                  "## Checklist for today\n- 5 short bullets.\n"
+                  "Facts about the user come ONLY from 'About the user'. Never invent experience. No introduction.")
+        user = (f"About the user: {short(about_text(c), 3500) or '(not given)'}\n"
+                f"Meeting / topic: {short(c['context'], 400) or '(not given)'}\n\nJob advert:\n{short(ad, 6000)}")
+        return self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                        {"role": "user", "content": user}], 1500, 0.3, lambda t: None).strip()
+
+    def practice_questions(self, kind, n):
+        c = self.cfg
+        n = max(3, min(10, int(n)))
+        st = load_practice()
+        qs = [w["q"] for w in st["weak"]][:n] if kind == "redrill" else []
+        need = n - len(qs)
+        if need > 0:
+            il = "en" if kind == "english" else meeting_langs(c)[0]
+            desc = PRACTICE_KINDS.get(kind, PRACTICE_KINDS["general"])[1]
+            system = (f"You are a realistic interviewer running {desc}. Write {need} questions in {lang_name(il)} that a real "
+                      "interviewer would ask, one after another, from easier to harder. Use the user's background and the job "
+                      "advert when they are given, so the questions are not generic. One question per item, no numbering. "
+                      "Reply with ONE JSON array of strings and nothing else.")
+            user = (f"About the user: {short(about_text(c), 2500) or '(not given)'}\nMeeting / topic: {short(c['context'], 300) or '(not given)'}"
+                    + job_note(c, 1200) + (f"\nDo not repeat: {' | '.join(qs)}" if qs else ""))
+            out = self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                           {"role": "user", "content": user}], 700, 0.7, lambda t: None)
+            arr = json_from(out, list) or [ln.strip(" -*0123456789.)\"',[]") for ln in (out or "").splitlines()
+                                           if "?" in ln or re.match(r"\s*(\d+[.)]|[-*])\s+\S", ln)]
+            for q in arr:
+                q = clip(q, 300) if isinstance(q, str) else ""
+                if q and q not in qs:
+                    qs.append(q)
+        return [{"q": q, "type": classify_question(q)[0]} for q in qs[:n]]
+
+    def practice_grade(self, question, answer, kind, secs):
+        c = self.cfg
+        text = " ".join(str(answer or "").split())[:2500]
+        qt, lo, hi = classify_question(question)
+        il = "en" if kind == "english" else meeting_langs(c)[0]
+        nums = reply_numbers(text, float(secs or 0), qt, lo, hi, il)
+        nums["target"] = [lo, hi]
+        if nums["words"] < 3:
+            return {"empty": True, **nums, "notes": []}
+        ml = c["my_language"]
+        eng_test = kind == "english"
+        system = (f"You are a strict but kind interview coach. Grade ONE answer that {c['me_label']} spoke to a practice question. "
+                  "The answer is a speech transcript: ignore punctuation and small recognition errors. Reply with ONE JSON "
+                  "object and nothing else. Keys: \"clarity\", \"structure\", \"depth\", \"signals\" (proof: real examples, "
+                  "numbers, results) - each a whole number 1-5 (3 = acceptable)"
+                  + (", \"language\" (fluency, grammar, vocabulary, 1-5)" if eng_test else "") +
+                  f"; \"tips\": up to 3 short concrete improvements in {lang_full(ml)}; \"better\": a stronger version the user could "
+                  f"say, in {lang_name(il)}, 4-7 spoken sentences, using only facts from 'About the user' (a placeholder such as "
+                  f"[number] when a fact is missing); \"follow_up\": the follow-up question a real interviewer would ask next, in {lang_name(il)}."
+                  + (f"\n{mode_text(c, 'feedback')}" if mode_text(c, "feedback") else ""))
+        user = (f"About the user: {short(about_text(c), 2500) or '(not given)'}" + job_note(c, 700) +
+                f"\n\nQuestion: {question}\n\nThe user's answer ({nums['secs']} s, {nums['words']} words):\n{text}")
+        d = json_from(self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                               {"role": "user", "content": user}], 700, 0.2, lambda t: None))
+        if d is None:
+            raise APIError("The coach did not return a usable grade. Try again.")
+        keys = ("clarity", "structure", "depth", "signals") + (("language",) if eng_test else ())
+        scores = {k: score_int(d.get(k)) for k in keys}
+        got = [v for v in scores.values() if v]
+        if len(got) >= len(keys) - 1 and got:                    # one missing key gets the average of the others
+            fill = max(1, round(sum(got) / len(got)))
+            scores = {k: (v or fill) for k, v in scores.items()}
+        if not all(scores.values()):
+            raise APIError("The coach did not return a usable grade. Try again.")
+        tips = [clip(x, 200) for x in (d.get("tips") if isinstance(d.get("tips"), list) else [])
+                if isinstance(x, (str, int, float)) and not isinstance(x, bool) and str(x).strip()][:3]
+        lang = "fa" if ml == "fa" else "en"
+        return {"empty": False, **nums, "scores": scores, "avg": round(sum(scores.values()) / len(scores), 1), "tips": tips,
+                "better": clip(d.get("better"), 1200), "follow_up": clip(d.get("follow_up"), 300),
+                "notes": [ANSWER_NOTES[f][1 if lang == "fa" else 0] for f in nums["flags"]], "type": qt}
+
+    def debrief_scores(self, rows, stats):
+        """Readiness scores for a finished meeting (one small request after the written review)."""
+        c = self.cfg
+        ml = c["my_language"]
+        me = c["me_label"]
+        lines = "\n".join(f"{self.session.label(r)}: {short(r['text'], 400)}" for r in rows)
+        system = (f"You score how {me} did in the meeting below. Reply with ONE JSON object and nothing else. Keys: \"clarity\", "
+                  "\"structure\", \"depth\", \"signals\" (real examples, numbers, results), \"follow_up\" (how well the answers "
+                  "held up when the other side asked more) - each a whole number 1-5 (3 = acceptable); \"fixes\": the 3 most useful "
+                  f"things to fix, short, in {lang_full(ml)}; \"best\": one short sentence about the best moment, in {lang_full(ml)}. "
+                  "Use only the transcript."
+                  + (f"\n{mode_text(c, 'feedback')}" if mode_text(c, "feedback") else ""))
+        out = self.chat_patient(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                           {"role": "user", "content": clip_middle(lines, 9000)}], 450, 0.2,
+                                lambda t: None, tries=3)
+        return clean_scores(json_from(out))
 
     def ask_past(self, question, hits):
         c = self.cfg
@@ -7417,6 +7678,8 @@ class App:
         self.download = None
         self.review = None           # after a meeting: summary, explanations and answers still work
         self.tool_eng = None         # engine for the tools when no meeting is on screen
+        self.started_at = 0.0
+        self.practice_until = 0.0    # practice interview open until this time (answers and coach stay quiet)
         self.hide_state = None       # the hidden window's own report (from its status file)
         try:
             os.remove(HIDE_STATUS_PATH)          # a report left by an earlier run is not true any more
@@ -7492,7 +7755,7 @@ class App:
                 "local": LOCAL.info(), "llm": LLM.info(),
                 "download": self.download.state if self.download else None,
                 "overlay": self.overlay.on, "paused": bool(eng and eng.paused), "summary": s.summary if s else "",
-                "feedback": s.feedback if s else "",
+                "feedback": s.feedback if s else "", "feedback_scores": dict(s.scores) if s else {},
                 "resume": self.resume_info(),
                 "hide": self.hide_state,
                 "recording": self.recording.state if self.recording else None}
@@ -7791,6 +8054,8 @@ class App:
 
     def api_start(self, resume=False):
         """resume=True: go on with the last meeting (same file, same transcript) instead of a new one."""
+        self.practice_until = 0.0                    # a practice window left open never mutes a real meeting
+        self.started_at = time.time()
         if not self.running and not self.stopping and not self.missing_tasks():
             bad = self.preflight()
             if bad:
@@ -8424,6 +8689,107 @@ class App:
         want = (not self.overlay.on) if on is None else bool(on)
         err = self.overlay.start() if want else self.overlay.stop()
         return {"ok": not err, "on": self.overlay.on, **({"error": err} if err else {})}
+
+    def api_job_prep(self, ad=""):
+        ad = str(ad or "").strip() or str(self.cfg.get("job_ad") or "").strip()
+        if len(ad) < 40:
+            return {"ok": False, "error": "Paste the job advert first (at least a few lines)."}
+        try:
+            return {"ok": True, "text": self._practice_engine().job_prep(ad)}
+        except AuthError as e:
+            return {"ok": False, "error": str(e)}
+        except APIError as e:
+            return {"ok": False, "error": short(e, 200)}
+
+    def _practice_engine(self):
+        return self.engine if (self.engine and not self.engine.stop_event.is_set()) else self.tool_engine()
+
+    def api_practice_info(self):
+        st = load_practice()
+        return {"ok": True, "weak": len(st["weak"]), "history": st["history"][-6:], "running": self.running,
+                "kinds": {k: v[0] for k, v in PRACTICE_KINDS.items()}}
+
+    def api_practice_mode(self, on=False):
+        """While a practice is open the meeting engine only listens (no answers, no coach). It expires by itself."""
+        if on and self.running and time.time() - self.started_at < 8:
+            return {"ok": True, "ignored": True}                # a heartbeat right after a real Start does not mute it
+        self.practice_until = time.time() + 150 if on else 0.0
+        eng = self.engine
+        if on and eng and not eng.stop_event.is_set():
+            eng._plan_cancel()                                   # an answer that was already waiting is not written
+        return {"ok": True}
+
+    def api_practice_questions(self, kind="general", n=5):
+        kind = kind if isinstance(kind, str) and kind in PRACTICE_KINDS else "general"
+        try:
+            qs = self._practice_engine().practice_questions(kind, int(n or 5))
+        except AuthError as e:
+            return {"ok": False, "error": str(e)}
+        except APIError as e:
+            return {"ok": False, "error": short(e, 200)}
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "Wrong input."}
+        if not qs:
+            return {"ok": False, "error": "The coach could not write questions. Try again."}
+        return {"ok": True, "questions": qs, "kind": kind}
+
+    def api_practice_spoken(self, since=0):
+        """What the user said (microphone) since the question was shown."""
+        eng = self.engine
+        if not eng or eng.stop_event.is_set():
+            return {"ok": True, "text": "", "running": False}
+        try:
+            t0 = float(since)
+        except (TypeError, ValueError):
+            t0 = 0.0
+        rows = [r for r in eng.session.ordered() if r["source"] == "me" and (r.get("t_end") or 0) >= t0 and (r.get("text") or "").strip()]
+        secs = sum(max(0.0, min(300.0, (r.get("t_end") or 0) - (r.get("t0") or 0))) for r in rows)      # time spent speaking
+        return {"ok": True, "text": " ".join(r["text"].strip() for r in rows)[:4000], "secs": round(secs, 1), "running": True}
+
+    def api_practice_grade(self, question="", answer="", kind="general", secs=0):
+        question = str(question or "").strip()[:400]
+        if not question:
+            return {"ok": False, "error": "There is no question."}
+        try:
+            res = self._practice_engine().practice_grade(question, str(answer or "")[:4000],
+                                                         kind if isinstance(kind, str) and kind in PRACTICE_KINDS else "general",
+                                                         float(secs or 0))
+        except AuthError as e:
+            return {"ok": False, "error": str(e)}
+        except APIError as e:
+            return {"ok": False, "error": short(e, 200)}
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "Wrong input."}
+        return {"ok": True, "result": res}
+
+    def api_practice_finish(self, kind="general", results=None):
+        """Saves the weak questions (average below 3.5, or no answer) so they can be practised again; returns the summary."""
+        rs = [r for r in (results if isinstance(results, list) else []) if isinstance(r, dict) and isinstance(r.get("q"), str) and r["q"].strip()][:25]
+        with _practice_lock:                                        # load, change, save: one at a time
+            return self._practice_finish(kind, rs)
+
+    def _practice_finish(self, kind, rs):
+        st = load_practice()
+        weak = {w["q"]: w for w in st["weak"]}
+        avgs = []
+        for r in rs:
+            q, avg = clip(r["q"], 300), r.get("avg")
+            if isinstance(avg, bool) or not isinstance(avg, (int, float)) or not math.isfinite(avg):
+                avg = None
+            good = avg is not None and avg >= 3.5
+            if avg is not None:
+                avgs.append(min(5.0, max(0.0, float(avg))))
+            if good:
+                weak.pop(q, None)                                   # answered well now
+            else:
+                weak[q] = {"q": q, "t": time.time(), "type": str(r.get("type") or "")[:20]}
+        st["weak"] = sorted(weak.values(), key=lambda w: -w["t"])[:40]
+        avg_all = round(sum(avgs) / len(avgs), 1) if avgs else None
+        st["history"] = (st["history"] + [{"t": time.time(), "kind": kind if isinstance(kind, str) and kind in PRACTICE_KINDS else "general",
+                                           "avg": avg_all, "n": len(rs)}])[-30:]
+        save_practice(st)
+        self.practice_until = 0.0
+        return {"ok": True, "avg": avg_all, "weak": len(st["weak"])}
 
     def api_pause(self, on=None):
         eng = self.engine
@@ -10311,7 +10677,7 @@ def open_window(url):
 OV_TITLE = "MA-Overlay"
 OVERLAY_STATUS_PATH = os.path.join(DATA_DIR, ".overlay.json")
 OVERLAY_POS_PATH = os.path.join(DATA_DIR, ".overlay_pos.json")
-OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right")}
+OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "screen": (0x53, "S"), "answer": (0x41, "A"), "coach": (0x48, "H"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right")}
 
 
 class Overlay:
@@ -10543,6 +10909,14 @@ class Overlay:
         self.keys_thread = threading.Thread(target=self._keys, daemon=True, name="overlay-keys")
         self.keys_thread.start()
 
+    def _hotkey_call(self, fn):
+        try:
+            r = fn()
+            if isinstance(r, dict) and not r.get("ok"):
+                self.app.hub.toast("warn", str(r.get("error") or "It did not work."))
+        except Exception as e:
+            log("overlay key problem:", short(e, 120), level="debug")
+
     def _keys(self):
         import ctypes
         from ctypes import wintypes as wt
@@ -10557,17 +10931,23 @@ class Overlay:
                 names[i] = cmd
             else:
                 log(f"The key Ctrl+Alt+{label} is used by another program: use the Overlay button instead.", level="warn")
-        arrows = {}
+        arrows, tried = {}, False
         msg = wt.MSG()
         while not self.app.closing.is_set():
-            if self.on and not arrows:
+            if self.on and not tried:
+                tried = True
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
-                    if cmd != "toggle" and u.RegisterHotKey(None, i, 0x2 | 0x1, vk):
+                    if cmd == "toggle":
+                        continue
+                    once = 0x4000 if cmd in ("screen", "answer", "coach") else 0       # no auto-repeat for these
+                    if u.RegisterHotKey(None, i, 0x2 | 0x1 | once, vk):
                         arrows[i] = cmd
-            elif not self.on and arrows:
+                    else:
+                        log(f"The key Ctrl+Alt+{label} is used by another program (overlay).", level="warn")
+            elif not self.on and tried:
                 for i in list(arrows):
                     u.UnregisterHotKey(None, i)
-                arrows = {}
+                arrows, tried = {}, False
             while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):      # WM_HOTKEY
                 cmd = names.get(msg.wParam) or arrows.get(msg.wParam)
                 if cmd == "toggle":
@@ -10575,6 +10955,10 @@ class Overlay:
                 elif cmd in ("more", "less"):
                     a = int(self.app.cfg.get("overlay_alpha") or 65) + (5 if cmd == "more" else -5)
                     threading.Thread(target=self.app.api_save_config, kwargs={"overlay_alpha": max(30, min(100, a))}, daemon=True).start()
+                elif cmd == "screen":
+                    threading.Thread(target=self._hotkey_call, args=(self.app.api_screen,), daemon=True).start()
+                elif cmd == "answer":
+                    threading.Thread(target=self._hotkey_call, args=(self.app.api_answer_now,), daemon=True).start()
                 elif cmd:
                     self.app.hub.publish("ov_cmd", cmd=cmd)
             time.sleep(0.04)

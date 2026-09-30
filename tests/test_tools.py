@@ -1067,3 +1067,178 @@ def test_overlay_api_off_windows(app):
     finally:
         app.sys.platform = real
     assert app.DEFAULTS["overlay_alpha"] == 65 and app.DEFAULTS["overlay_hide"] is True and app.CHOICES["overlay_pos"] == ("top", "bottom")
+
+
+def _chat_returns(eng, text, seen=None):
+    eng.chat_targets = lambda task: [("groq", "a", None)]
+    def chat(chain, messages, *a, **k):
+        if seen is not None:
+            seen.append(messages)
+        return text
+    eng.run_chat = chat
+
+
+def test_scores_clean_and_saved(app, tmp_path):
+    sc = app.clean_scores({"clarity": 4, "structure": "3", "depth": 9, "signals": 0, "follow_up": 2.6, "fixes": ["a", "", 5, {"x": 1}, "b", "c", "d"], "best": " ok "})
+    assert sc["clarity"] == 4 and sc["structure"] == 3 and sc["depth"] == 5 and "signals" not in sc and sc["follow_up"] == 3
+    assert sc["fixes"] == ["a", "5", "b"] and sc["best"] == "ok" and sc["overall"] == round((4 + 3 + 5 + 3) / 4, 1)
+    assert app.clean_scores({"clarity": 4}) == {} and app.clean_scores("x") == {} and app.clean_scores({"clarity": float("inf"), "structure": 1, "depth": 1}) == {}
+    eng, sess, calls = _engine(app)
+    import time
+    now = time.time()
+    for i, (src, t) in enumerate([("them", "Explain OSPF areas to me please"), ("me", "OSPF areas split the network so that routers keep small tables"),
+                                  ("them", "And what is a stub area exactly"), ("me", "A stub area blocks external routes and uses a default route")]):
+        sess.add(src, now - 100 + i * 10, now - 95 + i * 10, t, "en", [], None)
+    _chat_returns(eng, 'Here: {"clarity": 4, "structure": 3, "depth": 4, "signals": 2, "follow_up": 3, "fixes": ["Add a number"], "best": "OSPF answer"}')
+    got = eng.debrief_scores(sess.ordered(), {})
+    assert got["overall"] == 3.2 and got["fixes"] == ["Add a number"]
+    sess.set_scores(got)
+    assert sess.state()["scores"]["clarity"] == 4
+    sess.set_feedback("new review")
+    assert sess.scores == {}                                   # the old scores do not belong to a new review
+
+
+def test_job_prep_and_note(app):
+    eng, sess, calls = _engine(app)
+    eng.cfg["job_ad"] = "Senior Oracle DBA. RMAN, Data Guard, Linux, 5+ years. " * 3
+    assert "Senior Oracle DBA" in app.job_note(eng.cfg) and app.job_note({"job_ad": ""}) == ""
+    assert "Senior Oracle DBA" in eng.coach_background(1000)
+    seen = []
+    _chat_returns(eng, "## What they look for\n- RMAN", seen)
+    out = eng.job_prep(eng.cfg["job_ad"])
+    assert out.startswith("## What they look for") and "Job advert" in seen[0][1]["content"]
+    a = app.App.__new__(app.App)
+    a.engine = None
+    a.cfg = {"job_ad": ""}
+    a.tool_eng = None
+    assert a.api_job_prep("short")["ok"] is False
+
+
+def test_practice_questions_grade_and_finish(app, tmp_path):
+    import time
+    app.PRACTICE_PATH = str(__import__("pathlib").Path(tmp_path) / "practice.json")
+    eng, sess, calls = _engine(app)
+    _chat_returns(eng, 'Sure: ["Tell me about yourself", "Why this job?", "Tell me about yourself", 5, ""]')
+    qs = eng.practice_questions("general", 5)
+    assert [q["q"] for q in qs] == ["Tell me about yourself", "Why this job?"] and qs[0]["type"] == "intro"
+    _chat_returns(eng, "1. What is RMAN?\n2. Explain Data Guard\nnot a question")
+    assert [q["q"] for q in eng.practice_questions("technical", 3)] == ["What is RMAN?", "Explain Data Guard"]
+    app.save_practice({"weak": [{"q": "Old weak question?", "t": 1, "type": ""}], "history": []})
+    _chat_returns(eng, '["New one?"]')
+    q = eng.practice_questions("redrill", 3)
+    assert q[0]["q"] == "Old weak question?" and q[1]["q"] == "New one?"
+    # grading
+    good = ("At my last company I migrated forty databases to a new RMAN scheme in three months and cut the restore time by half. " * 2)
+    _chat_returns(eng, '{"clarity": 4, "structure": 4, "depth": 3, "signals": 5, "tips": ["Shorter"], "better": "Say it in one line.", "follow_up": "How did you test it?"}')
+    r = eng.practice_grade("Tell me about a time you improved backups", good, "behavioural", 45)
+    assert r["avg"] == 4.0 and r["follow_up"].startswith("How") and r["scores"]["signals"] == 5 and not r["empty"]
+    assert eng.practice_grade("Why this job?", "um", "general", 3)["empty"] is True      # no model call for no answer
+    _chat_returns(eng, "no json here")
+    try:
+        eng.practice_grade("Why this job?", good, "general", 40)
+        assert False
+    except app.APIError:
+        pass
+    _chat_returns(eng, '{"clarity": 4, "structure": 4, "depth": 3, "signals": 5, "language": 0}')
+    r = eng.practice_grade("Describe a place", good, "english", 40)    # one missing score gets the average of the others
+    assert r["scores"]["language"] == 4
+    _chat_returns(eng, '{"clarity": 4, "structure": 0, "depth": 0, "signals": 5}')
+    try:
+        eng.practice_grade("Describe a place", good, "english", 40)     # too many missing scores are not accepted
+        assert False
+    except app.APIError:
+        pass
+    # finish: good answers leave the weak list, bad ones and empty ones enter it
+    a = app.App.__new__(app.App)
+    a.practice_until = time.time() + 100
+    out = a.api_practice_finish("general", [{"q": "Old weak question?", "avg": 4.2}, {"q": "Bad one?", "avg": 2.0}, {"q": "Skipped?", "avg": None},
+                                            {"q": 5}, "x", {"q": "Bool?", "avg": True}])
+    st = app.load_practice()
+    assert out["avg"] == 2.7 or out["avg"] == 3.1
+    assert {w["q"] for w in st["weak"]} == {"Bad one?", "Skipped?", "Bool?"} and a.practice_until == 0.0
+    assert st["history"][-1]["kind"] == "general"
+
+
+def test_practice_mutes_answers_and_coach(app):
+    import time
+    eng, sess, calls = _engine(app)
+    eng.app.practice_until = time.time() + 60
+    try:
+        _say(app, eng, "Tell me about a time you led a team through an outage?")
+        time.sleep(0.6)
+        assert calls == [] and eng.plan is None
+        eng.app.practice_until = 0.0
+        _say(app, eng, "Tell me about a time you led a team through another outage?")
+        time.sleep(0.8)
+        assert len(calls) == 1
+    finally:
+        eng.stop_event.set()
+
+
+def test_overlay_keys_and_new_defaults(app):
+    for k in ("toggle", "more", "less", "screen", "answer", "coach", "up", "down", "prev", "next"):
+        assert k in app.OV_KEYS
+    assert app.DEFAULTS["auto_screen"] is False and app.DEFAULTS["debrief_scores"] is True and app.DEFAULTS["job_ad"] == ""
+
+
+def test_second_piece_after_the_first_was_answered(app):
+    import time
+    eng, sess, calls = _engine(app)
+    try:
+        _say(app, eng, "Tell me about a time")
+        time.sleep(1.5)                                          # the first piece is answered already (no plan is waiting)
+        assert len(calls) == 1
+        _say(app, eng, "when you led a team through an outage")  # used to raise TypeError (old plan is None)
+        time.sleep(1.8)
+        assert len(calls) == 2 and "outage" in calls[1][2] and "Tell me about a time" in calls[1][2]
+    finally:
+        eng.stop_event.set()
+
+
+def test_json_from_and_clip_and_practice_file(app, tmp_path):
+    assert app.json_from('Scores {see} {"a": 1}') == {"a": 1}
+    assert app.json_from('[1] refs ["q?"]', list) == ["q?"]                # a stray [1] is skipped
+    assert app.json_from("no json") is None and app.json_from(None) is None and app.json_from('{"a": ', dict) is None
+    assert app.clip("", 10) == "" and app.clip(None, 10) == "" and app.clip("a  b", 10) == "a b" and app.clip("x" * 20, 5) == "xxxxx…"
+    sc = app.clean_scores({"clarity": 4, "structure": 4, "depth": 4})
+    assert sc["best"] == "" and sc["fixes"] == []                          # a missing text stays empty (never the word "str")
+    assert app.score_int(True) == 0 and app.score_int(0) == 0 and app.score_int(8) == 5 and app.score_int("x") == 0
+    path = __import__("pathlib").Path(tmp_path) / "practice.json"
+    app.PRACTICE_PATH = str(path)
+    path.write_text('{"weak": [{"q": "Ok?", "t": "bad"}, {"q": 5}, "x"], "history": [{"t": "x", "avg": "y", "n": "z"}, 5]}', encoding="utf-8")
+    st = app.load_practice()
+    assert st["weak"] == [{"q": "Ok?", "t": 0.0, "type": ""}] and st["history"][0]["avg"] is None
+    a = app.App.__new__(app.App)
+    a.practice_until = 0.0
+    out = a.api_practice_finish("general", [{"q": "N?", "avg": float("nan")}, {"q": "I?", "avg": float("inf")}, {"q": "Fine?", "avg": 9}])
+    assert out["ok"] and out["avg"] == 5.0                                 # only usable numbers count, and never above 5
+    path.write_text("not json", encoding="utf-8")
+    assert app.load_practice() == {"weak": [], "history": []}
+
+
+def test_practice_mute_leaves_no_thinking_line(app):
+    import time
+    eng, sess, calls = _engine(app)
+    eng.app.practice_until = time.time() + 60
+    try:
+        _say(app, eng, "Tell me about a time you led a team through an outage?")
+        time.sleep(0.5)
+        row = [r for r in sess.ordered() if r["source"] == "them"][0]
+        assert row.get("ans_state") == "none" and calls == []
+    finally:
+        eng.stop_event.set()
+
+
+def test_job_ad_is_capped(app):
+    assert len(app.sanitize({"job_ad": "x" * 20000})["job_ad"]) == 8000
+
+
+def test_round2_fixes(app):
+    assert app.score_int("4/5") == 4 and app.score_int(" 3 / 5") == 3
+    assert app.reply_numbers("hello there", float("inf"))["secs"] == 0
+    a = app.App() if hasattr(app, "App") else None
+    if a is not None:
+        assert a.api_practice_questions(kind=["x"], n=float("inf"))["ok"] is False
+        assert a.api_practice_grade(question="Q?", answer="a", kind={"a": 1}, secs=float("inf")).get("ok") in (True, False)
+        a.running, a.started_at = True, __import__("time").time()
+        assert a.api_practice_mode(on=True).get("ignored") is True and a.practice_until == 0.0

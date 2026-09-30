@@ -1,4 +1,13 @@
-# Meeting Assistant — User Guide (version 6.8.1)
+# Meeting Assistant — User Guide (version 6.9)
+
+## Version 6.9: practice, job advert, scores
+
+- **Practice interview**: Tools › Practice interview. Choose the kind (general, behavioural, technical, English level test, weak spots) and how many questions. The coach asks one question at a time (it can read it aloud). Type the answer, or press Start (F9) and speak, then press "Done answering" (or Ctrl+Enter). You get scores, seconds, words and pace, tips, a stronger answer and the likely follow-up. "Re-drill my weak spots" asks the weak ones again.
+- While you practise, suggested answers and the coach are muted. If a meeting is running, the practice lines are also in its transcript, so stop the meeting when you finish.
+- **Prepare for the job**: paste the job advert in Setup › "Job advert" (or Tools › Prepare for the job). You get what they look for and likely questions. The advert is also used in answers and by the coach.
+- **Scores in the review**: bars for clarity, structure, depth, proof and follow-up, and the most useful fixes. Turn off with Setup › "Scores in the review".
+- **Read the screen by itself** (off by default): Setup › "Read the screen by itself".
+- **Overlay**: Ctrl+Alt+S read the screen, Ctrl+Alt+A answer now, Ctrl+Alt+H ask the coach.
 
 ## Version 6.8: quieter, movable, hidden overlay
 
