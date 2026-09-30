@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.9"
+VERSION = "6.9.1"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -10451,6 +10451,8 @@ def run_overlay_helper(argv):
     u.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
     u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
+    u.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+    u.GetAsyncKeyState.argtypes = [ctypes.c_int]
     sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
     try:                                                     # where it was left last time
         with open(OVERLAY_POS_PATH, "r", encoding="utf-8") as f:
@@ -10533,7 +10535,7 @@ def run_overlay_helper(argv):
                                            (0x24, 0x2 | 0x1 | 0x4), (0x23, 0x2 | 0x1 | 0x4)], 1):
                 if u.RegisterHotKey(None, 100 + i, mod, vk):
                     keys[100 + i] = ("move", (-1, 0), (1, 0), (0, -1), (0, 1), "bigger", "smaller")[i - 1]
-            msg, last = wt.MSG(), 0.0
+            msg, last, drag = wt.MSG(), 0.0, None
             while not stop.is_set():
                 while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):
                     k = keys.get(msg.wParam)
@@ -10557,12 +10559,35 @@ def run_overlay_helper(argv):
                         st["h"] = int(min(sh, max(140, st["h"] * f)))
                         u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10)
                         save_pos()
+                if st["move"]:                                     # own mouse drag: does not depend on the web view
+                    pt = wt.POINT()
+                    u.GetCursorPos(ctypes.byref(pt))
+                    lb, rb = bool(u.GetAsyncKeyState(0x01) & 0x8000), bool(u.GetAsyncKeyState(0x02) & 0x8000)
+                    if (lb or rb) and drag is None:
+                        read_rect(hwnd)
+                        if st["x"] <= pt.x <= st["x"] + st["w"] and st["y"] <= pt.y <= st["y"] + st["h"]:
+                            drag = (rb and not lb, pt.x, pt.y, st["x"], st["y"], st["w"], st["h"])
+                    elif (lb or rb) and drag:
+                        rs, x0, y0, ox, oy, ow, oh = drag
+                        if rs:                                     # right button: bigger / smaller
+                            nw, nh = int(min(sw, max(400, ow + pt.x - x0))), int(min(sh, max(140, oh + pt.y - y0)))
+                            u.SetWindowPos(hwnd, -1, ox, oy, nw, nh, 0x10)
+                        else:                                      # left button: move
+                            nx = int(min(sw - 80, max(-ow + 80, ox + pt.x - x0)))
+                            ny = int(min(sh - 40, max(0, oy + pt.y - y0)))
+                            u.SetWindowPos(hwnd, -1, nx, ny, 0, 0, 0x1 | 0x10)
+                    elif drag:
+                        drag = None
+                        read_rect(hwnd)
+                        save_pos()
+                else:
+                    drag = None
                 if time.time() - last > 0.8:
                     last = time.time()
-                    if st["move"]:
+                    if st["move"] and drag is None:
                         read_rect(hwnd)
                     apply(hwnd, *settings())
-                stop.wait(0.04)
+                stop.wait(0.012 if st["move"] else 0.04)
             for i in keys:
                 u.UnregisterHotKey(None, i)
         except Exception as e:

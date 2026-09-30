@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.9.1]
+
+Fix: the see-through window could not be moved with the mouse in move mode (Ctrl+Alt+M). Now the program follows the mouse itself: hold the left button and drag to move, hold the right button and drag to resize. The keys (Ctrl+Alt+Shift + arrows, Home / End) still work.
+
 ## [6.9]
 
 Practice interview, job-ad preparation, scores in the review. Everything is an option; nothing that worked before changes.

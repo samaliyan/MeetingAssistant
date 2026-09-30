@@ -1,4 +1,8 @@
-# Meeting Assistant — User Guide (version 6.9)
+# Meeting Assistant — User Guide (version 6.9.1)
+
+## Version 6.9.1
+
+- **Move the overlay with the mouse**: press **Ctrl+Alt+M**, hold the **left** mouse button on the window and drag to move it, hold the **right** button and drag to resize. Press **Ctrl+Alt+M** again to lock.
 
 ## Version 6.9: practice, job advert, scores
 
