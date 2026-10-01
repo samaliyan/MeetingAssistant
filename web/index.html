@@ -263,7 +263,7 @@ body.ov{background:#414958;color:#e9edf3;overflow:hidden}
 body.ov #ovBox{position:fixed;inset:0;display:flex;flex-direction:column;padding:8px 12px;background:#414958;border:1px solid rgba(255,255,255,.14);box-sizing:border-box}
 body.ov #newQ{margin:0 0 6px;padding:2px 8px;font-size:.8rem;background:#57607a;border:0;color:#e9edf3}
 body.ov #newQ span,body.ov #newQ u{display:none}
-body.ov .answer-body{padding:2px 4px;opacity:calc(var(--ovtext,85) / 100)}
+body.ov .answer-body{padding:2px 4px;opacity:calc(var(--ovtext,85) / 100);flex:1 12 auto;min-height:2.4em;overflow-y:auto}
 body.ov .q-label,body.ov .a-fa-label,body.ov .rep-note{display:none}
 body.ov .q-block{background:transparent;border:0;padding:0;margin-bottom:8px}
 body.ov .q-orig,body.ov .q-fa{font-size:.95rem;color:#c9d0db}
@@ -272,8 +272,10 @@ body.ov .a-fa{margin-top:8px}
 body.ov .a-fa p{color:#d3d9e3}
 body.ov .answer-empty{color:#c9d0db;opacity:.8}
 body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
-#ovCoach{flex:none;max-height:6.4em;overflow:hidden;font-size:.82rem;color:#c0c8d6;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.1);margin-top:4px;opacity:calc(var(--ovtext,85) / 100)}
+#ovCoach{white-space:pre-line;flex:0 1 auto;min-height:1.6em;max-height:45%;overflow-y:auto;overscroll-behavior:contain;font-size:.82rem;color:#c0c8d6;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.1);margin-top:4px;opacity:calc(var(--ovtext,85) / 100)}
 #ovCoach.alert{color:#f0c9a8}
+#ovCoach.help{max-height:65%;font-size:.88rem;color:#dfe5ee}
+#ovCoach .say{display:block;margin-top:3px;color:#eef1f6;font-weight:500}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
 body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · Ctrl+Alt+M: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
 #ovBtn.on{color:var(--accent);border-color:var(--accent)}
@@ -293,6 +295,7 @@ body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · C
 .co-diff{display:inline-flex;gap:2px;align-items:center}
 .co-diff i{width:6px;height:6px;border-radius:50%;background:var(--border)}
 .co-diff i.on{background:var(--amber)}
+.co-say{padding:6px 9px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:.9rem;line-height:1.5;font-weight:500}
 .co-tip{padding:6px 9px;border-radius:8px;background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--text);font-size:.85rem;line-height:1.5}
 .co-top{display:flex;align-items:center;gap:8px}
 .co-top .co-live{flex:1;min-width:0}
@@ -795,6 +798,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <div class="co-check" id="coCheck" hidden></div>
           <div class="co-alert" id="coAlert" hidden></div>
           <div class="co-tip" id="coTip" hidden></div>
+          <div class="co-say" id="coSay" dir="ltr" hidden></div>
           <div class="co-help" id="coHelp" hidden></div>
           <div class="co-actions"><button class="btn sm ghost" id="coAsk"><span data-icon="sparkles"></span>Ask coach <kbd>F4</kbd></button><button class="btn sm ghost" id="coNotes"><span data-icon="list"></span>Coach notes</button></div>
           <div class="co-askrow" id="coAskRow" hidden><input class="input" id="coAskText" dir="auto" maxlength="400" placeholder="Ask the coach anything about now…"><button class="btn sm primary" id="coAskGo">Send</button></div>
@@ -1386,7 +1390,10 @@ function handle(m){
     case "overlay": S.overlay = !!m.on; renderOverlayBtn(); return;
     case "ov_cmd":
       if(OVERLAY){
-        const sc = $("#ovScreen"), b = sc && !sc.hidden ? sc : $("#answerBody");
+        const sc = $("#ovScreen"), oc = $("#ovCoach"), down = m.cmd === "down";
+        const room = oc && !oc.hidden && oc.scrollHeight > oc.clientHeight + 4 &&
+          (down ? oc.scrollTop + oc.clientHeight < oc.scrollHeight - 2 : oc.scrollTop > 0);     // a long coach text scrolls first, then the answer
+        const b = sc && !sc.hidden ? sc : room ? oc : $("#answerBody");
         if(m.cmd === "up" || m.cmd === "down") b.scrollBy({top: (m.cmd === "down" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"});
         else if(m.cmd === "prev") stepAnswer(-1); else if(m.cmd === "next") stepAnswer(1);
         else if(m.cmd === "coach") askCoach("");
@@ -1886,25 +1893,39 @@ function renderCoach(){
   const txt = nudge || (c && c.tip ? c.tip : "");
   tip.hidden = !txt;
   if(txt && tip.textContent !== txt){ tip.setAttribute("dir", "auto"); tip.textContent = txt; }
+  const sayEl = $("#coSay"), sayTxt = !nudge && c && c.say && txt ? c.say : "";   // the exact words, in the language of the meeting, on their own line
+  sayEl.hidden = !sayTxt; if(sayTxt && sayEl.textContent !== sayTxt) sayEl.textContent = "“" + sayTxt + "”";
   if(OVERLAY){                                                        // one short line for the see-through window
     const oc = $("#ovCoach");
-    const hp = S.coHelp && (S.coHelp.busy || (S.coHelpAt && Date.now() - S.coHelpAt < 45000)) ? (S.coHelp.busy ? "…" : S.coHelp.text || S.coHelp.err || "") : "";
+    const hp = S.coHelp && (S.coHelp.busy || (S.coHelpAt && Date.now() - S.coHelpAt < 75000)) ? (S.coHelp.busy ? "…" : (S.coHelp.text ? (p => p.main + (p.say ? "\n“" + p.say + "”" : ""))(splitSay(S.coHelp.text)) : (S.coHelp.err || ""))) : "";
     let t = hp || alt || [lv && lv.time ? mmss(lv.time) + (q && q.qmax ? " / " + mmss(q.qmax) : "") : "", txt || (q && q.qhint) || ""].filter(Boolean).join(" · ");
-    if(t.length > 260) t = t.slice(0, 260).replace(/\s+\S*$/, "") + "…";       // the box is small: cut at a word
-    oc.hidden = !t; oc.classList.toggle("alert", !!alt);
-    if(oc.textContent !== t){ oc.setAttribute("dir", "auto"); oc.textContent = t; }
+    let say = "";
+    if(hp && S.coHelp && S.coHelp.text){ const p = splitSay(S.coHelp.text); t = p.main; say = p.say; }
+    else if(!alt && sayTxt) say = sayTxt;
+    const key = t + "|" + say;                                         // nothing is cut: the line scrolls (Ctrl+Alt+Up/Down) when it is long
+    oc.hidden = !t && !say; oc.classList.toggle("alert", !!alt); oc.classList.toggle("help", !!hp);
+    if(oc.dataset.k !== key){
+      const keep = oc.scrollTop, same = oc.dataset.s === (hp || alt || txt) + "|" + say;   // only the clock changed: keep the scroll
+      oc.dataset.k = key; oc.dataset.s = (hp || alt || txt) + "|" + say; oc.setAttribute("dir", "auto"); oc.textContent = t;
+      if(say){ const sp = document.createElement("span"); sp.className = "say"; sp.dir = "auto"; sp.textContent = "“" + say + "”"; oc.append(sp); }
+      oc.scrollTop = same ? keep : 0;
+    }
   }
   // help you asked for
   const hp = $("#coHelp"), h = S.coHelp;
   hp.hidden = !h;
   if(h){
-    setH(hp, `<button class="x" aria-label="Close">×</button>` + (h.busy ? `<span class="spinner"></span> The coach is thinking…` : h.err ? `<span style="color:var(--danger)">${esc(h.err)}</span>` : `<div dir="auto">${esc(h.text)}</div>`));
+    setH(hp, `<button class="x" aria-label="Close">×</button>` + (h.busy ? `<span class="spinner"></span> The coach is thinking…` : h.err ? `<span style="color:var(--danger)">${esc(h.err)}</span>` : (() => { const p = splitSay(h.text); return `<div dir="auto">${esc(p.main)}</div>` + (p.say ? `<div dir="ltr" class="co-say" style="margin-top:6px">“${esc(p.say)}”</div>` : ""); })()));
     const x = hp.querySelector(".x"); if(x) x.onclick = () => { S.coHelp = null; renderCoach(); };
   }
 }
 setInterval(renderCoach, 1000);
 function coFolded(){ let f = S.coFold; try{ const v = localStorage.getItem("ma.coach.fold"); if(v !== null) f = v === "1"; }catch{} return !!f; }
 function setCoFold(f){ S.coFold = !!f; try{ localStorage.setItem("ma.coach.fold", f ? "1" : "0"); }catch{} }
+function splitSay(t){                                               // "advice ... SAY: words" -> the advice and the words to speak
+  const m = String(t || "").match(/^([\s\S]*?)\n?\s*SAY:\s*([\s\S]*)$/i);
+  return m ? {main: m[1].trim(), say: m[2].trim().replace(/^["“”']+|["“”']+$/g, "")} : {main: String(t || "").trim(), say: ""};
+}
 async function askCoach(text){
   if(!S.running){ toast("info", "Start the meeting first."); return; }
   if(S.cfg && S.cfg.coach === false){ toast("info", "The coach is off (Settings)."); return; }

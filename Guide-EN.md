@@ -1,4 +1,14 @@
-# Meeting Assistant — User Guide (version 6.10)
+# Meeting Assistant — User Guide (version 6.11)
+
+## Version 6.11: a smarter coach
+
+- The coach watches the moment: the open question, your silence, your length, repeated questions, the answer on screen.
+- Silent after a question? It gives you a first sentence to start with. Talking too long? A closing sentence. Pay, weakness, "why are you leaving", "any questions for us"? The expert move, with the words to say.
+- In the overlay the coach text is never cut: it takes up to half of the window and scrolls with **Ctrl+Alt+↑ / ↓**.
+
+## Version 6.10.2
+
+- **The coach gives the words to say.** Besides the short tip in your language, a line below it shows the exact sentence to speak in the language of the meeting. The same when you press Ask coach or Ctrl+Alt+H.
 
 ## Version 6.10: health check
 

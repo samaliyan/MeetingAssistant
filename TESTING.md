@@ -22,6 +22,7 @@ Ways of checking:
 | Speech to text: Groq, OpenAI-compatible | encoder and fallback only | – | yes | – | real services |
 | Deepgram live | fake server only | – | yes | – | real account, Farsi, key limits |
 | Local Whisper / local AI | – | – | yes | – | real models, GPU / CPU speed |
+| Coach (situation, silence, kinds of question, words to say) | yes (fake model) | yes (overlay layout) | yes | – | quality of real coach text, real silence timing |
 | Practice interview, job advert, scores | yes | yes | yes (2 rounds) | – | speech reading aloud (voices) |
 | Local server, token, host check | yes (real localhost server) | yes | yes | – | – |
 | Web page: transcript, answer panel, settings, tools | – | yes | yes | – | WebView2 differences, fonts |

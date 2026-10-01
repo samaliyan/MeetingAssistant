@@ -2,6 +2,25 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.11]
+
+A smarter coach, and room for its words in the see-through window.
+
+- **The coach sees the moment, not only the transcript**: which question is open, how long ago it was asked, whether you have started answering (it listens to your microphone, even before any text exists), how long you have talked, whether they asked again, and the suggested answer already on your screen (so it adds what is missing instead of repeating it).
+- **It acts in the situations that matter**, in this order: you are silent after a question (about 7 s, or 14 s when an answer is already shown) - it gives a first sentence to start with, once per question; you contradicted yourself - an alert; you talk too long - a closing sentence; they asked again - what to give this time; known kinds of questions (pay, weakness, why are you leaving, why us, a career gap, start date or visa, tell me about yourself, your questions for us, closing) - the move an expert would make.
+- **It looks right after a real question** (not only every 45 s), never more than once every 25 s, and always after the suggested answer is written, so it does not compete with the answers for the free limits. In a class or a work meeting it never says "you are stuck".
+- **Help (Ask coach, Ctrl+Alt+H)** gets the same picture: if you did not understand the question it explains it and gives a clarifying question; if you do not know the answer it gives an honest bridge; then the exact words to say.
+- **See-through window**: the coach text is never cut any more. The coach line takes up to 45% of the window (65% while help is shown) and scrolls; Ctrl+Alt+Up/Down scroll the coach text first and then the answer. Help stays on screen for 75 s.
+- 99 automated tests.
+
+## [6.10.2]
+
+The coach now gives the exact words to say. Its tip stays short and in your language; when the tip is about saying something, a separate line shows the sentence in the language of the meeting (for example English), also in the see-through window. Help from the coach (Ctrl+Alt+H or Ask coach) does the same: advice first, then the sentence to speak. 97 automated tests.
+
+## [6.10.1]
+
+Small hardening from a checklist review: the sound buffer of a microphone or of the computer sound is capped, so a stuck reader can never grow the memory without end. Nothing else changes.
+
 ## [6.10]
 
 A full independent audit, a health check button, and a real Windows check of the overlay.

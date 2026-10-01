@@ -1285,3 +1285,66 @@ def test_session_save_survives_odd_text_and_tells(app, tmp_path):
     sess._save()                                                              # a lone surrogate does not lose the file
     assert os.path.isfile(sess.path)
     eng.stop_event.set()
+
+
+def test_coach_gives_the_words_to_say(app):
+    eng, sess, calls = _engine(app)
+    eng.chat_targets = lambda task: [("groq", "a", None)]
+    seen = {}
+
+    def chat(chain, messages, *a, **k):
+        seen["system"] = messages[0]["content"]
+        return ('{"phase": "intro", "topic": "x", "difficulty": 2, "trend": "same", "signal": "neutral", '
+                '"tip": "بگو رشته‌ات", "say": "I graduated in computer engineering.", "alert": "", "notes": {}}')
+    eng.run_chat = chat
+    now = __import__("time").time()
+    sess.add("them", now - 20, now - 15, "Where did you study?", "en", [], None)
+    sess.add("them", now - 10, now - 5, "And your degree?", "en", [], None)
+    eng._coach_run()
+    assert "English" in seen["system"]       # the words to say are asked for in the meeting language
+    assert eng.coach_state["say"] == "I graduated in computer engineering."
+    eng.coach_help("what now?")
+    assert "SAY:" in seen["system"] and "English" in seen["system"]
+    eng.stop_event.set()
+
+
+def test_coach_situation_sees_silence_repeats_and_kinds(app):
+    import time
+    eng, sess, calls = _engine(app)
+    now = time.time()
+    eng.cfg["transcribe_me"] = True
+    eng.app.captures = [type("Cap", (), {"source": "me"})()]
+    e = sess.add("them", now - 14, now - 10, "What are your salary expectations for this role?", "en", [], None)
+    sit, stuck, _q = eng.coach_situation()
+    assert stuck and "NOT started answering" in sit and "Pay question" in sit
+    sess.add("me", now - 5, now - 1, "I am looking for a range of", "en", [], None)
+    sit, stuck, _q = eng.coach_situation()
+    assert not stuck and "answered for about" in sit
+    assert app.coach_intents("What is the cache hit rate and the single point of failure in high availability?") == []
+    eng.cfg["meeting_mode"] = "lecture"
+    sess.add("them", now - 9, now - 8, "Why does the optimizer pick this plan?", "en", [], None)
+    assert eng.coach_situation()[1] is False                # a class: nobody expects the user to answer
+    assert [n for n, _ in app.coach_intents("Do you have any questions for us?")] == ["your_questions"]
+    assert app.coach_intents("We use Oracle here.") == []
+    eng.stop_event.set()
+
+
+def test_coach_rescues_a_stuck_user_once(app):
+    import time
+    eng, sess, calls = _engine(app)
+    eng.cfg["coach"] = True
+    eng.cfg["transcribe_me"] = True
+    eng.app.captures = [type("Cap", (), {"source": "me"})()]
+    runs = []
+    eng._coach_run = lambda: runs.append(time.time())
+    now = time.time()
+    sess.add("them", now - 12, now - 9, "Can you explain how Data Guard switchover works?", "en", [], None)
+    eng.coach_dirty = False
+    waits = iter([False, False, True])
+    eng.stop_event.wait = lambda t: next(waits)
+    eng.coach_last = now - 20
+    eng._coach_loop()
+    assert len(runs) == 1                                   # silent after a question: one look at once, not twice
+    eng.me_voice_at = time.time()                            # the mic hears the user: not stuck
+    assert eng.coach_situation()[1] is False
+    eng.stop_event.set()
