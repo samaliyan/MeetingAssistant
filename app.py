@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.11"
+VERSION = "6.12"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -3981,6 +3981,7 @@ About the user: {about}
 Rules:
 {first_rule}
 - Otherwise output only the words the user should say: first person, {answer_lang}, natural spoken style. No preface, no quotes, no markdown.
+- The FIRST sentence must answer the question directly and stand on its own (it is shown in bold and may be the only thing the user reads before speaking); the next sentences add the example, the steps or the detail.
 - Personal facts (name, age, education, employers, years, projects, numbers, certificates, salary, locations) come ONLY from "About the user". Never invent or guess one; if it is needed and not given, write a short placeholder such as [your name] or [years] instead.
 - Technical content must be correct. State only what you are sure is right; if a detail (a number, version, command or limit) is uncertain, say it in general terms instead of guessing. Never make up products, features or experience.
 - Stay on the meeting's topic and role. Do not pad the answer with generic filler.

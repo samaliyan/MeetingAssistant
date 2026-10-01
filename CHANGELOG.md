@@ -2,6 +2,19 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.12]
+
+Easier to read at a glance (a strict review of the screens, the text sizes and the colours by independent reviewers).
+
+- **The answer gets the room.** While an answer is on screen, the coach card shrinks to one status line and the tip; **Details** opens the rest. The question block is smaller (the English question is two lines, click it for all; the Persian meaning stays). On a 1366×768 laptop the answer now starts about 200 pixels higher and fits without scrolling.
+- **Start speaking after one glance**: the first sentence of the answer is bold (a long first sentence only up to its first comma); answers are now written so that the first sentence answers the question on its own. The rest is slightly lighter. Lines are at most about 66 characters, so the eyes do not travel across a wide screen.
+- **The Persian meaning of the answer** is larger (0.9 of the answer size instead of 0.8).
+- **Text sizes**: no information text is smaller than 12 px (keys, badges) or 13 px (hints, chips, times); the coach text is larger; Persian text in the interface uses the Persian font.
+- **Colours**: grey hints, green, orange and red texts are darker, so they pass the usual contrast rule; clearer keyboard focus.
+- **See-through window**: words never fade below 60% and get a soft shadow, so they stay readable over a bright video; the coach line is larger; in a very small window the English question is hidden and the Persian meaning stays.
+- **Small**: the Tools button keeps its name on laptops; the review shows labels and Persian text on separate lines and no empty number tiles; clearer error messages (what to do next); "Answer engine" is now "Answer speed"; the practice note is two short lines.
+- 99 automated tests.
+
 ## [6.11]
 
 A smarter coach, and room for its words in the see-through window.

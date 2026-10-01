@@ -1,4 +1,10 @@
-# Meeting Assistant — User Guide (version 6.11)
+# Meeting Assistant — User Guide (version 6.12)
+
+## Version 6.12: easier to read
+
+- While an answer is on screen the coach card is one line; press **Details** for the rest.
+- The first sentence of the answer is **bold**: start with it.
+- Bigger, clearer text and colours; the overlay text stays readable over a bright video.
 
 ## Version 6.11: a smarter coach
 

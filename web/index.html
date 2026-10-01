@@ -14,13 +14,13 @@
   --scale:1; --answer-size:24px;
   --bg:#f3f4f7; --surface:#ffffff; --surface-2:#f8f9fb; --surface-3:#eef0f4;
   --border:#e4e7ec; --border-strong:#cfd4dc;
-  --text:#101828; --text-2:#344054; --muted:#667085; --faint:#98a2b3;
+  --text:#101828; --text-2:#344054; --muted:#5d6679; --faint:#7a8396;
   --accent:#4f46e5; --accent-hover:#4338ca; --accent-soft:#eef0ff; --accent-text:#3730a3;
   --them:#1d4ed8; --them-soft:#e8efff; --me:#0f766e; --me-soft:#e2f5f2;
   --fa:#4c2a9a; --fa-soft:#f7f5ff; --fa-border:#c9b8f5;
   --amber:#b45309; --amber-soft:#fff7e6; --amber-border:#f7d38a; --on-amber:#ffffff;
-  --danger:#d92d20; --danger-soft:#fef3f2; --danger-border:#fcc9c4;
-  --ok:#079455; --ok-soft:#ecfdf3; --warn:#dc6803; --warn-soft:#fffaeb;
+  --danger:#b42318; --danger-soft:#fef3f2; --danger-border:#fcc9c4;
+  --ok:#067647; --ok-soft:#ecfdf3; --warn:#b54708; --warn-soft:#fffaeb;
   --shadow-sm:0 1px 2px rgba(16,24,40,.05);
   --shadow:0 1px 3px rgba(16,24,40,.08),0 1px 2px rgba(16,24,40,.04);
   --shadow-lg:0 20px 40px -12px rgba(16,24,40,.25);
@@ -61,6 +61,7 @@
 }
 
 *{box-sizing:border-box}
+:where(:dir(rtl)){font-family:var(--font-fa)}
 html{font-size:calc(14px * var(--scale))}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;overflow:hidden}
@@ -238,15 +239,19 @@ button.chip:hover{filter:brightness(.97)}
 .answer-card .card-head h2 svg{color:var(--amber)}
 .thinking{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;color:var(--amber);background:var(--amber-soft);border:1px solid var(--amber-border);padding:2px 9px;border-radius:999px}
 .answer-body{flex:1;overflow-y:auto;padding:16px 18px;min-height:0}
-.answer-body.more{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent)}
-.q-block{padding:12px 14px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);margin-bottom:16px}
+.answer-body.more{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 18px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 18px),transparent)}
+.q-block{padding:8px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);margin-bottom:10px}
 .q-label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;display:flex;gap:6px}
-.q-orig{margin:0;font-size:.98rem;line-height:1.55;color:var(--text-2)}
-.q-fa{margin:6px 0 0;font-family:var(--font-tr);color:var(--text);font-size:1.15rem;line-height:1.85;text-align:start}
-.a-text{font-size:var(--answer-size);line-height:1.5;font-weight:500;letter-spacing:-.005em;color:var(--text);overflow-wrap:anywhere;margin:0;white-space:pre-wrap}
+.q-orig{margin:0;font-size:.95rem;line-height:1.5;color:var(--text-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.q-block.open .q-orig{-webkit-line-clamp:unset}.q-orig{cursor:pointer}
+.q-fa{margin:4px 0 0;font-family:var(--font-tr);color:var(--text);font-size:1.15rem;line-height:1.8;font-weight:500;text-align:start}
+.a-text{font-size:var(--answer-size);line-height:1.5;font-weight:500;letter-spacing:-.005em;color:var(--text);overflow-wrap:anywhere;margin:0;white-space:pre-wrap;max-width:66ch}
+.a-lead{font-weight:700;color:var(--text)}
+.a-rest{color:var(--text-2)}
 .a-fa{margin-top:18px;padding-top:14px;border-top:1px dashed var(--border-strong)}
 .a-fa-label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-.a-fa p{margin:0;font-family:var(--font-tr);font-size:calc(var(--answer-size) * .8);line-height:1.85;color:var(--text-2);text-align:start}
+.a-fa p[dir=rtl]{margin-left:auto}
+.a-fa p{margin:0;font-family:var(--font-tr);font-size:calc(var(--answer-size) * .9);line-height:1.85;color:var(--text-2);text-align:start;max-width:66ch}
 .answer-empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);gap:8px;padding:20px}
 .answer-empty svg{width:34px;height:34px;color:var(--faint)}
 .answer-empty b{color:var(--text-2);font-size:.95rem}
@@ -263,23 +268,27 @@ body.ov{background:#414958;color:#e9edf3;overflow:hidden}
 body.ov #ovBox{position:fixed;inset:0;display:flex;flex-direction:column;padding:8px 12px;background:#414958;border:1px solid rgba(255,255,255,.14);box-sizing:border-box}
 body.ov #newQ{margin:0 0 6px;padding:2px 8px;font-size:.8rem;background:#57607a;border:0;color:#e9edf3}
 body.ov #newQ span,body.ov #newQ u{display:none}
-body.ov .answer-body{padding:2px 4px;opacity:calc(var(--ovtext,85) / 100);flex:1 12 auto;min-height:2.4em;overflow-y:auto}
+body.ov .answer-body{padding:2px 4px;opacity:max(.6,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.45);flex:1 12 auto;min-height:2.4em;overflow-y:auto}
 body.ov .q-label,body.ov .a-fa-label,body.ov .rep-note{display:none}
 body.ov .q-block{background:transparent;border:0;padding:0;margin-bottom:8px}
-body.ov .q-orig,body.ov .q-fa{font-size:.95rem;color:#c9d0db}
+body.ov .q-orig,body.ov .q-fa{font-size:.95rem;color:#dfe5ee;-webkit-line-clamp:1;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+body.ov .a-rest{color:#e6eaf1}
+@media (max-height:240px){ body.ov .q-orig{display:none} }
 body.ov .a-text{color:#eef1f6}
 body.ov .a-fa{margin-top:8px}
 body.ov .a-fa p{color:#d3d9e3}
 body.ov .answer-empty{color:#c9d0db;opacity:.8}
 body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
-#ovCoach{white-space:pre-line;flex:0 1 auto;min-height:1.6em;max-height:45%;overflow-y:auto;overscroll-behavior:contain;font-size:.82rem;color:#c0c8d6;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.1);margin-top:4px;opacity:calc(var(--ovtext,85) / 100)}
+#ovCoach{white-space:pre-line;flex:0 1 auto;min-height:1.6em;max-height:45%;overflow-y:auto;overscroll-behavior:contain;font-size:.92rem;line-height:1.55;color:#dfe5ee;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.12);margin-top:4px;opacity:max(.6,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.45)}
 #ovCoach.alert{color:#f0c9a8}
 #ovCoach.help{max-height:65%;font-size:.88rem;color:#dfe5ee}
 #ovCoach .say{display:block;margin-top:3px;color:#eef1f6;font-weight:500}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
 body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · Ctrl+Alt+M: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
 #ovBtn.on{color:var(--accent);border-color:var(--accent)}
-.coach{max-height:38vh;overflow-y:auto;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.8rem}
+.coach{max-height:34vh;overflow-y:auto;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.88rem}
+.coach.compact #coHow,.coach.compact #coChips,.coach.compact #coSay,.coach.compact .co-actions{display:none}
+.co-more{margin-inline-start:auto;min-height:28px;padding:2px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--accent-text);font:inherit;font-size:.86rem;font-weight:600;cursor:pointer}
 .co-live{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-2)}
 .co-live .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
 .co-live.ask .dot{background:var(--them);animation:pulse 1.2s infinite}
@@ -296,7 +305,7 @@ body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · C
 .co-diff i{width:6px;height:6px;border-radius:50%;background:var(--border)}
 .co-diff i.on{background:var(--amber)}
 .co-say{padding:6px 9px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:.9rem;line-height:1.5;font-weight:500}
-.co-tip{padding:6px 9px;border-radius:8px;background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--text);font-size:.85rem;line-height:1.5}
+.co-tip{padding:6px 10px;border-radius:8px;background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--text);font-size:.98rem;line-height:1.7}
 .co-top{display:flex;align-items:center;gap:8px}
 .co-top .co-live{flex:1;min-width:0}
 .co-fold{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:.9rem;padding:2px 6px;border-radius:6px}
@@ -304,7 +313,7 @@ body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · C
 .coach.fold .co-body{display:none}
 .coach.fold .co-fold{transform:rotate(-90deg)}
 .co-body{display:grid;gap:6px;max-height:34vh;overflow-y:auto;padding-right:2px}
-.co-how{padding:6px 9px;border-radius:8px;background:var(--surface);border:1px solid var(--border);font-size:.82rem;line-height:1.5}
+.co-how{padding:6px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border);font-size:.93rem;line-height:1.65}
 .co-how b{color:var(--accent)}
 .co-bar{height:5px;border-radius:3px;background:var(--surface-3);margin-top:5px;overflow:hidden;position:relative}
 .co-bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .4s linear,background .3s}
@@ -397,6 +406,7 @@ body.capturing .toasts{right:auto;left:16px}
 .input,.select,textarea.input{width:100%;border:1px solid var(--border-strong);background:var(--surface);border-radius:10px;padding:9px 12px;font-size:.92rem;line-height:1.45;transition:border-color .15s,box-shadow .15s}
 textarea.input{resize:vertical;min-height:76px}
 .input:focus,.select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.input:focus-visible,.select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .input-row{display:flex;gap:8px}
 .input-row .input{flex:1}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -653,13 +663,18 @@ details.more .rate-box{border:0;padding:0}
 .offline div{max-width:380px;line-height:1.6}
 .offline b{font-size:1.1rem;display:block;margin-bottom:6px}
 
+/* ---------- readable minimums: 12 px for badges and keys, 13 px for help and hints (at 100%) ---------- */
+:root :is(kbd,.tag,.badge,.q-label,.a-fa-label,.opt-title,.opt-state,.live-tag,.badge-live,.badge-prev,.badge-local){font-size:.857rem}
+kbd{opacity:1}
+:root :is(.meta,.help,.statusbar,.co-chip,.chip,.schip,.svc-sub,.toggle .tt span,.answer-foot .hint,.stat-tile span,.legend){font-size:.929rem}
+.meta .edited{color:var(--muted)}
 /* ---------- narrow windows ---------- */
 @media (max-width:1180px){ .card-head .legend{display:none} }
 body:not(.capturing) .card-head .legend{display:none}
-@media (max-width:1400px){ .card-head .btn.sm .hide-sm{display:none} .card-head .btn.sm{width:32px;padding:0} }
+@media (max-width:1400px){ .card-head .btn.sm:not(.keep-label) .hide-sm{display:none} .card-head .btn.sm:not(.keep-label){width:32px;padding:0} }
 @media (max-width:1350px){ #sbDelay{display:none} }
 body.capturing #sbDelay,body.capturing #sbUsage{display:none}
-.btn:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:1px}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 @media (max-width:1100px){ #sbUsage{display:none} }
 @media (max-width:900px){ .subtitle{display:none} }
 @media (max-width:1060px){ .card-head .btn.sm .hide-sm{display:none} }
@@ -755,13 +770,13 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <h2><span data-icon="text"></span><span id="feedTitle">Live transcript</span></h2>
         <span class="spacer"></span>
         <div class="legend" id="legend"></div>
-        <button class="btn sm ghost" id="toolsBtn" title="Read my screen, review, help me say, search old meetings, export" aria-haspopup="true"><span data-icon="sparkles"></span><span class="hide-sm">Tools</span></button>
+        <button class="btn sm ghost keep-label" id="toolsBtn" title="Read my screen, review, help me say, search old meetings, export" aria-haspopup="true"><span data-icon="sparkles"></span><span class="hide-sm">Tools</span></button>
         <button class="btn sm ghost" id="recBtn" title="Transcribe and translate a recorded audio or video file"><span data-icon="file"></span><span class="hide-sm">Transcribe a file…</span></button>
         <button class="btn sm ghost" id="summaryBtn" title="A summary of this meeting in your language"><span data-icon="list"></span><span class="hide-sm">Summary</span></button>
         <button class="btn icon ghost" id="copyAllBtn" title="Copy the whole transcript" aria-label="Copy the whole transcript"><span data-icon="copy"></span></button>
       </div>
       <div class="toolpop" id="toolPop" hidden role="menu">
-        <button data-tool="screen" role="menuitem"><span data-icon="eye"></span><span class="tp-text">Read my screen<small>A question or code on screen → the answer</small></span><kbd>F3</kbd></button>
+        <button data-tool="screen" role="menuitem"><span data-icon="eye"></span><span class="tp-text">Read my screen<small>Answers a question or code on your screen</small></span><kbd>F3</kbd></button>
         <button data-tool="say" role="menuitem"><span data-icon="edit"></span><span class="tp-text">Help me say…<small>Your rough idea → what to say</small></span></button>
         <button data-tool="jobprep" role="menuitem"><span data-icon="list"></span><span class="tp-text">Prepare for the job<small>Paste the advert: likely questions and a checklist</small></span></button>
         <button data-tool="practice" role="menuitem"><span data-icon="play"></span><span class="tp-text">Practice interview<small>Questions one by one, your answer is graded</small></span></button>
@@ -791,7 +806,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <button class="btn icon ghost" id="copyBtn" title="Copy answer" aria-label="Copy answer"><span data-icon="copy"></span></button>
       </div>
       <div class="coach" id="coach" hidden>
-        <div class="co-top"><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-fold" id="coFold" aria-expanded="true" title="Show or hide the coach details" aria-label="Show or hide the coach details">▾</button></div>
+        <div class="co-top"><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-more" id="coMore" hidden>Details</button><button class="co-fold" id="coFold" aria-expanded="true" title="Show or hide the coach details" aria-label="Show or hide the coach details">▾</button></div>
         <div class="co-body" id="coBody">
           <div class="co-how" id="coHow" hidden></div>
           <div class="co-chips" id="coChips"></div>
@@ -915,7 +930,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         </div>
       </div>
       <div class="field">
-        <span class="label">Answer engine</span>
+        <span class="label">Answer speed</span>
         <div class="opt-cards" data-key="answer_mode">
           <button class="opt" data-val="fast"><b><span data-icon="zap"></span>Fastest</b><span>Answer starts almost instantly. Recommended.</span></button>
           <button class="opt" data-val="smart"><b><span data-icon="sparkles"></span>Deeper</b><span>Stronger model for hard technical questions. About half a second slower.</span></button>
@@ -1151,7 +1166,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <label for="fOvA">Overlay: how see-through the window is <b id="ovAVal">65%</b></label>
         <div class="range-row"><span>More see-through</span><input type="range" id="fOvA" min="30" max="100" step="5" data-key="overlay_alpha"><span>More solid</span></div>
         <label for="fOvT" style="margin-top:8px">Overlay: how strong the words are <b id="ovTVal">85%</b></label>
-        <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="30" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
+        <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="60" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
         <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd> (drag it with the mouse, press again to lock), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> with the arrows; <kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller.</div>
@@ -1537,7 +1552,7 @@ async function toggleRun(resume){
   finally{ S.busy = false; renderRunning(); }
   if(!r.ok){
     if(r.error === "setup"){ openDrawer("connection"); toast("warn", "Setup is not complete: " + (r.missing || []).join("; ") + ". Add Groq (free) or another service."); }
-    else toast("error", r.error || "Could not start.");
+    else toast("error", r.error || "Could not start. Open Setup › Services and press Test all parts to see which part fails.");
   }
 }
 
@@ -1850,11 +1865,14 @@ function renderCoach(){
   setH($("#coLive"), `<span class="dot"></span><span>${esc(lv ? lv.text : "")}</span>` + (lv && lv.time ? `<span class="co-time" aria-hidden="true">${mmss(lv.time)}</span>` : ""));
   const q = curQuestion(), c = S.coach, speaking = iAmSpeaking();
   const lang = (S.cfg && S.cfg.my_language) || "en";
+  const hasAns = !!(q && q.answer && ["streaming", "done"].includes(q.ans_state));
+  const compact = hasAns && !speaking && S.coOpenQ !== (q && q.id);
+  box.classList.toggle("compact", compact); $("#coMore").hidden = !compact;   // the answer gets the room; one click shows the details
   // how to answer this kind of question, with a time guide while you speak
   const how = $("#coHow");
   if(q && q.qhint){
     const lo = q.qmin || 0, hi = q.qmax || 0, el = S.meStart && speaking ? Math.floor((Date.now() - S.meStart) / 1000) : 0;
-    let h = `<div ${rtlAttr()}><b>${esc(QLABEL[q.qtype] || "Question")}</b> · ${esc(q.qhint)}</div>`;
+    let h = `<div class="help" style="font-weight:600">${esc(QLABEL[q.qtype] || "Question")}</div><div ${rtlAttr()}>${esc(q.qhint)}</div>`;
     if(hi){
       const pct = Math.min(100, Math.round(100 * el / (hi * 1.25))), cls = el > hi * 1.25 ? "over" : el > hi ? "mid" : "";
       h += `<div class="help" style="margin-top:3px">Aim for ${mmss(lo)}–${mmss(hi)}${el ? ` · now ${mmss(el)}` : ""}${el > hi ? " · wrap up with one closing sentence" : ""}</div>` +
@@ -1901,7 +1919,7 @@ function renderCoach(){
     let t = hp || alt || [lv && lv.time ? mmss(lv.time) + (q && q.qmax ? " / " + mmss(q.qmax) : "") : "", txt || (q && q.qhint) || ""].filter(Boolean).join(" · ");
     let say = "";
     if(hp && S.coHelp && S.coHelp.text){ const p = splitSay(S.coHelp.text); t = p.main; say = p.say; }
-    else if(!alt && sayTxt) say = sayTxt;
+    else if(!alt && sayTxt && !(q && q.answer)) say = sayTxt;      // an answer is on screen: one script, not two
     const key = t + "|" + say;                                         // nothing is cut: the line scrolls (Ctrl+Alt+Up/Down) when it is long
     oc.hidden = !t && !say; oc.classList.toggle("alert", !!alt); oc.classList.toggle("help", !!hp);
     if(oc.dataset.k !== key){
@@ -1944,6 +1962,7 @@ $("#coAskGo").onclick = () => {
 };
 $("#coAskText").onkeydown = ev => { if(ev.key === "Enter" && !ev.isComposing){ ev.preventDefault(); $("#coAskGo").click(); } };
 $("#coFold").onclick = () => { setCoFold(!coFolded()); renderCoach(); };
+$("#coMore").onclick = () => { const q = curQuestion(); if(q){ S.coOpenQ = q.id; renderCoach(); } };
 $("#coNotes").onclick = () => openNotes(false);
 function openNotes(auto){
   const n = S.notes || {}, b = n.brief && typeof n.brief === "object" ? n.brief : {};
@@ -2044,6 +2063,21 @@ function svcLine(c){
   const T = c.tasks || {}, n = [...new Set(["stt", "tr", "ans"].map(t => (T[t] || {}).service).filter(Boolean))];
   return n.length === 1 ? n[0] + " does everything" : ["stt", "tr", "ans"].map(t => `${(T[t] || {}).label}: ${(T[t] || {}).service}`).join(" · ");
 }
+function setAnswerText(el, t){          // first sentence bold: the user can start speaking after one glance
+  t = String(t || "");
+  if(el.dataset.t === t) return;
+  el.dataset.t = t;
+  const m = t.match(/^[\s\S]{20,240}?[.!?؟](?=\s|$)/);
+  let lead = m ? m[0] : (t.length < 240 ? t : "");             // still streaming the first sentence: it is all lead (no jump later)
+  if(lead.length > 130){                                       // a long first sentence: bold only its first part
+    const cut = lead.slice(40).search(/,\s|\s(because|so|and|which|but)\s/i);
+    if(cut >= 0) lead = lead.slice(0, 40 + cut + 1);
+  }
+  const L = el.querySelector(".a-lead"), R = el.querySelector(".a-rest");
+  if(L && R && L.textContent === lead){ R.textContent = t.slice(lead.length); return; }   // only the rest grew: keep the rest of the text as it is
+  if(!lead){ el.textContent = t; return; }
+  el.innerHTML = `<span class="a-lead">${esc(lead)}</span><span class="a-rest">${esc(t.slice(lead.length))}</span>`;
+}
 function renderAnswer(){
   const body = $("#answerBody");
   const e = S.panelId != null ? S.entries.get(S.panelId) : null;
@@ -2064,7 +2098,7 @@ function renderAnswer(){
   const key = [e.id, !!showFa, !!(e.translation && !e.question), e.question || e.text, e.forced, S.running, e.repeat || 0].join("|");
   if(body.dataset.key === key && body.querySelector(".a-text")){
     const at = body.querySelector(".a-text");
-    if(at.textContent !== e.answer) at.textContent = e.answer;
+    setAnswerText(at, e.answer);
     at.classList.toggle("caret", streaming && !e.answer_fa);
     const fp = body.querySelector(".a-fa p");
     if(fp){ if(fp.textContent !== e.answer_fa) fp.textContent = e.answer_fa; fp.classList.toggle("caret", streaming); }
@@ -2077,7 +2111,7 @@ function renderAnswer(){
   if(body.dataset.eid !== String(e.id)){ body.scrollTop = 0; body.dataset.eid = String(e.id); }     // a new answer starts at its top
   body.innerHTML = `
     <div class="q-block">
-      <div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc(label(e.source, e.speaker))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>
+      ${e.forced || !S.running || (newestAnswered() && newestAnswered().id !== e.id) ? `<div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc(label(e.source, e.speaker))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>` : ""}
       <p class="q-orig" dir="auto"></p>
       ${e.translation && !e.question ? `<p class="q-fa" ${trAttr()}></p>` : ""}
     </div>
@@ -2085,8 +2119,9 @@ function renderAnswer(){
     <p class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></p>
     ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
   body.querySelector(".q-orig").textContent = e.question || e.text;
+  body.querySelector(".q-orig").onclick = ev => ev.currentTarget.parentNode.classList.toggle("open");
   if(e.translation && !e.question) body.querySelector(".q-fa").textContent = e.translation;
-  body.querySelector(".a-text").textContent = e.answer;
+  setAnswerText(body.querySelector(".a-text"), e.answer);
   if(showFa) body.querySelector(".a-fa p").textContent = e.answer_fa;
   requestAnimationFrame(() => body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8));
   if(S.flashId !== e.id){ S.flashId = e.id; const a = body.querySelector(".a-text"); a.classList.add("fresh"); setTimeout(() => a.classList.remove("fresh"), 900); }
@@ -2695,7 +2730,7 @@ function renderCaps(card, p){
   if(b) b.onclick = async () => {
     const r = await api("use_provider", {id: p.id});
     if(r.ok){ S.cfg = r.config; renderServices(); toast("ok", `${p.name} is now used for ${all ? "everything" : stt.ok ? "speech to text" : "translation and answers"}.`); }
-    else toast("error", r.error || "Could not change it.");
+    else toast("error", r.error || "Could not change it. Look at Setup › Log for the reason.");
   };
 }
 
@@ -2996,7 +3031,7 @@ function renderLocal(){
   box.querySelectorAll("#localRole [data-val]").forEach(btn => btn.onclick = async () => {
     const r = await api("local_use", {role: btn.dataset.val});
     if(r.ok){ S.cfg = r.config; applyLocalState(r); renderAssign(); renderSttMode(); renderRates(); }
-    else toast("error", r.error || "Could not change it.");
+    else toast("error", r.error || "Could not change it. Look at Setup › Log for the reason.");
   });
 }
 function renderDownload(){
@@ -3346,10 +3381,11 @@ function statTiles(st){
   if(!st) return "";
   const tiles = [];
   if(st.minutes) tiles.push([st.minutes + " min", "length"]);
-  tiles.push([st.me_share + "%", "you spoke"]);
+  if(Number.isFinite(st.me_share)) tiles.push([st.me_share + "%", "your share of talking"]);
   if(st.wpm) tiles.push([st.wpm, "words per minute"]);
-  tiles.push([st.fillers, "filler words*"]);
+  if(Number.isFinite(st.fillers)) tiles.push([st.fillers, "filler words*"]);
   if(st.answers) tiles.push([st.long_pauses + " / " + st.answers, "slow replies (over 6 s)"]);
+  if(!tiles.length) return "";
   return `<div class="stat-tiles" dir="ltr">${tiles.map(t => `<div class="stat-tile"><b>${esc(t[0])}</b><span>${esc(t[1])}</span></div>`).join("")}</div><div class="help" dir="ltr" style="margin:-4px 0 8px">*Speech-to-text often leaves out “um” and “uh”, so this is a minimum.</div>`;
 }
 async function openFeedback(again){
@@ -3402,7 +3438,7 @@ function scoreBox(sc){
   return `<div class="score-box"><div dir="ltr" style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px"><span class="score-big">${esc(String(Math.min(5, Math.max(0, Number(sc.overall)))))}</span><span class="help">/ 5 readiness score</span></div>` +
     scoreRows(sc, ["clarity", "structure", "depth", "signals", "follow_up"]) +
     (fixes.length ? `<div class="help" style="margin-top:8px">Most useful fixes</div><ul ${rtlAttr()} style="margin:2px 0;padding:0 18px;line-height:1.7">${fixes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "") +
-    (typeof sc.best === "string" && sc.best ? `<div class="help" ${rtlAttr()} style="margin-top:6px">Best moment: ${esc(sc.best)}</div>` : "") + `</div>`;
+    (typeof sc.best === "string" && sc.best ? `<div class="help" style="margin-top:6px">Best moment</div><div ${rtlAttr()} style="line-height:1.8">${esc(sc.best)}</div>` : "") + `</div>`;
 }
 
 /* prepare for the job (from the advert) */
@@ -3463,7 +3499,8 @@ async function prSetup(){
     <div class="field"><label for="prN">Number of questions</label>
       <select class="input select" id="prN" style="width:auto"><option>3</option><option selected>5</option><option>7</option><option>10</option></select></div>
     <label class="toggle"><input type="checkbox" id="prSpeak"><span class="switch"></span><span class="tt"><b>Read each question aloud</b><span>With the computer's voice.</span></span></label>
-    <div class="help" style="margin:8px 0">To answer by voice, press Start (F9) first and speak. Or type the answer in the box. While the practice is open the program only listens: no suggested answers. What you say is also written in the live transcript. Questions use your background and the job advert.</div>
+    <div class="help" style="margin:8px 0">Answer by speaking (press F9 first) or by typing.</div>
+    <div class="help" style="margin:0 0 8px">Suggested answers are off while you practise. Questions use your background and the job advert.</div>
     ${last && last.avg ? `<div class="help">Last practice: ${esc(String(last.avg))} / 5 (${esc(kinds[last.kind] || last.kind || "")})</div>` : ""}
     <div class="input-row" style="margin-top:8px"><button class="btn primary" id="prGo">${icon("play")}Start practice</button></div>`;
   $("#prGo").onclick = () => prStart($("#prKind").value, +$("#prN").value, $("#prSpeak").checked);

@@ -25,6 +25,7 @@ Ways of checking:
 | Coach (situation, silence, kinds of question, words to say) | yes (fake model) | yes (overlay layout) | yes | – | quality of real coach text, real silence timing |
 | Practice interview, job advert, scores | yes | yes | yes (2 rounds) | – | speech reading aloud (voices) |
 | Local server, token, host check | yes (real localhost server) | yes | yes | – | – |
+| Readability (sizes, contrast, layout at 1366, 1536@125%, 1920, dark, overlay) | – | yes (screenshots) | yes (3 UX reviewers + re-review) | – | real Segoe UI / Vazirmatn rendering, 150% scaling |
 | Web page: transcript, answer panel, settings, tools | – | yes | yes | – | WebView2 differences, fonts |
 | Long meetings (thousands of lines) | – | yes (1500 lines) | yes | – | 3-hour real meeting |
 | See-through window: open, click-through, alpha, position | logic only | page only | yes | yes | Teams / Zoom / Meet |
