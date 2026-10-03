@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.16]
+
+**NVIDIA graphics card with one button.** When the computer has an NVIDIA card, Setup › Services › Local model shows **Use the NVIDIA graphics card**.
+
+- One download, about 560 MB, only when you press it: NVIDIA's official cuBLAS files from pypi.org, checked with their SHA-256. Only the two files the engine needs are kept. Nothing else to install (no CUDA Toolkit).
+- Then the local model loads on the graphics card by itself: several times faster, and the larger, more accurate models become usable. If the card cannot be used, the model runs on the processor and the status line says why (driver too old, too little graphics memory, card too old).
+- The download continues after a break, can be stopped, and can be removed again (**Remove NVIDIA support**).
+- The local model engine is now always CTranslate2 4.6.3 or newer (it needs only cuBLAS, not cuDNN).
+- 124 automated tests.
+- Also in this version if you skipped 6.15: the very light Vosk models (see 6.15 below).
+
 ## [6.15]
 
 **A very light local model (Vosk), as a choice.** For weak computers, or when the internet is bad.
@@ -11,14 +22,8 @@ All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [G
 - Vosk is very fast on any processor (in the test: 11 seconds of speech in about 1.5 seconds, with no graphics card), but it is less accurate than Whisper, writes no punctuation, and understands only the one language of its model. The status line says so when the meeting has other languages.
 - It works for live meetings, for recorded files and for links.
 - The models come from alphacephei.com (the makers of Vosk); from Iran a VPN may be needed.
+- 122 automated tests.
 
-**NVIDIA graphics card with one button.** When the computer has an NVIDIA card, Setup › Services › Local model shows **Use the NVIDIA graphics card**.
-
-- One download, about 560 MB, only when you press it: NVIDIA's official cuBLAS files from pypi.org, checked with their SHA-256. Only the two files the engine needs are kept. Nothing else to install (no CUDA Toolkit).
-- Then the local model loads on the graphics card by itself: several times faster, and the larger, more accurate models become usable. If the card cannot be used, the model runs on the processor and the status line says why (driver too old, too little graphics memory, card too old).
-- The download continues after a break, can be stopped, and can be removed again (**Remove NVIDIA support**).
-- The local model engine is now always CTranslate2 4.6.3 or newer (it needs only cuBLAS, not cuDNN).
-- 124 automated tests.
 
 ## [6.14]
 
