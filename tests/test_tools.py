@@ -1963,3 +1963,89 @@ def test_vosk_download_button_uses_the_zip_download(app, tmp_path):
         else:
             os.environ["MA_VOSK_LIB"] = old_env
         a.closing.set()
+
+
+def test_nvidia_support_is_downloaded_checked_and_found(app, tmp_path):
+    import os, io, json, zipfile, hashlib, threading, http.server, shutil
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:                         # the layout of the real wheel
+        z.writestr("nvidia/cublas/bin/cublas64_12.dll", b"A" * 4000)
+        z.writestr("nvidia/cublas/bin/cublasLt64_12.dll", b"B" * 9000)
+        z.writestr("nvidia/cublas/bin/nvblas64_12.dll", b"C" * 100)
+        z.writestr("nvidia/cublas/lib/x64/cublas.lib", b"D" * 100)
+    wheel = buf.getvalue()
+    state = {"sha": hashlib.sha256(wheel).hexdigest(), "hits": 0}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path.endswith("/json"):
+                body = json.dumps({"urls": [{"filename": "nvidia_cublas_cu12-12.9.1.4-py3-none-win_amd64.whl",
+                                             "url": f"http://127.0.0.1:{self.server.server_address[1]}/w.whl",
+                                             "size": len(wheel), "digests": {"sha256": state["sha"]}}]}).encode()
+                self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+                return
+            state["hits"] += 1
+            start = int(self.headers.get("Range", "bytes=0-")[6:].split("-")[0] or 0)
+            part = wheel[start:]
+            if start and state["hits"] == 1:                     # never asked to continue the first time
+                raise AssertionError("unexpected range")
+            self.send_response(206 if start else 200)
+            if start:
+                self.send_header("Content-Range", f"bytes {start}-{len(wheel) - 1}/{len(wheel)}")
+            cut = len(part) // 2 if state["hits"] == 1 else len(part)   # the first time the connection breaks halfway
+            self.send_header("Content-Length", str(len(part)))
+            self.end_headers()
+            self.wfile.write(part[:cut])
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    old = os.environ.get("MA_PYPI")
+    os.environ["MA_PYPI"] = f"http://127.0.0.1:{srv.server_address[1]}/pypi"
+    try:
+        shutil.rmtree(app.gpu_pack_dir(), ignore_errors=True)
+        assert not app.gpu_pack_ready()
+        dl = app.GpuPackDownload("", lambda st: None)
+        dl.run()
+        assert dl.state["state"] == "done", dl.state
+        assert app.gpu_pack_ready() and state["hits"] >= 2              # it continued after the break
+        assert sorted(os.listdir(app.gpu_pack_dir())) == ["cublas64_12.dll", "cublasLt64_12.dll"]   # only the two it needs
+        assert not os.path.exists(dl.part)
+        assert app.gpu_pack_dir() in os.environ["PATH"].split(os.pathsep)
+        shutil.rmtree(app.gpu_pack_dir())
+        state["sha"], state["hits"] = "0" * 64, 5                        # a damaged file is refused and thrown away
+        dl = app.GpuPackDownload("", lambda st: None)
+        dl.run()
+        assert dl.state["state"] == "error" and "SHA-256" in dl.state["error"] and not app.gpu_pack_ready()
+        assert not os.path.exists(dl.part)
+    finally:
+        srv.shutdown()
+        if old is None:
+            os.environ.pop("MA_PYPI", None)
+        else:
+            os.environ["MA_PYPI"] = old
+
+
+def test_nvidia_support_remove_and_notes(app):
+    import os, shutil
+    d = app.gpu_pack_dir()
+    os.makedirs(d, exist_ok=True)
+    for f in app.GPU_PACK["dlls"]:
+        open(os.path.join(d, f), "wb").write(b"x")
+    assert app.gpu_pack_ready()
+    a = app.App()
+    try:
+        r = a.api_gpu_pack(remove=True)
+        assert r["ok"] and not app.gpu_pack_ready() and not os.path.exists(d)
+        os.makedirs(d)
+        for f in app.GPU_PACK["dlls"]:
+            open(os.path.join(d, f), "wb").write(b"x")
+        open(os.path.join(d, "remove.flag"), "w").close()       # removed at the next start when it was in use
+        app._GPU.pop("cleaned", None)
+        assert not app.gpu_pack_ready() and not os.path.exists(d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        app._GPU.pop("cleaned", None)
+        a.closing.set()

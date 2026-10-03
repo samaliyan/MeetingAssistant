@@ -45,6 +45,7 @@ Ways of checking:
 | UX of the 6.14 screens (file/link window, speakers, ▶, local model, overlay "more") | – | yes (screenshots, play / switch / grouped lines) | yes (3 UX reviewers + re-review of the fixes) | – | WebView2 look, real Intel / AMD driver messages |
 | Keep the sound, ▶ on a line | yes (WAV here) | yes (play, switch lines, stop at line end) | yes | – | Opus files (soundfile on Windows), 3-hour meetings |
 | Vosk light model (engine via ctypes, zip download, language warning) | yes (download from a local server, unsafe zip paths, which download is used; the real engine with a real English model when given) | yes (real engine + real English model: choose, Test, a real recording) | yes (independent review) | – | the Windows engine (libvosk.dll), downloads from alphacephei.com, Persian and other models, folders with Persian letters |
+| NVIDIA support with one button (cuBLAS download, PATH, reload) | yes (fake PyPI: a break in the middle, SHA-256 check, only 2 files kept, remove and remove-at-next-start) | yes (button, progress, stop, continue, remove; fake files) | yes (independent review; CTranslate2 sources read) | – | a real NVIDIA card, the real 560 MB file from pypi.org, real speed |
 | Build (exe) and release | – | – | yes | build job | first run of the exe on a clean PC |
 
 Setup › Services › **Check this computer** tests the Windows parts on the user's own machine and can copy a report.

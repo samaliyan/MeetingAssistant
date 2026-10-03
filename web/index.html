@@ -440,6 +440,9 @@ textarea.input{resize:vertical;min-height:76px}
 .br-card{width:min(680px,100%);height:min(620px,calc(100vh - 32px))}
 .br-bar{display:flex;gap:6px;align-items:center;padding:10px 16px 6px}
 .br-bar .input{flex:1;min-width:0;padding:7px 10px;font-family:var(--mono);font-size:.82rem}
+.gpubox{border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:grid;gap:8px;background:var(--surface-2)}
+.gpu-row{display:flex;gap:8px;align-items:flex-start;font-size:.86rem;line-height:1.5}
+.gpu-row > span{color:var(--accent);margin-top:2px}
 .br-rec{display:grid;gap:8px;padding:10px 16px 8px;border-bottom:1px solid var(--border)}
 .br-rec .br-or{font-weight:600;color:var(--muted)}
 .br-rec-row .mini{flex-basis:100%;margin-inline-start:178px;color:var(--muted)}
@@ -1104,6 +1107,14 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <button class="btn sm ghost" id="localFolder">Open models folder</button>
           <button class="btn sm ghost" id="localDelete" hidden>Delete this model</button>
         </div>
+        <div class="gpubox" id="gpuBox" hidden>
+          <div class="gpu-row"><span data-icon="zap"></span><div class="gpu-text" id="gpuText"></div></div>
+          <div class="input-row" style="flex-wrap:wrap">
+            <button class="btn sm primary" id="gpuGo"><span data-icon="down"></span><span>Use the NVIDIA graphics card</span></button>
+            <button class="btn sm ghost" id="gpuCancel" hidden>Cancel</button>
+            <button class="btn sm ghost" id="gpuRemove" hidden>Remove NVIDIA support</button></div>
+          <div class="dlbox" id="gpuDlBox" hidden><div class="dlbar"><i></i></div><span class="dltext"></span></div>
+        </div>
         <div class="caps" id="localCaps"></div>
       </div>
       </details>
@@ -1458,6 +1469,7 @@ function handle(m){
     case "coach_notes": S.notes = m.notes; if(TM.kind === "coach") openNotes(true); return;
     case "local": S.local = m.local; renderLocal(); renderSttMode(); return;
     case "llm": S.llm = m.llm; renderLlm(); return;
+    case "gpu_dl": if(S.gpu){ S.gpu.download = m.download; renderGpu(); } if(["done","error","cancelled"].includes(m.download.state)) loadLocal(); return;
     case "download": S.download = m.download; renderDownload(); if(["done","error","cancelled"].includes(m.download.state)){ if(m.download.kind === "llm") loadLlm(); else loadLocal(); } return;
     case "log": return addLog(m.entry, true);
     case "log_cleared": $("#logBox").innerHTML = ""; $("#logDot").hidden = true; return;
@@ -3090,7 +3102,7 @@ async function loadLocal(){
   if(r.ok) applyLocalState(r);
 }
 function applyLocalState(r){
-  S.local = r.local || S.local; S.localModels = r.models || []; S.catalog = r.catalog || S.catalog || [];
+  S.local = r.local || S.local; S.localModels = r.models || []; S.catalog = r.catalog || S.catalog || []; if(r.gpu){ S.gpu = r.gpu; renderGpu(); }
   S.host = r.host; if(r.download !== undefined) S.download = r.download;
   renderLocal(); renderDownload();
 }
@@ -3179,6 +3191,41 @@ function renderLocal(){
     else toast("error", r.error || "Could not change it. Look at Setup › Log for the reason.");
   });
 }
+function renderGpu(){                                     // one button: NVIDIA support for the local model
+  const g = S.gpu, box = $("#gpuBox");
+  if(!g || !g.nvidia || !g.can){ box.hidden = true; return; }
+  box.hidden = false;
+  const d = g.download, active = d && ["starting", "listing", "downloading", "checking"].includes(d.state);
+  $("#gpuText").innerHTML = g.ready
+    ? `<b>NVIDIA graphics card support is installed.</b> The local model now tries the graphics card first; the line at the top of this card says where it really runs.`
+    : `<b>An NVIDIA graphics card is in this computer.</b> One download (about ${g.mb} MB, once, from pypi.org — the official NVIDIA files) makes the local model several times faster and lets it use larger, more accurate models. Nothing else to install.`;
+  $("#gpuGo").hidden = g.ready || active; $("#gpuCancel").hidden = !active || d.state === "checking"; $("#gpuRemove").hidden = !g.ready || active;
+  $("#gpuGo").lastChild.textContent = d && d.state === "cancelled" ? "Continue the download" : "Use the NVIDIA graphics card";
+  const db = $("#gpuDlBox");
+  db.hidden = !d || d.state === "done" || (g.ready && !active);
+  if(db.hidden) return;
+  const pct = d.total ? Math.min(100, d.done / d.total * 100) : 0, mb = x => (x / 1e6).toFixed(0);
+  db.querySelector(".dlbar > i").style.width = pct.toFixed(1) + "%";
+  db.querySelector(".dltext").textContent =
+      d.state === "listing" ? `Connecting to ${d.via}…`
+    : d.state === "downloading" ? `${mb(d.done)} / ${mb(d.total)} MB · ${pct.toFixed(0)}%${d.speed ? " · " + (d.speed / 1e6).toFixed(1) + " MB/s" : ""}`
+    : d.state === "checking" ? "Checking and installing…"
+    : d.state === "cancelled" ? `Stopped at ${pct.toFixed(0)}% — press the button to continue where it stopped.`
+    : d.state === "error" ? "✗ " + d.error : "Starting…";
+}
+$("#gpuGo").onclick = async () => {
+  if(S.running) return toast("info", "Install it after the meeting (it is a big download).");
+  const r = await api("gpu_pack", {});
+  if(!r.ok) return toast("error", r.error || "The download could not start.");
+  if(S.gpu){ S.gpu.download = r.download; renderGpu(); }
+};
+$("#gpuCancel").onclick = () => api("gpu_pack", {cancel: true});
+$("#gpuRemove").onclick = async () => {
+  if(!confirm("Remove NVIDIA support? The local model then runs on the processor (slower). You can install it again later.")) return;
+  const r = await api("gpu_pack", {remove: true});
+  if(!r.ok) toast("error", r.error || "Could not remove it."); else toast("ok", r.note || "NVIDIA support removed.");
+  loadLocal();
+};
 function renderDownload(){
   const d = S.download, isLlm = !!(d && d.kind === "llm");
   const box = $(isLlm ? "#llmDlBox" : "#localDlBox");

@@ -55,7 +55,7 @@ jobs:
         run: |
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet -r requirements.txt pyinstaller
-          python -m pip install --quiet "ctranslate2>=4.4" "tokenizers>=0.15" tqdm
+          python -m pip install --quiet "ctranslate2>=4.6.3,<5" "tokenizers>=0.15" tqdm
           python -m pip install --quiet --no-deps "faster-whisper>=1.1"
           python -m pip install --quiet --prefer-binary --only-binary=llama-cpp-python "llama-cpp-python>=0.3.19" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu || echo "::warning::llama-cpp-python not installed - the exe is built without the local AI engine"
           # an engine that installed but does not import is removed, so a broken one is never packed

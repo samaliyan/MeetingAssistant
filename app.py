@@ -2868,8 +2868,8 @@ def gpu_names():
     """The graphics cards Windows knows (from the registry, no extra program), e.g. ['Intel(R) Iris(R) Xe Graphics']."""
     if "names" in _GPU:
         return _GPU["names"]
-    names = []
-    if sys.platform == "win32":
+    names = [n.strip() for n in os.environ.get("MA_GPU_NAMES", "").split(";") if n.strip()]   # for tests
+    if sys.platform == "win32" and not names:
         try:
             import winreg
             key = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
@@ -3305,11 +3305,52 @@ _fw = {"mod": None, "error": "", "tried": False}
 _fw_lock = threading.Lock()
 
 
+# NVIDIA graphics card for the local model: CTranslate2 (4.6.3 and newer) needs only cuBLAS from NVIDIA. It is
+# downloaded once, when the user asks (about 550 MB, from PyPI, checked with its SHA-256), into models/nvidia.
+GPU_PACK = {"pkg": "nvidia-cublas-cu12", "version": "12.9.1.4", "mb": 560,
+            "dlls": ("cublas64_12.dll", "cublasLt64_12.dll"), "index": "https://pypi.org/pypi"}
+
+
+def gpu_pack_dir():
+    return os.path.join(MODELS_DIR, "nvidia")
+
+
+def gpu_pack_ready():
+    d = gpu_pack_dir()
+    if os.path.isfile(os.path.join(d, "remove.flag")):     # asked to remove: done at the next start
+        if not _GPU.get("cleaned"):
+            _GPU["cleaned"] = True
+            shutil.rmtree(d, ignore_errors=True)            # at start nothing holds the files yet
+        return False
+    return all(os.path.isfile(os.path.join(d, f)) for f in GPU_PACK["dlls"])
+
+
+def use_gpu_pack():
+    """Lets the engine find cuBLAS: CTranslate2 loads it by name (LoadLibrary), which looks in the PATH."""
+    if not gpu_pack_ready():
+        return False
+    d = gpu_pack_dir()
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    if not any(os.path.normcase(p_) == os.path.normcase(d) for p_ in parts):
+        os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+    if sys.platform == "win32":
+        try:
+            os.add_dll_directory(d)
+        except Exception:
+            pass
+    return True
+
+
+def has_nvidia():
+    return any("nvidia" in g.lower() for g in gpu_names())
+
+
 def load_faster_whisper():
     """Imports the engine once. None if this program version does not include it."""
     with _fw_lock:
         if _fw["tried"]:
             return _fw["mod"]
+        use_gpu_pack()                                   # before the engine: its graphics card part is found
         try:
             try:
                 import av  # noqa: F401
@@ -3942,6 +3983,159 @@ class ZipDownload:
             self._emit(True, state="error", error=short(e, 200))
 
 
+class GpuPackDownload:
+    """cuBLAS for the NVIDIA graphics card: the official wheel from PyPI (checked with the SHA-256 that PyPI lists),
+    of which only the two DLLs are kept. Continues after a break."""
+
+    def __init__(self, proxy, on_progress):
+        self.proxy, self.on_progress = proxy, on_progress
+        self.cancel = threading.Event()
+        self.state = {"id": "nvidia", "kind": "gpu", "state": "starting", "done": 0, "total": GPU_PACK["mb"] * 1_000_000,
+                      "speed": 0, "error": "", "via": ""}
+        self.part = os.path.join(MODELS_DIR, "nvidia-cublas.whl.part")
+        self._last = 0.0
+        self.thread = threading.Thread(target=self.run, daemon=True, name="gpu-download")
+
+    def _emit(self, force=False, **kw):
+        self.state.update(kw)
+        now = time.time()
+        if force or now - self._last > 0.3:
+            self._last = now
+            self.on_progress(dict(self.state))
+
+    def _client(self, proxy, headers=None):
+        kw = dict(timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True, trust_env=False,
+                  headers={"User-Agent": f"MeetingAssistant/{VERSION}", **(headers or {})})
+        if proxy:
+            kw["proxy"] = proxy
+        return httpx.Client(**kw)
+
+    def _find(self, routes):
+        """The Windows file of the pinned version: its address, size and SHA-256, as PyPI lists them."""
+        last = None
+        index = os.environ.get("MA_PYPI", GPU_PACK["index"])
+        for proxy in routes:
+            try:
+                with self._client(proxy) as c:
+                    r = c.get(f"{index}/{GPU_PACK['pkg']}/{GPU_PACK['version']}/json")
+                if r.status_code != 200:
+                    raise DownloadError(f"PyPI answered {r.status_code}")
+                for f in r.json().get("urls", []):
+                    if str(f.get("filename", "")).endswith("win_amd64.whl") and f.get("url") and (f.get("digests") or {}).get("sha256"):
+                        return f["url"], int(f.get("size") or 0), f["digests"]["sha256"].lower(), proxy
+                raise DownloadError("no Windows file on PyPI")
+            except (httpx.HTTPError, ValueError, DownloadError) as e:
+                last = e
+                log("NVIDIA support: PyPI", "through the proxy" if proxy else "direct", "failed:", short(e, 120), level="warn")
+        raise DownloadError(dl_error(last) if isinstance(last, httpx.HTTPError) else short(last or "no answer", 160))
+
+    def run(self):
+        try:
+            os.makedirs(MODELS_DIR, exist_ok=True)
+            routes = [self.proxy, ""] if self.proxy else [""]
+            self._emit(True, state="listing", via="pypi.org")
+            url, size, sha, proxy = self._find(routes)
+            if size:
+                self.state["total"] = size
+            free = shutil.disk_usage(MODELS_DIR).free
+            if free < (size or GPU_PACK["mb"] * 1_000_000) * 2.8:
+                raise DownloadError(f"Not enough free disk space: about {round((size or 560e6) * 2.8 / 1e6)} MB needed "
+                                    f"(download and unpack), {round(free / 1e6)} MB free.")
+            for attempt in range(10):                        # a broken connection continues where it stopped
+                if self.cancel.is_set():
+                    break
+                have = os.path.getsize(self.part) if os.path.isfile(self.part) else 0
+                if size and have >= size:
+                    break
+                self._emit(True, state="downloading", error="",
+                           via="files.pythonhosted.org" + (" through the proxy" if proxy else " (direct)"))
+                try:
+                    with self._client(proxy, {"Range": f"bytes={have}-"} if have else None) as c, c.stream("GET", url) as r:
+                        if r.status_code == 416:
+                            break
+                        if r.status_code >= 400:
+                            raise DownloadError(f"HTTP {r.status_code}")
+                        if r.status_code == 200 and have:
+                            have = 0
+                        t0, got = time.time(), 0
+                        with open(self.part, "ab" if have else "wb") as f:
+                            for chunk in r.iter_bytes(1 << 20):
+                                if self.cancel.is_set():
+                                    break
+                                f.write(chunk)
+                                got += len(chunk)
+                                self._emit(done=have + got, speed=round(got / max(0.5, time.time() - t0)))
+                    if not size:
+                        break
+                except (httpx.HTTPError, DownloadError, OSError) as e:
+                    log("NVIDIA support download:", short(e, 120), level="warn")
+                    grown = (os.path.getsize(self.part) if os.path.isfile(self.part) else 0) > have
+                    if not grown and attempt >= 2:
+                        if proxy and "" in routes and proxy != "":
+                            proxy = ""                           # the proxy does not work for this site: direct
+                            continue
+                        raise DownloadError(dl_error(e) if isinstance(e, httpx.HTTPError) else short(e, 120))
+                    time.sleep(2)
+            if self.cancel.is_set():
+                self._emit(True, state="cancelled")
+                log("NVIDIA support download cancelled (what was downloaded is kept; the button continues it)")
+                return
+            if size and (os.path.getsize(self.part) if os.path.isfile(self.part) else 0) < size:
+                raise DownloadError("the download stopped before the end — press the button again to continue it")
+            self._emit(True, state="checking")
+            h = hashlib.sha256()
+            with open(self.part, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    if self.cancel.is_set():
+                        self._emit(True, state="cancelled")
+                        return
+                    h.update(block)
+            if h.hexdigest() != sha:
+                os.remove(self.part)
+                raise DownloadError("the downloaded file did not pass the check (SHA-256) — press the button again")
+            import zipfile
+            dest = gpu_pack_dir()
+            os.makedirs(dest, exist_ok=True)
+            try:
+                os.remove(os.path.join(dest, "remove.flag"))   # installed again after a removal
+            except OSError:
+                pass
+            _GPU.pop("cleaned", None)
+            with zipfile.ZipFile(self.part) as z:
+                names = {os.path.basename(n).lower(): n for n in z.namelist() if n.lower().endswith(".dll")}
+                for want in GPU_PACK["dlls"]:
+                    if want.lower() not in names:
+                        raise DownloadError(f"{want} is not in the NVIDIA file")
+                for want in sorted(GPU_PACK["dlls"], key=lambda w: w == GPU_PACK["dlls"][0]):   # cublas64_12 last
+                    tmp = os.path.join(dest, want + ".tmp")
+                    with z.open(names[want.lower()]) as src, open(tmp, "wb") as dst:
+                        shutil.copyfileobj(src, dst, 1 << 20)
+                    for i in range(15):                     # antivirus often holds a new file for a few seconds
+                        try:
+                            os.replace(tmp, os.path.join(dest, want))
+                            break
+                        except PermissionError:
+                            if i == 14:
+                                raise DownloadError("Windows did not allow installing the NVIDIA files (in use, maybe by "
+                                                    "the antivirus). Press the button again in a minute.")
+                            time.sleep(1)
+            try:
+                os.remove(self.part)
+            except OSError:
+                pass
+            use_gpu_pack()
+            log("NVIDIA support for the local model installed in", dest)
+            self._emit(True, state="done", path=dest, done=self.state["total"])
+        except DownloadError as e:
+            msg = str(e)
+            if re.search(r"403|connect|timed out|reset|refused|ssl|answered", msg, re.I):
+                msg += " — pypi.org may need a VPN or proxy (Setup › Services › Network (VPN / proxy))."
+            self._emit(True, state="error", error=msg)
+        except Exception as e:
+            log("NVIDIA support download:", traceback.format_exc())
+            self._emit(True, state="error", error=short(e, 200))
+
+
 class LocalWhisper:
     name = "Local model"
 
@@ -4148,6 +4342,7 @@ class LocalWhisper:
                 tries.append(("cpu", "int8" if "int8" in ct else "float32"))
             except Exception:
                 tries.append(("cpu", "int8"))
+            cuda_err = None
             for dev, ctype in tries:
                 try:
                     where = short_path(folder)
@@ -4182,12 +4377,32 @@ class LocalWhisper:
                         self.state, self.error = "ready", ""
                         self.load_secs = round(time.time() - t0, 1)
                         self.done.set()
+                    if dev == "cpu" and cuda_err is not None:
+                        low = str(cuda_err).lower()
+                        if not gpu_pack_ready() and "cublas" in low:
+                            self.cpu_note = ("An NVIDIA graphics card is here: press “Use the NVIDIA graphics card” below "
+                                             "to make the local model several times faster.")
+                        elif "out of memory" in low:
+                            self.cpu_note = ("The graphics card has too little memory for this model: choose a smaller model "
+                                             "to run it on the graphics card.")
+                        elif "no kernel image" in low or "compute capability" in low:
+                            self.cpu_note = "This NVIDIA graphics card is too old for the engine; the model runs on the processor."
+                        elif "driver" in low or "insufficient" in low:
+                            self.cpu_note = "The NVIDIA graphics card could not be used: update the NVIDIA driver."
+                        else:
+                            self.cpu_note = ("The NVIDIA graphics card could not be used (" + short(cuda_err, 120) +
+                                             "). Updating the NVIDIA driver often helps.")
+                    elif dev == "cpu" and device == "auto" and has_nvidia() and not gpu_pack_ready():
+                        self.cpu_note = ("An NVIDIA graphics card is here: press “Use the NVIDIA graphics card” below "
+                                         "to make the local model several times faster.")
                     log(f"Local model '{model_label(folder)}' ready on the {self.device} ({ctype}), "
                         f"loaded in {self.load_secs} s")
                     self._notify()
                     return
                 except Exception as e:
                     err = e
+                    if dev == "cuda":
+                        cuda_err = e
                     log(f"Local model could not start on {dev}: {short(e, 200)}", level="warn")
         with self.lock:
             if g != self.gen:
@@ -10118,6 +10333,7 @@ class App:
                     self._set_review(Engine(self, session, workers=False))
                 self.publish_running()
                 self.hub.toast("ok", "Meeting saved.")
+                self._gpu_reload_if_waiting()
         threading.Thread(target=finish, daemon=True).start()
         return {"ok": True}
 
@@ -10617,6 +10833,10 @@ class App:
                                                           else " (for the local model choose cpp-small)"))
         add("whisper.cpp engine (local model on any graphics card)", "ok" if cpp_server_path() else "info",
             "included" if cpp_server_path() else latest)
+        if has_nvidia():
+            add("NVIDIA support for the local model", "ok" if gpu_pack_ready() else "info",
+                "installed" if gpu_pack_ready() else "not installed: Setup › Services › Local model › “Use the NVIDIA graphics card” "
+                "(about 560 MB, once) makes the local model several times faster")
         add("Vosk engine (very light local models)", "ok" if vosk_lib_path() else "info",
             "downloaded" if vosk_lib_path() else "not downloaded yet: it comes with the first Vosk model (about 15 MB, once)")
         for mod, what in (("onnxruntime", "Faster transcribing of files, and telling speakers apart"),
@@ -10977,6 +11197,14 @@ class App:
             USAGE_ON[0] = False
             self._set_review(Engine(self, job.session, workers=False))
         self.publish_running()
+        self._gpu_reload_if_waiting()
+
+    def _gpu_reload_if_waiting(self):
+        """NVIDIA support installed during a meeting: the local model is loaded again (graphics card first) once it ends."""
+        if getattr(self, "gpu_reload", False) and not (self.running or self.stopping or self.recording):
+            self.gpu_reload = False
+            LOCAL.unload()
+            self.sync_local()
 
     @staticmethod
     def _reveal(path, select=False):
@@ -11722,6 +11950,9 @@ class App:
         return {"ok": True, "local": LOCAL.info(), "models": find_models(self.cfg["local_model"]),
                 "catalog": catalog_view(LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []) + vosk_catalog(), "stt"),
                 "cpp": bool(cpp_server_path()), "download": self.download.state if self.download else None,
+                "gpu": {"nvidia": has_nvidia(), "ready": gpu_pack_ready(), "mb": GPU_PACK["mb"],
+                        "can": (sys.platform == "win32" or bool(os.environ.get("MA_GPU_NAMES"))) and _fw["mod"] is not None,
+                        "download": dict(self.gpu_dl.state) if getattr(self, "gpu_dl", None) else None},
                 "models_dir": MODELS_DIR, "host": platform_node()}
 
     def api_local_state(self):
@@ -11891,6 +12122,60 @@ class App:
         log(f"Local model deleted: {folder}")
         self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
         return {**self.local_state(), "config": self.public_config()}
+
+    def api_gpu_pack(self, cancel=False, remove=False):
+        """One button: downloads NVIDIA support (cuBLAS) for the local model, then loads the model on the graphics card."""
+        if cancel:
+            if getattr(self, "gpu_dl", None):
+                self.gpu_dl.cancel.set()
+            return {"ok": True}
+        if remove:
+            if self.running or self.stopping or self.recording:
+                return {"ok": False, "error": "Stop the meeting first."}
+            if getattr(self, "gpu_dl", None) and self.gpu_dl.thread.is_alive():
+                return {"ok": False, "error": "The download is still running — cancel it first."}
+            try:
+                os.remove(os.path.join(MODELS_DIR, "nvidia-cublas.whl.part"))
+            except OSError:
+                pass
+            LOCAL.unload()                                  # the engine may hold the files
+            shutil.rmtree(gpu_pack_dir(), ignore_errors=True)
+            if os.path.exists(gpu_pack_dir()):              # still loaded in this program: removed at the next start
+                try:
+                    os.makedirs(gpu_pack_dir(), exist_ok=True)
+                    open(os.path.join(gpu_pack_dir(), "remove.flag"), "w").close()
+                except OSError:
+                    pass
+                return {"ok": True, **self.local_state(),
+                        "note": "NVIDIA support is removed the next time the program starts (its files are in use now)."}
+            self.sync_local()
+            return {"ok": True, **self.local_state()}
+        if load_faster_whisper() is None:
+            return {"ok": False, "error": "The local model engine is not in this copy of the program."}
+        with self.dl_lock:
+            if getattr(self, "gpu_dl", None) and self.gpu_dl.thread.is_alive():
+                return {"ok": False, "error": "The download is already running."}
+            proxy = detect_proxy(self.cfg["proxy"])[0]
+
+            def progress(st):
+                self.hub.publish("gpu_dl", download=st)
+                if st["state"] == "done":
+                    busy = self.running or self.stopping or self.recording
+                    self.gpu_reload = True
+                    if not busy:
+                        self._gpu_reload_if_waiting()       # loaded again, now trying the graphics card first
+                    self.hub.publish("local", local=LOCAL.info())
+                    in_use = bool(self.cfg["local_model"]) and self.cfg["local_device"] != "cpu"
+                    self.hub.toast("ok", "NVIDIA graphics card support is installed. " + (
+                        "It is used when this meeting ends." if busy else
+                        "Press Test on this computer: the line at the top of Local model says if the graphics card is used."
+                        if in_use else "Choose a local model (and 'Run on: automatic') to use it."))
+                elif st["state"] == "error":
+                    self.hub.toast("error", "NVIDIA support was not installed: " + st["error"])
+            self.gpu_dl = GpuPackDownload(proxy, progress)
+            log("Downloading NVIDIA support for the local model (cuBLAS, ~560 MB)" + (" through " + mask_proxy(proxy) if proxy else ""))
+            self.gpu_dl.thread.start()
+        return {"ok": True, "download": dict(self.gpu_dl.state)}
 
     def api_local_open_folder(self):
         os.makedirs(MODELS_DIR, exist_ok=True)

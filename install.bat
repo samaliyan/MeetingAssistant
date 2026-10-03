@@ -51,7 +51,7 @@ if errorlevel 1 (
 )
 
 echo        Adding the local model engine (optional)...
-venv\Scripts\python.exe -m pip install %PIPQ% "ctranslate2>=4.4" "tokenizers>=0.15" tqdm >nul 2>&1 && venv\Scripts\python.exe -m pip install %PIPQ% --no-deps "faster-whisper>=1.1" >nul 2>&1
+venv\Scripts\python.exe -m pip install %PIPQ% "ctranslate2>=4.6.3,<5" "tokenizers>=0.15" tqdm >nul 2>&1 && venv\Scripts\python.exe -m pip install %PIPQ% --no-deps "faster-whisper>=1.1" >nul 2>&1
 if errorlevel 1 echo        Could not add it - the program works anyway, just without the local model.
 
 echo        Adding the local AI engine (translation and answers on this computer, optional)...

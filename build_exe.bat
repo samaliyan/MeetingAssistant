@@ -62,7 +62,7 @@ echo        Adding the local model engine...
 set "LOCALOPTS="
 rem  its helpers first, then faster-whisper itself WITHOUT the two packages we do not need
 rem  (av reads audio files, onnxruntime is an extra voice detector - the program has its own)
-%BPY% -m pip install %PIPQ% "ctranslate2>=4.4" "tokenizers>=0.15" tqdm >>pip_log.txt 2>&1
+%BPY% -m pip install %PIPQ% "ctranslate2>=4.6.3,<5" "tokenizers>=0.15" tqdm >>pip_log.txt 2>&1
 if errorlevel 1 goto nolocal
 %BPY% -m pip install %PIPQ% --no-deps "faster-whisper>=1.1" >>pip_log.txt 2>&1
 if errorlevel 1 goto nolocal

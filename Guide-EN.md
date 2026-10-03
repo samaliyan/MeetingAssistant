@@ -4,6 +4,7 @@
 
 - Setup › Services › Local model: in the download list, the **Vosk** group has small models (35–55 MB) for one language each.
 - Very fast on a weak computer, but less accurate than Whisper and with no punctuation. Use it only when Whisper is too slow.
+- **NVIDIA graphics card:** in the same place, press **Use the NVIDIA graphics card** (one download of about 560 MB). The local model then runs several times faster.
 
 ## Version 6.14: files, speakers, links, subtitles, sound
 
