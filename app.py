@@ -63,7 +63,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.12"
+VERSION = "6.13"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -2804,6 +2804,256 @@ def hf_search(kind, sort, proxy, limit=12):
             except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError) as e:
                 last = dl_error(e) if isinstance(e, httpx.HTTPError) else "unexpected answer"
     raise APIError(f"Hugging Face could not be reached ({last or 'no answer'}). Check the internet or the proxy in Setup.")
+
+# ---- new models: public catalogs (no key needed) --------------------------------------------------
+_news_lock = threading.Lock()          # the saved list
+_news_fetch_lock = threading.Lock()    # one download at a time (never held while the list is read)
+
+
+def load_news():
+    try:
+        with open(MODEL_NEWS_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) and isinstance(d.get("sources", []), list) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_news(d):
+    try:
+        tmp = MODEL_NEWS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.replace(tmp, MODEL_NEWS_PATH)
+    except OSError:
+        pass
+
+MODEL_NEWS_PATH = os.path.join(DATA_DIR, ".model_news.json")
+NEWS_PRESET = {"openai": "openai", "openrouter": "openrouter", "google": "gemini", "cerebras": "cerebras",
+               "mistral": "mistral", "deepgram": "deepgram", "groq": "groq", "avalai": "avalai", "gapgpt": "gapgpt"}
+NEWS_SITES = {"openai": "https://platform.openai.com/", "openrouter": "https://openrouter.ai/", "google": "https://aistudio.google.com/",
+              "groq": "https://console.groq.com/", "cerebras": "https://cloud.cerebras.ai/", "mistral": "https://console.mistral.ai/",
+              "deepgram": "https://console.deepgram.com/"}
+
+
+def _https(u, n=200):
+    """Only a plain https address from a catalog becomes a link or a service address (never javascript: or a local file)."""
+    u = str(u or "").strip()
+    return u[:n] if re.match(r"^https://[A-Za-z0-9.-]+(:\d+)?(/[^\s\"'<>]*)?$", u) else ""
+
+
+def _news_name(name):
+    """'OpenAI: GPT-5 (free)' and 'gpt-5' end up as one key."""
+    n = str(name or "").split(":", 1)[-1] if re.match(r"^[\w .-]{2,30}:\s", str(name or "")) else str(name or "")
+    n = re.sub(r"\((free|beta|preview)\)", "", n, flags=re.I)
+    return re.sub(r"[^a-z0-9.]+", "-", n.lower()).strip("-")
+
+
+def _news_kind(mid, name, inp, out):
+    if _STT_RE.search(f"{mid} {name}") and "text" in out:
+        return "stt"
+    if "text" in out and ("text" in inp or not inp) and not _NOTCHAT_RE.search(mid):
+        return "chat"
+    return ""
+
+
+def _news_day(v):
+    """A date as YYYY-MM-DD from '2026-09-30', an ISO time or a unix time; '' when unknown."""
+    try:
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 1e9:
+            return datetime.datetime.fromtimestamp(v, datetime.timezone.utc).strftime("%Y-%m-%d")
+        t = str(v or "")[:10]
+        datetime.datetime.strptime(t, "%Y-%m-%d")
+        return t
+    except (ValueError, TypeError, OverflowError, OSError):
+        return ""
+
+
+def _price(v, per_token=False):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f) or f < 0:
+        return None
+    return round(f * 1e6, 4) if per_token else round(f, 4)
+
+
+def parse_models_dev(data, connected):
+    """models.dev/api.json -> sources: which service sells which model, its price and whether this program can use it."""
+    out = []
+    for pid, prov in (data.items() if isinstance(data, dict) else []):
+        if not isinstance(prov, dict) or not isinstance(prov.get("models"), dict):
+            continue
+        preset = NEWS_PRESET.get(pid)
+        api = _https(prov.get("api"))
+        usable = "yes" if preset else ("custom" if api else "no")
+        for mid, m in prov["models"].items():
+            if not isinstance(m, dict):
+                continue
+            try:
+                out.append(_md_item(pid, prov, preset, api, usable, mid, m, connected))
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                continue                                         # one odd entry never loses the whole list
+    return [x for x in out if x]
+
+
+STT_PRESETS = ("openai", "groq", "mistral")      # services whose OpenAI-format address also turns speech into text
+
+
+def _md_item(pid, prov, preset, api, usable, mid, m, connected):
+    mods = m.get("modalities") if isinstance(m.get("modalities"), dict) else {}
+    inp = [str(x) for x in (mods.get("input") or []) if isinstance(x, str)]
+    outm = [str(x) for x in (mods.get("output") or []) if isinstance(x, str)]
+    name = str(m.get("name") or mid)[:80]
+    kind = _news_kind(str(mid), name, inp, outm)
+    if not kind or not _news_name(name):
+        return None
+    cost = m.get("cost") if isinstance(m.get("cost"), dict) else {}
+    pin, pout = _price(cost.get("input")), _price(cost.get("output"))
+    return ({"cat": "models.dev", "stt_ok": preset in STT_PRESETS, "key": _news_name(name), "name": name, "kind": kind, "day": _news_day(m.get("release_date")),
+                "provider": str(pid)[:40], "provider_name": str(prov.get("name") or pid)[:40], "model": str(mid)[:120],
+                "in": pin, "out": pout, "free": pin == 0 and pout == 0, "audio": "audio" in inp,
+                "open": bool(m.get("open_weights")), "usable": usable, "preset": preset or ("custom" if usable == "custom" else ""),
+                "base_url": api if usable == "custom" else "", "site": _https(prov.get("doc")) or NEWS_SITES.get(pid, ""),
+                "context": m.get("limit", {}).get("context") if isinstance(m.get("limit"), dict) else None,
+                "connected": connected.get(preset or "", "")})
+
+
+def parse_openrouter(data, connected):
+    out = []
+    for m in (data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), list) else None) or []:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        try:
+            x = _or_item(m, connected)
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            x = None
+        if x:
+            out.append(x)
+    return out
+
+
+def _or_item(m, connected):
+    arch = m.get("architecture") if isinstance(m.get("architecture"), dict) else {}
+    inp = [x for x in (arch.get("input_modalities") or []) if isinstance(x, str)]
+    outm = [x for x in (arch.get("output_modalities") or ["text"]) if isinstance(x, str)]
+    name, mid = str(m.get("name") or m["id"])[:80], str(m["id"])[:120]
+    kind = _news_kind(mid, name, inp, outm)
+    if not kind or not _news_name(name):
+        return None
+    pr = m.get("pricing") if isinstance(m.get("pricing"), dict) else {}
+    pin, pout = _price(pr.get("prompt"), True), _price(pr.get("completion"), True)
+    return ({"cat": "OpenRouter", "stt_ok": False, "key": _news_name(name), "name": re.sub(r"^[\w .-]{2,30}:\s", "", name), "kind": kind, "day": _news_day(m.get("created")),
+                "provider": "openrouter", "provider_name": "OpenRouter", "model": mid, "in": pin, "out": pout,
+                "free": mid.endswith(":free") or (pin == 0 and pout == 0), "audio": "audio" in inp, "open": False,
+                "usable": "yes", "preset": "openrouter", "base_url": "", "site": _https("https://openrouter.ai/" + mid.split(":")[0]),
+                "context": m.get("context_length"), "connected": connected.get("openrouter", "")})
+
+
+def parse_hf_asr(data):
+    """New speech-to-text models on Hugging Face. Only faster-whisper (CTranslate2) ones run in this program."""
+    out = []
+    for m in data if isinstance(data, list) else []:
+        if not isinstance(m, dict):
+            continue
+        try:
+            x = _hf_item(m)
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            x = None
+        if x:
+            out.append(x)
+    return out
+
+
+def _hf_item(m):
+    rid = str(m.get("id") or m.get("modelId") or "")
+    if not _HF_REPO_RE.match(rid) or m.get("private"):
+        return None
+    tags = [str(t).lower() for t in (m.get("tags") if isinstance(m.get("tags"), list) else []) if isinstance(t, str)]
+    local = "ctranslate2" in tags or "faster-whisper" in rid.lower()
+    return ({"cat": "Hugging Face", "stt_ok": False, "key": "hf:" + rid.lower(), "name": rid.split("/")[-1][:80], "kind": "stt", "day": _news_day(m.get("createdAt")),
+                "provider": "huggingface", "provider_name": "Hugging Face (" + rid.split("/")[0][:30] + ")", "model": rid,
+                "in": 0.0, "out": 0.0, "free": True, "audio": True, "open": True, "usable": "local" if local else "no",
+                "preset": "", "base_url": "", "site": "https://huggingface.co/" + rid, "context": None, "connected": "",
+                "likes": m["likes"] if isinstance(m.get("likes"), int) and not isinstance(m.get("likes"), bool) else 0})
+
+
+def group_news(sources, days=365, today=None):
+    """One entry per model, newest first, with every service that offers it."""
+    today = today or datetime.date.today()
+    groups = {}
+    for x in sources:
+        if not x["day"]:
+            continue
+        try:
+            age = (today - datetime.date.fromisoformat(x["day"])).days
+        except ValueError:
+            continue
+        if age > days or age < -3:
+            continue
+        if not x.get("key"):
+            continue
+        g = groups.setdefault(x["key"], {"key": x["key"], "name": x["name"], "kind": x["kind"], "day": x["day"], "sources": []})
+        g["day"] = min(g["day"], x["day"])                        # released = the first day any service had it
+        if x["kind"] == "stt":
+            g["kind"] = "stt"
+        g["sources"].append({k: v for k, v in x.items() if k not in ("key", "name", "day", "kind")})
+    rank = {"yes": 0, "custom": 1, "local": 1, "no": 2}
+    for g in groups.values():
+        g["sources"].sort(key=lambda s: (not s["connected"], rank.get(s["usable"], 3), s["in"] if s["in"] is not None else 1e9))
+        g["sources"] = g["sources"][:8]
+        g["free"] = any(s["free"] for s in g["sources"])
+        g["usable"] = any(s["usable"] != "no" for s in g["sources"])
+        g["open"] = any(s["open"] for s in g["sources"])
+        g["audio"] = any(s["audio"] for s in g["sources"])
+    return sorted(groups.values(), key=lambda g: (g["day"], g["name"]), reverse=True)[:1500]
+
+
+def _hf_list(get):
+    last = None
+    for host in HF_HOSTS:                                        # the mirror when the main site is blocked
+        try:
+            return get(host + "/api/models", {"pipeline_tag": "automatic-speech-recognition", "sort": "createdAt",
+                                              "direction": "-1", "limit": "100"})
+        except APIError as e:
+            last = e
+    raise last or APIError("no answer")
+
+
+def fetch_model_news(proxy, connected, get=None):
+    """Asks the three public catalogs at the same time. get(url, params) -> parsed JSON (tests pass a fake one)."""
+    def real_get(url, params=None):
+        last = None
+        for px in ([proxy, ""] if proxy else [""]):
+            try:
+                with httpx.Client(timeout=httpx.Timeout(25.0, connect=10.0), follow_redirects=True, trust_env=False,
+                                  headers={"User-Agent": f"MeetingAssistant/{VERSION}"}, **({"proxy": px} if px else {})) as c:
+                    r = c.get(url, params=params)
+                    if r.status_code == 200:
+                        return r.json()
+                    last = f"HTTP {r.status_code}"
+            except (httpx.HTTPError, ValueError) as e:
+                last = dl_error(e) if isinstance(e, httpx.HTTPError) else "unexpected answer"
+        raise APIError(last or "no answer")
+    get = get or real_get
+    jobs = {"models.dev": lambda: parse_models_dev(get("https://models.dev/api.json"), connected),
+            "OpenRouter": lambda: parse_openrouter(get("https://openrouter.ai/api/v1/models"), connected),
+            "Hugging Face": lambda: parse_hf_asr(_hf_list(get))}
+    sources, failed = [], []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {name: ex.submit(fn) for name, fn in jobs.items()}
+        for name, f in futs.items():
+            try:
+                sources += f.result()
+            except Exception as e:
+                failed.append(f"{name}: {short(e, 80)}")
+    old = (datetime.date.today() - datetime.timedelta(days=730)).isoformat()
+    sources = [x for x in sources if x.get("day") and x["day"] >= old]      # the saved list stays small
+    if not sources:
+        raise APIError("No catalog could be reached (" + "; ".join(failed) + "). Check the internet or the proxy in Setup.")
+    return sources, failed
+
 
 HF_HOSTS = tuple(h for h in os.environ.get("MA_HF_HOSTS", "https://huggingface.co https://hf-mirror.com").split() if h)
 MODEL_FILE_RE = re.compile(r"^(config\.json|preprocessor_config\.json|model\.bin|tokenizer\.json|vocabulary\.(txt|json))$")
@@ -7846,6 +8096,7 @@ class App:
         LOCAL.listeners.append(self._local_changed)
         LLM.on_change = self._llm_changed
         threading.Thread(target=self._ticker, daemon=True, name="ticker").start()
+        self._news_check_later()
         threading.Thread(target=self.sync_local, daemon=True, name="local-sync").start()
 
     # ---- state for the window ------------------------------------------------------
@@ -9629,6 +9880,94 @@ class App:
             it["listed"] = it["repo"] in have
         log(f"Model search ({kind}, {sort}): {len(res['items'])} found")
         return {"ok": True, "kind": kind, **res}
+
+    def news_connected(self):
+        """preset -> provider id, for the services the user already has a key for (so 'Use for …' can be offered)."""
+        out = {"groq": "groq"} if self.cfg["api_key"] else {}
+        for p in self.cfg["providers"]:
+            if p.get("api_key"):
+                if (p.get("preset") or "custom") != "custom":
+                    out.setdefault(p["preset"], p["id"])
+                if p.get("base_url"):                             # a service added by its address: matched by the address
+                    out.setdefault("url:" + p["base_url"].rstrip("/").lower(), p["id"])
+        return out
+
+    def api_model_news(self, refresh=False, seen=False, days=365):
+        """New models from public catalogs (models.dev, OpenRouter, Hugging Face): free and paid, with where to get them.
+        Kept for 12 hours; 'new' = not seen in an earlier look."""
+        try:
+            days = max(7, min(730, int(days)))
+        except (TypeError, ValueError):
+            days = 365
+        connected = self.news_connected()
+        with _news_lock:
+            cache = load_news()
+        failed = []
+        if refresh or not cache.get("sources") or time.time() - cache.get("t", 0) > 12 * 3600:
+            if _news_fetch_lock.acquire(timeout=75):                 # another download is running: wait for it, then use it
+                try:
+                    with _news_lock:
+                        cache = load_news()
+                    if refresh or not cache.get("sources") or time.time() - cache.get("t", 0) > 12 * 3600:
+                        try:
+                            fresh, failed = fetch_model_news(detect_proxy(self.cfg["proxy"])[0], connected)
+                        except APIError as e:
+                            if not cache.get("sources"):
+                                return {"ok": False, "error": str(e)}
+                            failed = [str(e) + " (older list shown)"]
+                        else:
+                            bad = {f.split(":")[0] for f in failed}      # a list that did not answer keeps its old entries
+                            fresh += [x for x in cache.get("sources") or [] if x.get("cat") in bad]
+                            with _news_lock:
+                                cache = load_news()
+                                cache.update({"t": time.time(), "sources": fresh})
+                                save_news(cache)
+                finally:
+                    _news_fetch_lock.release()
+        with _news_lock:
+            cache = load_news()
+            sources = cache.get("sources") or []
+            for x in sources:                                        # keys added or removed since the list was made
+                if x.get("provider") == "huggingface":
+                    x["connected"] = ""
+                elif x.get("usable") == "custom":
+                    x["connected"] = connected.get("url:" + str(x.get("base_url") or "").rstrip("/").lower(), "")
+                else:
+                    x["connected"] = connected.get(x.get("preset") or "", "")
+            groups = group_news(sources, days)
+            known = set(cache.get("known") or [])
+            first = not known
+            for g in groups:
+                g["new"] = not first and g["key"] not in known
+            if seen or first:
+                order = list(cache.get("known") or [])               # oldest first: the oldest keys are dropped first
+                order += [g["key"] for g in reversed(group_news(sources, 730)) if g["key"] not in known]
+                cache["known"] = order[-8000:]
+                save_news(cache)
+        n_new = sum(1 for g in groups if g["new"])
+        if seen:
+            self.hub.publish("model_news", new=0)
+        log(f"New models: {len(groups)} listed, {n_new} new" + (" · not reached: " + "; ".join(failed) if failed else ""))
+        return {"ok": True, "items": groups, "new": n_new, "failed": failed, "at": cache.get("t", 0)}
+
+    def _news_check_later(self):
+        """Once a day, quietly: how many new models appeared (shown as a number on the button). Never during a meeting."""
+        def run():
+            wait = 120
+            while not self.closing.wait(wait):
+                wait = 3600
+                if self.running or self.recording:
+                    continue                                         # never during a meeting
+                cache = load_news()
+                if time.time() - cache.get("t", 0) < 20 * 3600 or not cache.get("known"):
+                    continue
+                try:
+                    r = self.api_model_news(refresh=True)
+                    if r.get("ok") and r.get("new"):
+                        self.hub.publish("model_news", new=r["new"])
+                except Exception as e:
+                    log("model news check skipped:", short(e, 100), level="debug")
+        threading.Thread(target=run, daemon=True, name="model-news").start()
 
     def api_llm_state(self):
         return self.llm_state()

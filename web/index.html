@@ -304,6 +304,15 @@ body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · C
 .co-diff{display:inline-flex;gap:2px;align-items:center}
 .co-diff i{width:6px;height:6px;border-radius:50%;background:var(--border)}
 .co-diff i.on{background:var(--amber)}
+.news-n{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700;line-height:18px;text-align:center}
+.nw-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.nw-row{border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:8px;background:var(--surface)}
+.nw-row.new{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft)}
+.nw-head{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline}
+.nw-head b{font-size:1.05rem}
+.nw-src{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:6px 0 0;margin-top:6px;border-top:1px dashed var(--border)}
+.nw-src .p{min-width:150px;font-weight:600}
+.nw-src code{font-size:.85rem}
 .co-say{padding:6px 9px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:.9rem;line-height:1.5;font-weight:500}
 .co-tip{padding:6px 10px;border-radius:8px;background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--text);font-size:.98rem;line-height:1.7}
 .co-top{display:flex;align-items:center;gap:8px}
@@ -981,6 +990,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="ov-foot"><button class="btn sm primary" id="testAll"><span data-icon="zap"></span><span>Test all parts</span></button>
           <button class="btn sm ghost" id="creditBtn"><span data-icon="gauge"></span><span>Credit &amp; limits</span></button>
           <button class="btn sm ghost" id="modelsBtn"><span data-icon="refresh"></span><span>Check models</span></button>
+          <button class="btn sm ghost" id="newsBtn"><span data-icon="sparkles"></span><span>New models</span><span class="news-n" id="newsN" hidden></span></button>
           <button class="btn sm ghost" id="selfBtn"><span data-icon="gauge"></span><span>Check this computer</span></button>
           <button class="btn sm ghost" id="selfOvBtn"><span data-icon="eye"></span><span>Try the overlay (5 s)</span></button>
           <span class="help">Test runs each task once for real — do it before an important meeting.</span></div>
@@ -1329,7 +1339,7 @@ const S = {
 };
 
 // actions that really take long (they run tests or wait for services); everything else answers quickly
-const SLOW_API = {selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
+const SLOW_API = {model_news: 90, selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
                   audio_check: 90, test_proxy: 60, test_connection: 60, local_delete: 60, stop: 60, start: 60,
                   say: 75, search_meetings: 75, export: 60, about_file: 60};
 async function api(name, body={}){
@@ -1416,6 +1426,7 @@ function handle(m){
       return;
     case "coach": S.coach = m.coach; renderCoach(); return;
     case "answer_check": S.check = m.check; renderCoach(); return;
+    case "model_news": S.newsN = m.new || 0; renderNewsN(); return;
     case "coach_notes": S.notes = m.notes; if(TM.kind === "coach") openNotes(true); return;
     case "local": S.local = m.local; renderLocal(); renderSttMode(); return;
     case "llm": S.llm = m.llm; renderLlm(); return;
@@ -3178,6 +3189,95 @@ async function runSelfCheck(live){
 }
 $("#selfBtn").onclick = () => runSelfCheck(false);
 $("#selfOvBtn").onclick = () => runSelfCheck(true);
+
+/* ---------- new models (public catalogs) ---------- */
+const NW = {kind: "all", price: "all", usable: true, q: "", days: 90, data: null, busy: false};
+function renderNewsN(){ const n = $("#newsN"); if(!n) return; n.hidden = !S.newsN; n.textContent = S.newsN > 99 ? "99+" : String(S.newsN || ""); }
+const money = v => v == null ? "?" : v === 0 ? "0" : v < 0.01 ? "<0.01" : (v < 10 ? v.toFixed(2) : Math.round(v)).toString().replace(/\.00$/, "");
+async function openNews(refresh){
+  openTool("news", "New models", "sparkles");
+  if(NW.busy) return;
+  if(true){                                           // always asked: the server keeps the list, this only updates "your key is set"
+    NW.busy = true;
+    $("#toolBody").innerHTML = `<div class="help"><span class="spinner"></span> Looking in public model lists (models.dev, OpenRouter, Hugging Face)…</div>`;
+    toolActions([]); $("#toolNote").innerHTML = "";
+    const r = await api("model_news", {refresh: !!refresh, seen: true});
+    NW.busy = false;
+    if(TM.kind !== "news") return;
+    if(!r.ok || !Array.isArray(r.items)){ $("#toolBody").innerHTML = `<div class="help">${icon("alert")} ${esc(r.error || "The lists could not be read.")}</div>`; toolActions([{icon: "refresh", text: "Try again", run: () => openNews(true)}]); return; }
+    NW.data = r; S.newsN = 0; renderNewsN();
+  }
+  renderNews();
+}
+function newsUseBtns(g, s){
+  if(!s.connected) return "";
+  if(g.kind === "stt" && !s.stt_ok) return `<span class="help">This service cannot turn speech into text in this program</span>`;
+  const t = g.kind === "stt" ? [["stt", "Use for speech to text"]] : [["ans", "Use for answers"], ["tr", "Use for translation"]];
+  return t.map(([k, txt]) => `<button class="btn sm ghost" data-use="${k}" data-pid="${esc(s.connected)}" data-model="${esc(s.model)}">${esc(txt)}</button>`).join("");
+}
+function renderNews(){
+  const r = NW.data; if(!r) return;
+  const q = NW.q.trim().toLowerCase(), today = Date.now();
+  const list = r.items.filter(g => (NW.kind === "all" || g.kind === NW.kind) && (NW.price === "all" || (NW.price === "free" ? g.free : !g.free))
+    && (!NW.usable || g.usable) && (today - Date.parse(g.day)) / 864e5 <= NW.days
+    && (!q || g.name.toLowerCase().includes(q) || g.sources.some(s => (s.provider_name + " " + s.model).toLowerCase().includes(q))));
+  const seg = (key, opts) => `<div class="seg" data-nw="${key}">${opts.map(([v, t]) => `<button data-val="${v}" class="${String(NW[key]) === String(v) ? "on" : ""}">${t}</button>`).join("")}</div>`;
+  const USE = {yes: ["ok", "Usable here"], custom: ["ok", "Usable here (add as “Another service”)"], local: ["ok", "Runs on this computer"], no: ["", "Not usable in this program (different format)"]};
+  const rows = list.slice(0, 150).map(g => `<div class="nw-row${g.new ? " new" : ""}">
+      <div class="nw-head"><b dir="ltr">${esc(g.name)}</b>${g.new ? `<span class="tag" style="background:var(--accent);color:#fff">NEW</span>` : ""}
+        <span class="help">${g.kind === "stt" ? "Speech to text" : "Translation and answers"} · released ${esc(g.day)}</span>
+        ${g.free ? `<span class="tag">Free option</span>` : ""}${g.open ? `<span class="tag">Open weights</span>` : ""}${g.audio && g.kind !== "stt" ? `<span class="tag">Hears audio</span>` : ""}</div>
+      ${g.sources.map(s => { const u = USE[s.usable] || USE.no; return `<div class="nw-src" dir="ltr">
+        <span class="p">${esc(s.provider_name)}</span>
+        <span class="help">${s.free ? "free" : s.in == null ? "price: see the site" : `$${money(s.in)} in / $${money(s.out)} out per 1M tokens`}${s.context ? ` · ${Math.round(s.context / 1000)}k context` : ""}</span>
+        <span class="help" style="color:var(--${u[0] === "ok" ? "ok" : "muted"})">${s.connected ? "Your key is set" : u[1]}</span>
+        <code>${esc(s.model)}</code>
+        <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">${newsUseBtns(g, s)}
+          ${!s.connected && (s.usable === "yes" || s.usable === "custom") && s.preset !== "groq" ? `<button class="btn sm ghost" data-add="${esc(s.preset)}" data-base="${esc(s.base_url)}" data-name="${esc(s.provider_name)}">Add this service</button>` : ""}
+          ${s.usable === "local" ? `<button class="btn sm ghost" data-local="1">Download it here</button>` : ""}
+          <button class="btn sm ghost" data-copy="${esc(s.model)}">Copy name</button>
+          ${s.site ? `<a class="btn sm ghost" href="${esc(s.site)}" target="_blank" rel="noopener">Website</a>` : ""}</span></div>`; }).join("")}
+    </div>`).join("");
+  $("#toolBody").innerHTML = `<div class="nw-filters">
+      ${seg("kind", [["all", "All"], ["chat", "Translation & answers"], ["stt", "Speech to text"]])}
+      ${seg("price", [["all", "Free and paid"], ["free", "Free"], ["paid", "Paid"]])}
+      ${seg("days", [[30, "30 days"], [90, "3 months"], [365, "1 year"]])}
+      <label class="toggle" style="margin:0"><input type="checkbox" id="nwUsable" ${NW.usable ? "checked" : ""}><span class="switch"></span><span class="tt"><b>Only ones this program can use</b></span></label>
+      <input class="input" id="nwQ" placeholder="Search a name or a service…" value="${esc(NW.q)}" style="max-width:260px"></div>
+    <div class="help" style="margin-bottom:8px">${list.length} model(s)${r.new ? ` · ${r.new} new since your last look` : ""} · list from ${new Date((r.at || 0) * 1000).toLocaleString()}${(r.failed || []).length ? ` · not reached: ${esc(r.failed.join("; "))}` : ""}</div>
+    ${rows || `<div class="help">Nothing matches. Change the filters.</div>`}
+    ${list.length > 150 ? `<div class="help">Showing the newest 150. Use the search box to find others.</div>` : ""}
+    <div class="help" style="margin-top:10px">After you buy a key: press “Add this service”, paste the key in Setup › Services, press Test, then come back here and press “Use for …”.</div>`;
+  const body = $("#toolBody");
+  body.querySelectorAll("[data-nw]").forEach(sg => sg.querySelectorAll("button").forEach(b => b.onclick = () => { const k = sg.dataset.nw; NW[k] = k === "days" ? +b.dataset.val : b.dataset.val; renderNews(); }));
+  $("#nwUsable").onchange = ev => { NW.usable = ev.target.checked; renderNews(); };
+  $("#nwQ").oninput = ev => { NW.q = ev.target.value; clearTimeout(NW.t); NW.t = setTimeout(() => { const pos = ev.target.selectionStart; renderNews(); const i = $("#nwQ"); i.focus(); try{ i.setSelectionRange(pos, pos); }catch{} }, 250); };
+  body.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => copyText(b.dataset.copy, "Model name copied."));
+  body.querySelectorAll("[data-local]").forEach(b => b.onclick = () => { closeTool(); findState.sort = "new"; openFind("stt"); });
+  body.querySelectorAll("[data-use]").forEach(b => b.onclick = () => {
+    const t = b.dataset.use, pid = b.dataset.pid, model = b.dataset.model;
+    S.cfg[t + "_provider"] = pid; S.cfg[t + "_model"] = model; renderAssign(); renderSttMode();
+    queueSave({[t + "_provider"]: pid, [t + "_model"]: model});
+    toast("info", `Set. Press “Test all parts” in Setup › Services to check that ${model} works.`);
+  });
+  body.querySelectorAll("[data-add]").forEach(b => b.onclick = async () => {
+    if(b.disabled) return; b.disabled = true;
+    const preset = b.dataset.add || "custom";
+    const have = (S.cfg.providers || []).find(p => preset === "custom" ? (p.base_url || "").toLowerCase() === (b.dataset.base || "").toLowerCase() : p.preset === preset);
+    if(have){ b.disabled = false; closeTool(); openDrawer("connection"); S.openCards.add(have.id); renderServices();
+      const c = $(`#provList .svc-card[data-id="${CSS.escape(have.id)}"]`); if(c){ c.scrollIntoView({block: "nearest"}); const k = c.querySelector(".key"); if(k) k.focus(); }
+      return toast("info", "You already added this service. Paste its key and press Test."); }
+    const r = await api("save_provider", preset === "custom" ? {preset, base_url: b.dataset.base, name: b.dataset.name} : {preset});
+    b.disabled = false;
+    if(!r.ok) return toast("error", r.error || "Could not add the service.");
+    S.cfg = r.config; S.openCards.add(r.id); closeTool(); openDrawer("connection"); renderServices();
+    const card = $(`#provList .svc-card[data-id="${CSS.escape(r.id)}"]`);
+    if(card){ card.scrollIntoView({block: "nearest"}); const k = card.querySelector(".key"); if(k) k.focus(); }
+    toast("info", "Added. Paste the key you bought here and press Test.");
+  });
+  toolActions([{icon: "refresh", text: "Look again now", run: () => openNews(true)}, {icon: "check", text: "Close", run: closeTool}]);
+}
+$("#newsBtn").onclick = () => openNews(false);
 
 function showModelReport(r){
   const box = $("#modelResults"), ST = {ok: ["ok", "check"], auto: ["ok", "check"], local: ["ok", "check"], missing: ["bad", "alert"], live: ["", "info"], unchecked: ["", "info"], off: ["", "info"]};

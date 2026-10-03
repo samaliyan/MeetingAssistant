@@ -25,6 +25,7 @@ Ways of checking:
 | Coach (situation, silence, kinds of question, words to say) | yes (fake model) | yes (overlay layout) | yes | – | quality of real coach text, real silence timing |
 | Practice interview, job advert, scores | yes | yes | yes (2 rounds) | – | speech reading aloud (voices) |
 | Local server, token, host check | yes (real localhost server) | yes | yes | – | – |
+| New models list (models.dev, OpenRouter, Hugging Face) | yes (fake lists, odd data, offline) | yes (fake list; Hugging Face reached for real) | yes | – | the real models.dev and OpenRouter lists, buying and adding a real key |
 | Readability (sizes, contrast, layout at 1366, 1536@125%, 1920, dark, overlay) | – | yes (screenshots) | yes (3 UX reviewers + re-review) | – | real Segoe UI / Vazirmatn rendering, 150% scaling |
 | Web page: transcript, answer panel, settings, tools | – | yes | yes | – | WebView2 differences, fonts |
 | Long meetings (thousands of lines) | – | yes (1500 lines) | yes | – | 3-hour real meeting |

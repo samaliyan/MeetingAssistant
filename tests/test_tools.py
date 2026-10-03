@@ -1348,3 +1348,110 @@ def test_coach_rescues_a_stuck_user_once(app):
     eng.me_voice_at = time.time()                            # the mic hears the user: not stuck
     assert eng.coach_situation()[1] is False
     eng.stop_event.set()
+
+
+def _news_fakes():
+    md = {"openai": {"name": "OpenAI", "doc": "https://platform.openai.com/docs", "models": {
+              "gpt-9": {"name": "GPT-9", "release_date": "2026-09-20", "modalities": {"input": ["text", "image"], "output": ["text"]},
+                        "cost": {"input": 2.5, "output": 10}, "limit": {"context": 400000}},
+              "gpt-9-transcribe": {"name": "GPT-9 Transcribe", "release_date": "2026-09-25", "modalities": {"input": ["audio"], "output": ["text"]},
+                                   "cost": {"input": 3, "output": 6}},
+              "img-x": {"name": "Image X", "release_date": "2026-09-25", "modalities": {"input": ["text"], "output": ["image"]}}}},
+          "azure": {"name": "Azure", "models": {"gpt-9": {"name": "GPT-9", "release_date": "2026-09-21",
+                    "modalities": {"input": ["text"], "output": ["text"]}, "cost": {"input": 2.5, "output": 10}}}},
+          "newco": {"name": "NewCo", "api": "https://api.newco.ai/v1", "models": {"nc-1": {"name": "NC-1", "release_date": "2026-09-28",
+                    "modalities": {"input": ["text"], "output": ["text"]}, "cost": {"input": 0, "output": 0}, "open_weights": True}}},
+          "broken": "x"}
+    orr = {"data": [{"id": "openai/gpt-9", "name": "OpenAI: GPT-9", "created": 1790300000, "context_length": 400000,
+                     "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                     "pricing": {"prompt": "0.0000025", "completion": "0.00001"}},
+                    {"id": "meta/llama-x:free", "name": "Meta: Llama X (free)", "created": 1790400000,
+                     "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}, "pricing": {"prompt": "0", "completion": "0"}},
+                    "junk"]}
+    hf = [{"id": "someone/whisper-x-ct2", "createdAt": "2026-09-27T10:00:00.000Z", "tags": ["ctranslate2"], "likes": 5},
+          {"id": "lab/new-asr", "createdAt": "2026-09-26T10:00:00.000Z", "tags": ["transformers"]}, {"id": "../bad"}]
+    return md, orr, hf
+
+
+def test_model_news_parse_group_and_use(app):
+    import datetime
+    md, orr, hf = _news_fakes()
+    conn = {"openai": "openai2"}
+    src = app.parse_models_dev(md, conn) + app.parse_openrouter(orr, conn) + app.parse_hf_asr(hf)
+    assert not any(x["model"] == "img-x" for x in src)                        # pictures are not for this program
+    g = {x["key"]: x for x in app.group_news(src, 365, datetime.date(2026, 10, 3))}
+    gpt = g["gpt-9"]
+    assert gpt["kind"] == "chat" and gpt["day"] == "2026-09-20" and len(gpt["sources"]) == 3
+    assert gpt["sources"][0]["connected"] == "openai2"                        # the service you have a key for comes first
+    assert next(s for s in gpt["sources"] if s["provider"] == "azure")["usable"] == "no"
+    orr_src = next(s for s in gpt["sources"] if s["provider"] == "openrouter")
+    assert orr_src["in"] == 2.5 and orr_src["out"] == 10.0
+    assert g["gpt-9-transcribe"]["kind"] == "stt"
+    assert g["llama-x"]["free"] and g["nc-1"]["free"] and g["nc-1"]["sources"][0]["usable"] == "custom"
+    assert g["nc-1"]["sources"][0]["base_url"] == "https://api.newco.ai/v1"
+    assert g["hf:someone/whisper-x-ct2"]["sources"][0]["usable"] == "local" and g["hf:lab/new-asr"]["sources"][0]["usable"] == "no"
+    old = app.group_news(src, 7, datetime.date(2027, 6, 1))
+    assert old == []                                                            # older than the window: not listed
+
+
+def test_model_news_api_marks_new_and_survives_offline(app, tmp_path):
+    import os
+    md, orr, hf = _news_fakes()
+    app.MODEL_NEWS_PATH = os.path.join(str(tmp_path), "news.json")
+    a = app.App()
+    calls = []
+
+    def fake(proxy, connected, get=None):
+        calls.append(1)
+        return (app.parse_models_dev(md, connected) + app.parse_openrouter(orr, connected), [])
+    orig = app.fetch_model_news
+    app.fetch_model_news = fake
+    try:
+        r = a.api_model_news(refresh=True, days=3650)
+        assert r["ok"] and r["new"] == 0 and r["items"]                         # the first look: nothing is 'new'
+        md["openai"]["models"]["gpt-10"] = {"name": "GPT-10", "release_date": "2026-09-30",
+                                            "modalities": {"input": ["text"], "output": ["text"]}}
+        r = a.api_model_news(refresh=True, days=3650)
+        assert r["new"] == 1 and next(g for g in r["items"] if g["key"] == "gpt-10")["new"]
+        r = a.api_model_news(seen=True, days=3650)
+        r = a.api_model_news(days=3650)
+        assert r["new"] == 0 and len(calls) == 2                                 # kept for 12 hours: no new download
+        app.fetch_model_news = lambda *x, **k: (_ for _ in ()).throw(app.APIError("offline"))
+        r = a.api_model_news(refresh=True, days=3650)
+        assert r["ok"] and r["items"] and "older list" in r["failed"][0]         # offline: the last list stays usable
+    finally:
+        app.fetch_model_news = orig
+
+
+def test_model_news_links_are_safe(app):
+    bad = {"evil": {"name": "Evil", "api": "javascript:alert(1)", "doc": "javascript:alert(2)", "models": {
+        "m": {"name": "M", "release_date": "2026-09-30", "modalities": {"input": ["text"], "output": ["text"]}}}},
+           "odd": {"name": "Odd", "api": "http://insecure.example/v1", "doc": "file:///c:/x", "models": {
+        "m2": {"name": "M2", "release_date": "2026-09-30", "modalities": {"input": ["text"], "output": ["text"]}}}}}
+    src = app.parse_models_dev(bad, {})
+    assert all(x["site"] == "" and x["base_url"] == "" and x["usable"] == "no" for x in src)
+    assert app._https("https://api.x.ai/v1") == "https://api.x.ai/v1" and app._https("https://a.b/\"><script>") == ""
+
+
+def test_model_news_odd_items_and_custom_match(app, tmp_path):
+    import os
+    odd = {"p": {"name": "P", "api": "https://api.p.ai/v1", "models": {
+        "a": {"name": "A", "release_date": "2026-09-30", "modalities": {"input": 5, "output": ["text"]}},
+        "b": {"name": "B", "release_date": "2026-09-30", "modalities": {"input": ["text"], "output": ["text"]}}}}}
+    src = app.parse_models_dev(odd, {})
+    assert [x["model"] for x in src] == ["b"]                                 # one odd entry does not lose the list
+    assert app.parse_hf_asr([{"id": "a/b", "tags": 7, "likes": "9" * 5000}])[0]["likes"] == 0
+    assert app.parse_openrouter({"data": [{"id": "x/y", "architecture": {"input_modalities": 3}}]}, {}) == []
+    app.MODEL_NEWS_PATH = os.path.join(str(tmp_path), "news.json")
+    a = app.App()
+    a.cfg["providers"] = [{"id": "aval", "preset": "custom", "name": "AvalAI", "base_url": "https://api.avalai.ir/v1", "api_key": "k", "models": []}]
+    orig = app.fetch_model_news
+    app.fetch_model_news = lambda proxy, conn, get=None: (app.parse_models_dev(odd, conn), [])
+    try:
+        r = a.api_model_news(refresh=True, days=3650)
+        assert r["ok"] and all(not s["connected"] for g in r["items"] for s in g["sources"])   # another address: not 'your key'
+        a.cfg["providers"][0]["base_url"] = "https://api.p.ai/v1"
+        r = a.api_model_news(days=3650)
+        assert r["items"][0]["sources"][0]["connected"] == "aval"
+    finally:
+        app.fetch_model_news = orig

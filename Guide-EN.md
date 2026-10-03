@@ -1,4 +1,9 @@
-# Meeting Assistant — User Guide (version 6.12)
+# Meeting Assistant — User Guide (version 6.13)
+
+## Version 6.13: find new models
+
+- **Setup › Services › New models** lists new models from public lists (free and paid), the services that sell them and their prices.
+- After you buy a key: **Add this service**, paste the key, press **Test**, then **Use for answers** (or translation / speech to text).
 
 ## Version 6.12: easier to read
 

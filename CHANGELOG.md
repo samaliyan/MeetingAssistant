@@ -2,6 +2,16 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.13]
+
+**New models** (Setup › Services › New models): the program looks in three public lists, with no key needed — models.dev (models sold by OpenAI, Google, Mistral, Groq, xAI, DeepSeek, Azure and many others, with prices and release dates), OpenRouter (hundreds of models behind one key, many of them free) and Hugging Face (new speech-to-text models).
+
+- One line per model, newest first: what it is for (translation and answers, or speech to text), when it came out, every service that sells it with its price per million tokens, or "free", and whether this program can use it there.
+- Filters: kind, free / paid, the last 30 days / 3 months / 1 year, only the ones this program can use, and a search box. Models that appeared since your last look are marked NEW; once a day (never during a meeting) the program checks quietly and shows the number on the button.
+- After you buy a key: **Add this service** adds it to Setup with the right address (or opens the one you already added), you paste the key and press Test, and then **Use for answers / translation / speech to text** sets that model. Speech to text is offered only where the service really does it in this program (OpenAI, Groq, Mistral); a new local model from Hugging Face opens the local model download.
+- The list is kept for 12 hours; if a site cannot be reached, the last list stays usable and the screen says which site did not answer. Links and service addresses from the lists are used only when they are plain https.
+- 103 automated tests.
+
 ## [6.12]
 
 Easier to read at a glance (a strict review of the screens, the text sizes and the colours by independent reviewers).
