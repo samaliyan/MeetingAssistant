@@ -64,7 +64,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.14"
+VERSION = "6.15"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -2766,6 +2766,47 @@ CPP_CATALOG = [
 ]
 
 
+# Vosk: very small, very light models (one language each). Less accurate than Whisper, no punctuation - for weak
+# computers. The engine itself (libvosk, ~15 MB) is downloaded once, the first time a Vosk model is downloaded.
+VOSK_BASE = "https://alphacephei.com/vosk/models/"
+VOSK_ENGINE = {"url": "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip", "mb": 15}
+VOSK_CATALOG = [
+    {"id": f"vosk-model-small-{code}", "url": VOSK_BASE + f"vosk-model-small-{code}.zip", "mb": mb, "ui": "stt",
+     "engine": "vosk", "lang": code[:2], "note": f"Vosk · {name} only · very light, less accurate, no punctuation"}
+    for code, mb, name in (("en-us-0.15", 40, "English"), ("de-0.15", 45, "German"), ("fr-0.22", 41, "French"),
+                           ("es-0.42", 39, "Spanish"), ("it-0.22", 48, "Italian"), ("nl-0.22", 39, "Dutch"),
+                           ("ru-0.22", 45, "Russian"), ("tr-0.3", 35, "Turkish"), ("fa-0.42", 53, "Persian"))]
+
+
+def vosk_catalog():
+    """Vosk models are offered on Windows (the engine is downloaded with the first one) or where the engine already is."""
+    return VOSK_CATALOG if sys.platform == "win32" or vosk_lib_path() else []
+
+
+def vosk_lib_path():
+    """The Vosk engine (libvosk) when it is on this computer, else ''."""
+    env = os.environ.get("MA_VOSK_LIB", "")
+    name = "libvosk.dll" if sys.platform == "win32" else "libvosk.so"
+    for p in ([env] if env else []) + [os.path.join(MODELS_DIR, "vosk-engine", name), os.path.join(APP_DIR, "vosk-engine", name)]:
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
+def is_vosk_dir(folder):
+    """A Vosk model folder: am/final.mdl (or final.mdl) and conf/model.conf or conf/mfcc.conf."""
+    if not folder or not os.path.isdir(folder):
+        return False
+    has_am = os.path.isfile(os.path.join(folder, "am", "final.mdl")) or os.path.isfile(os.path.join(folder, "final.mdl"))
+    has_conf = any(os.path.isfile(os.path.join(folder, "conf", c)) for c in ("model.conf", "mfcc.conf"))
+    return has_am and has_conf
+
+
+def vosk_lang(folder):
+    m = re.search(r"vosk-model-(?:small-)?([a-z]{2})(?:-|$)", os.path.basename(os.path.normpath(folder or "")).lower())
+    return m.group(1) if m else ""
+
+
 # ---- finding newer downloadable models (Hugging Face) ---------------------------------------
 def system_info():
     """Memory, processor threads and free disk of this computer (0 when unknown)."""
@@ -3313,6 +3354,13 @@ def model_folder(path):
         folder = p
     if not os.path.isdir(folder):
         return "", f"Not found: {folder}"
+    if not os.path.isfile(os.path.join(folder, "model.bin")):
+        for cand in (folder, os.path.dirname(folder)):           # a Vosk folder, or a file / sub-folder inside one
+            if is_vosk_dir(cand):
+                if vosk_lib_path():
+                    return os.path.abspath(cand), ""
+                return "", ("This is a Vosk model. The Vosk engine is not on this computer yet: download any Vosk model "
+                            "in Setup › Services › Local model once, and the engine comes with it.")
     missing = [f for f in NEEDED_FILES if not os.path.isfile(os.path.join(folder, f))]
     if missing:
         return "", (f"This folder is missing {', '.join(missing)}. A faster-whisper model folder has "
@@ -3339,6 +3387,8 @@ def model_label(folder):
         if part.startswith("models--"):
             name = part.split("--")[-1]
             break
+    if is_vosk_dir(folder):
+        return re.sub(r"^vosk-model-", "", name) + " (Vosk)"
     name = re.sub(r"^(faster-(distil-)?whisper-)", "", name)
     return name or folder
 
@@ -3351,10 +3401,14 @@ def folder_mb(folder):
             return 0
     total = 0
     try:
-        for f in os.listdir(folder):
-            fp = os.path.join(folder, f)
-            if os.path.isfile(fp):
-                total += os.path.getsize(fp)
+        if is_vosk_dir(folder):                              # a Vosk model keeps its files in sub-folders
+            for root, _, files in os.walk(folder):
+                total += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+        else:
+            for f in os.listdir(folder):
+                fp = os.path.join(folder, f)
+                if os.path.isfile(fp):
+                    total += os.path.getsize(fp)
     except OSError:
         pass
     return round(total / 1e6)
@@ -3373,7 +3427,7 @@ def find_models(extra=""):
             return
         seen.add(key)
         home = os.path.dirname(os.path.dirname(f)) if os.path.isfile(f) else os.path.dirname(f)
-        found.append({"path": f, "name": model_label(f), "mb": folder_mb(f), "source": source, "engine": "cpp" if os.path.isfile(f) else "fw",
+        found.append({"path": f, "name": model_label(f), "mb": folder_mb(f), "source": source, "engine": "cpp" if os.path.isfile(f) else "vosk" if is_vosk_dir(f) else "fw", "lang": vosk_lang(f) if is_vosk_dir(f) else "",
                       "removable": os.path.normcase(home) == os.path.normcase(os.path.abspath(MODELS_DIR))})
     try:
         for d in sorted(os.listdir(MODELS_DIR)):
@@ -3610,6 +3664,284 @@ class CppServer:
                 pass
 
 
+_VOSK = {"lib": None, "path": ""}
+_vosk_lock = threading.Lock()
+
+
+def load_vosk_lib():
+    """libvosk through ctypes (no extra Python package): a few plain C functions."""
+    import ctypes
+    with _vosk_lock:
+        path = vosk_lib_path()
+        if not path:
+            raise RuntimeError("The Vosk engine is not on this computer. Download a Vosk model again (the engine comes with it).")
+        if _VOSK["lib"] is not None and _VOSK["path"] == path:
+            return _VOSK["lib"]
+        folder = os.path.dirname(path)
+        if sys.platform == "win32":
+            try:
+                os.add_dll_directory(folder)                    # libstdc++ / libgcc / libwinpthread next to it
+            except Exception:
+                pass
+        lib = ctypes.CDLL(path)
+        vp, cp, ci, cf = ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_float
+        sig = {"vosk_set_log_level": ([ci], None), "vosk_model_new": ([cp], vp), "vosk_model_free": ([vp], None),
+               "vosk_recognizer_new": ([vp, cf], vp), "vosk_recognizer_set_words": ([vp, ci], None),
+               "vosk_recognizer_accept_waveform": ([vp, cp, ci], ci), "vosk_recognizer_result": ([vp], cp),
+               "vosk_recognizer_final_result": ([vp], cp), "vosk_recognizer_free": ([vp], None)}
+        for name, (args, res) in sig.items():
+            fn = getattr(lib, name)
+            fn.argtypes, fn.restype = args, res
+        lib.vosk_set_log_level(-1)                              # quiet
+        _VOSK.update(lib=lib, path=path)
+        return lib
+
+
+def _vosk_text(t, lang=""):
+    """Vosk writes lower case with no punctuation: a capital letter at the start, and 'i' as 'I' in English."""
+    t = " ".join((t or "").split())
+    if not t:
+        return ""
+    t = re.sub(r"\bi\b", "I", t) if lang in ("", "en") else t
+    return t[0].upper() + t[1:]
+
+
+class VoskModel:
+    """One Vosk model in memory. Speech in, text (with word times) out; one recognizer per call."""
+
+    def __init__(self, folder):
+        self.lib = load_vosk_lib()
+        self.folder = folder
+        self.lang = vosk_lang(folder)
+        self.lock = threading.Lock()                 # a recognizer is never made from a model being freed
+        path = short_path(folder)
+        self.handle = self.lib.vosk_model_new(path.encode("utf-8"))
+        if not self.handle:
+            if sys.platform == "win32" and not path.isascii():
+                raise RuntimeError("Vosk cannot read folders whose path has non-English letters. Move the program "
+                                   "(and its 'models' folder) to a folder like C:\\MeetingAssistant.")
+            raise RuntimeError("Vosk could not read this model folder (damaged, or not a Vosk model).")
+
+    def transcribe(self, audio16k, language=None, prompt=None, timestamps=False):
+        lib = self.lib
+        with self.lock:
+            if not self.handle:
+                raise RuntimeError("the model was closed")
+            rec = lib.vosk_recognizer_new(self.handle, 16000.0)   # the recognizer keeps its own hold on the model
+        if not rec:
+            raise RuntimeError("Vosk could not start")
+        segs = []
+
+        def take(raw):
+            try:
+                d = json.loads(raw.decode("utf-8", "replace")) if raw else {}
+            except ValueError:
+                return
+            words = d.get("result") or []
+            text = _vosk_text(d.get("text") or "", self.lang)
+            if text:
+                segs.append({"text": " " + text, "start": float(words[0]["start"]) if words else 0.0,
+                             "end": float(words[-1]["end"]) if words else 0.0,
+                             "avg_logprob": -0.3 if not words else math.log(max(0.05, sum(w.get("conf", 1) for w in words) / len(words))),
+                             "no_speech_prob": 0.0, "compression_ratio": 1.0})
+        try:
+            lib.vosk_recognizer_set_words(rec, 1)
+            pcm = (np.clip(np.asarray(audio16k, dtype=np.float32), -1, 1) * 32767).astype("<i2").tobytes()
+            step = 16000 * 2 * 2                               # 2 s at a time: a pause closes a sentence
+            for i in range(0, len(pcm), step):
+                chunk = pcm[i:i + step]
+                if lib.vosk_recognizer_accept_waveform(rec, chunk, len(chunk)):
+                    take(lib.vosk_recognizer_result(rec))
+            take(lib.vosk_recognizer_final_result(rec))
+        finally:
+            lib.vosk_recognizer_free(rec)
+        return {"text": "".join(sg["text"] for sg in segs).strip(), "language": self.lang or language or "",
+                "segments": segs}
+
+    def free(self):
+        with self.lock:
+            h, self.handle = self.handle, None
+        if h:
+            try:
+                self.lib.vosk_model_free(h)
+            except Exception:
+                pass
+
+
+class ZipDownload:
+    """A Vosk model (a .zip) - and the Vosk engine the first time - into the 'models' folder. Continues after a break."""
+
+    def __init__(self, item, proxy, on_progress):
+        self.item, self.proxy, self.on_progress = item, proxy, on_progress
+        self.cancel = threading.Event()
+        lib = vosk_lib_path()
+        self.need_engine = not lib or (sys.platform == "win32" and not all(
+            os.path.isfile(os.path.join(os.path.dirname(lib), d)) for d in ("libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll")))
+        total = item["mb"] + (VOSK_ENGINE["mb"] if self.need_engine else 0)
+        self.state = {"id": item["id"], "kind": "stt", "state": "starting", "done": 0, "total": total * 1_000_000,
+                      "speed": 0, "error": "", "via": ""}
+        self.dest = os.path.join(MODELS_DIR, item["id"])
+        self._last, self._base = 0.0, 0
+        self.thread = threading.Thread(target=self.run, daemon=True, name="model-download")
+
+    def _emit(self, force=False, **kw):
+        self.state.update(kw)
+        now = time.time()
+        if force or now - self._last > 0.3:
+            self._last = now
+            self.on_progress(dict(self.state))
+
+    def _get(self, url, part, note):
+        """Downloads url into the file part (continuing what is there). Tries the proxy, then a direct connection."""
+        routes = [self.proxy, ""] if self.proxy else [""]
+        last = None
+        for proxy in routes:
+            for _ in range(8):                                  # a broken connection continues where it stopped
+                if self.cancel.is_set():
+                    return False
+                have = os.path.getsize(part) if os.path.isfile(part) else 0
+                kw = dict(timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True, trust_env=False,
+                          headers={"User-Agent": f"MeetingAssistant/{VERSION}", **({"Range": f"bytes={have}-"} if have else {})})
+                if proxy:
+                    kw["proxy"] = proxy
+                self._emit(True, state="downloading", via=note + (" through the proxy" if proxy else " (direct)"))
+                try:
+                    with httpx.Client(**kw) as c, c.stream("GET", url) as r:
+                        if r.status_code == 416 and have:
+                            return True                          # already complete
+                        if r.status_code >= 400:
+                            raise DownloadError(f"HTTP {r.status_code}")
+                        if r.status_code == 200 and have:
+                            have = 0                             # the site ignored 'continue from': start over
+                        t0, got = time.time(), 0
+                        with open(part, "ab" if have else "wb") as f:
+                            for chunk in r.iter_bytes(1 << 20):
+                                if self.cancel.is_set():
+                                    return False
+                                f.write(chunk)
+                                got += len(chunk)
+                                self._emit(done=self._base + have + got, speed=round(got / max(0.5, time.time() - t0)))
+                    return True
+                except (httpx.HTTPError, DownloadError, OSError) as e:
+                    last = e
+                    grown = (os.path.getsize(part) if os.path.isfile(part) else 0) > have
+                    log(f"Vosk download ({note}) {'through the proxy' if proxy else 'direct'} failed: {short(e, 120)}", level="warn")
+                    if not grown:
+                        break
+                    time.sleep(2)
+        raise DownloadError(dl_error(last) if isinstance(last, httpx.HTTPError) else short(last or "no answer", 160))
+
+    @staticmethod
+    def _unzip(zpath, into, only=None):
+        """Unpacks safely (no file may land outside 'into'). only: keep just these file endings."""
+        import zipfile
+        root = os.path.abspath(into)
+        with zipfile.ZipFile(zpath) as z:
+            for info in z.infolist():
+                if info.is_dir():
+                    continue
+                name = info.filename.replace("\\", "/")
+                if only and not name.lower().endswith(only):
+                    continue
+                target = os.path.abspath(os.path.join(root, *[p for p in name.split("/") if p not in ("", ".", "..")]))
+                if not target.startswith(root + os.sep):
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with z.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1 << 20)
+
+    def run(self):
+        try:
+            os.makedirs(MODELS_DIR, exist_ok=True)
+            free = shutil.disk_usage(MODELS_DIR).free
+            if free < self.state["total"] * 3:
+                raise DownloadError(f"Not enough free disk space: about {round(self.state['total'] * 3 / 1e6)} MB needed "
+                                    f"(download and unpack), {round(free / 1e6)} MB free.")
+            if self.need_engine and sys.platform == "win32":
+                part = os.path.join(MODELS_DIR, "vosk-engine.zip.part")
+                if not self._get(VOSK_ENGINE["url"], part, "the Vosk engine from github.com"):
+                    self._emit(True, state="cancelled")
+                    return
+                self._emit(True, state="checking")
+                tmp = os.path.join(MODELS_DIR, "vosk-engine.tmp")
+                shutil.rmtree(tmp, ignore_errors=True)
+                try:
+                    self._unzip(part, tmp, only=(".dll",))
+                except Exception as e:
+                    os.remove(part)
+                    raise DownloadError(f"the Vosk engine file was damaged ({short(e, 80)}) — press Download again")
+                dlls = [os.path.join(r, f) for r, _, fs in os.walk(tmp) for f in fs]
+                names = {os.path.basename(f).lower() for f in dlls}
+                need = {"libvosk.dll", "libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"}
+                if not need <= names:
+                    raise DownloadError("the Vosk engine download is incomplete — press Download again")
+                eng = os.path.join(MODELS_DIR, "vosk-engine")
+                os.makedirs(eng, exist_ok=True)
+                dlls.sort(key=lambda f: os.path.basename(f).lower() == "libvosk.dll")   # libvosk last: it marks 'installed'
+                for f in dlls:
+                    for i in range(15):                     # antivirus often holds a new file for a few seconds
+                        try:
+                            os.replace(f, os.path.join(eng, os.path.basename(f)))
+                            break
+                        except PermissionError:
+                            if i == 14:
+                                raise DownloadError("Windows did not allow installing the Vosk engine (a file is in use, "
+                                                    "maybe by the antivirus). Press Download again in a minute.")
+                            time.sleep(1)
+                shutil.rmtree(tmp, ignore_errors=True)
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+                if not vosk_lib_path():
+                    raise DownloadError("libvosk.dll was not in the engine download")
+                self._base = VOSK_ENGINE["mb"] * 1_000_000
+                log("Vosk engine downloaded to", eng)
+            elif self.need_engine:
+                raise DownloadError("The Vosk engine is downloaded only on Windows (set MA_VOSK_LIB elsewhere).")
+            part = self.dest + ".zip.part"
+            if not self._get(self.item["url"], part, "the model from alphacephei.com"):
+                self._emit(True, state="cancelled")
+                log("Model download cancelled (what was downloaded is kept; Download continues it)")
+                return
+            self._emit(True, state="checking")
+            tmp = self.dest + ".tmp"
+            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                self._unzip(part, tmp)
+            except Exception as e:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+                raise DownloadError(f"the model file was damaged ({short(e, 80)}) — press Download again")
+            found = next((r for r, _, _ in os.walk(tmp) if is_vosk_dir(r)), None)
+            if not found:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise DownloadError("the download is not a Vosk model")
+            shutil.rmtree(self.dest, ignore_errors=True)
+            try:
+                os.replace(found, self.dest)
+            except OSError:
+                raise DownloadError(f"The old folder {self.dest} is in use. Choose another model (or close the program), "
+                                    "delete that folder, and press Download again.")
+            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            log(f"Model '{self.item['id']}' downloaded to {self.dest}")
+            self._emit(True, state="done", path=self.dest, done=self.state["total"])
+        except DownloadError as e:
+            msg = str(e)
+            if re.search(r"403|connect|timed out|reset|refused|ssl", msg, re.I):
+                msg += " — alphacephei.com or github.com may need a VPN or proxy (Setup › Services › Network (VPN / proxy))."
+            self._emit(True, state="error", error=msg)
+        except Exception as e:
+            log("vosk download:", traceback.format_exc())
+            self._emit(True, state="error", error=short(e, 200))
+
+
 class LocalWhisper:
     name = "Local model"
 
@@ -3639,7 +3971,7 @@ class LocalWhisper:
         load_faster_whisper()
         return {"state": self.state, "path": self.path, "name": model_label(self.path) if self.path else "",
                 "device": self.device, "error": self.error,
-                "engine": _fw["mod"] is not None or bool(cpp_server_path()),     # either engine can run a model
+                "engine": _fw["mod"] is not None or bool(cpp_server_path()) or bool(vosk_catalog()),   # any engine can run a model
                 "engine_error": _fw["error"], "load_secs": self.load_secs, "note": getattr(self, "cpu_note", ""), "gpu": ", ".join(gpu_names()),
                 "quick": round(self.quick_avg, 2) if self.quick_avg else None}
 
@@ -3652,6 +3984,8 @@ class LocalWhisper:
         its batch helper (which points back at it), so its memory is really freed."""
         if isinstance(m, CppServer):
             m.stop()
+        elif isinstance(m, VoskModel):
+            m.free()
         elif m is not None and hasattr(m, "_ma_batched"):
             try:
                 del m._ma_batched
@@ -3717,6 +4051,29 @@ class LocalWhisper:
             gc.collect()                                # frees the old model before the new one is read
             self._load_now(g, folder, device)
 
+    def _load_vosk(self, g, folder):
+        t0 = time.time()
+        try:
+            m = VoskModel(folder)
+        except Exception as e:
+            with self.lock:
+                if g == self.gen:
+                    self.model, self.state, self.error = None, "error", "Vosk could not start: " + short(e, 200)
+                    self.done.set()
+            log("Local model (Vosk) failed:", short(e, 300), level="error")
+            self._notify()
+            return
+        with self.lock:
+            if g != self.gen:
+                m.free()
+                return
+            self.model, self.final_beam, self.device = m, 1, "processor"
+            self.state, self.error = "ready", ""
+            self.load_secs = round(time.time() - t0, 1)
+            self.done.set()
+        log(f"Local model '{model_label(folder)}' ready (Vosk), loaded in {self.load_secs} s")
+        self._notify()
+
     def _load_cpp(self, g, path, device):
         t0 = time.time()
         pc = physical_cores()
@@ -3765,6 +4122,8 @@ class LocalWhisper:
         self.cpu_note = ""
         if os.path.isfile(folder):
             return self._load_cpp(g, folder, device)
+        if is_vosk_dir(folder):
+            return self._load_vosk(g, folder)
         t0 = time.time()
         fw = load_faster_whisper()
         err = None
@@ -3919,7 +4278,7 @@ class LocalWhisper:
             t = time.time()
             use_short = self.short_ok if short is None else short
             try:
-                if isinstance(m, CppServer):
+                if isinstance(m, (CppServer, VoskModel)):
                     res = m.transcribe(audio16k, language, prompt)
                 elif use_short and language and quick:
                     try:
@@ -3956,7 +4315,7 @@ class LocalWhisper:
     def long_ok(self):
         """Can a whole stretch of a recording be given at once (faster, and silence is skipped by a voice finder)?"""
         m = self.model
-        if isinstance(m, CppServer):
+        if isinstance(m, (CppServer, VoskModel)):
             return True
         if m is None:
             return False
@@ -3977,13 +4336,13 @@ class LocalWhisper:
             if m is None or self.state != "ready":
                 raise ModelUnavailable("The local model is not loaded" + (f": {self.error}" if self.error else "."))
             audio16k = np.asarray(audio16k, dtype=np.float32)
-            if isinstance(m, CppServer):
+            if isinstance(m, (CppServer, VoskModel)):
                 try:
                     res = m.transcribe(audio16k, language, prompt, timestamps=True)
                 except MemoryError:
                     raise ModelUnavailable("Not enough memory (RAM) for the local model — choose a smaller model.")
-                except Exception as e:                       # a slow or stopped whisper.cpp: this piece is tried again
-                    raise Transient("Local model (whisper.cpp): " + short(e))
+                except Exception as e:                       # a slow or stopped engine: this piece is tried again
+                    raise Transient("Local model: " + short(e))
                 return res["segments"], res.get("language") or language
             from faster_whisper import BatchedInferencePipeline
             bp = getattr(m, "_ma_batched", None)
@@ -4043,7 +4402,15 @@ class LocalWhisper:
         match = None
         if spoken:
             match = round(difflib.SequenceMatcher(None, normalize_words(TEST_SENTENCE), normalize_words(heard)).ratio(), 2)
+        m = self.model
+        if isinstance(m, VoskModel) and m.lang not in ("", "en"):     # an English test cannot judge a Persian (etc.) model
+            match = None
         v = local_verdict(quick, final, heard, match, spoken, model_label(self.path))
+        if isinstance(m, VoskModel):
+            v["notes"] = [n for n in v["notes"] if "misheard" not in n or m.lang in ("", "en")]
+            v["notes"].append(f"Vosk understands only {LANGS.get(m.lang, (m.lang or 'one language',))[0]}"
+                              + (": the English test measured only the speed." if m.lang not in ("", "en") else ".")
+                              + " It is light but less accurate than Whisper, and writes no punctuation.")
         v["short"] = self.short_ok
         return v
 
@@ -10250,6 +10617,8 @@ class App:
                                                           else " (for the local model choose cpp-small)"))
         add("whisper.cpp engine (local model on any graphics card)", "ok" if cpp_server_path() else "info",
             "included" if cpp_server_path() else latest)
+        add("Vosk engine (very light local models)", "ok" if vosk_lib_path() else "info",
+            "downloaded" if vosk_lib_path() else "not downloaded yet: it comes with the first Vosk model (about 15 MB, once)")
         for mod, what in (("onnxruntime", "Faster transcribing of files, and telling speakers apart"),
                           ("yt_dlp", "Links (YouTube and other sites)")):
             ok_ = importlib.util.find_spec(mod) is not None
@@ -10454,7 +10823,7 @@ class App:
                 if os.path.isdir(full):
                     if len(dirs) < 400:
                         dirs.append({"name": n, "path": full,
-                                     "model": kind == "model" and os.path.isfile(os.path.join(full, "model.bin"))})
+                                     "model": kind == "model" and (os.path.isfile(os.path.join(full, "model.bin")) or is_vosk_dir(full))})
                     else:
                         more = True
                 elif (kind == "audio" and n.lower().endswith(AUDIO_EXT)) or \
@@ -10471,7 +10840,7 @@ class App:
         parent = os.path.dirname(path)
         return {"ok": True, "path": path, "parent": parent if parent != path else "", "dirs": dirs, "files": files,
                 "more": more, "places": places,
-                "is_model": kind == "model" and os.path.isfile(os.path.join(path, "model.bin"))}
+                "is_model": kind == "model" and (os.path.isfile(os.path.join(path, "model.bin")) or is_vosk_dir(path))}
 
     def api_recording(self, path="", browse=False, cancel=False, speakers=0, name=None):
         """Transcribe (and translate) an audio or video file. speakers: 0 off, -1 tell people apart, 2-8 that many people."""
@@ -11351,7 +11720,7 @@ class App:
 
     def local_state(self):
         return {"ok": True, "local": LOCAL.info(), "models": find_models(self.cfg["local_model"]),
-                "catalog": catalog_view(LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []), "stt"),
+                "catalog": catalog_view(LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []) + vosk_catalog(), "stt"),
                 "cpp": bool(cpp_server_path()), "download": self.download.state if self.download else None,
                 "models_dir": MODELS_DIR, "host": platform_node()}
 
@@ -11423,7 +11792,8 @@ class App:
         c = self.cfg
         if not c["local_model"]:
             return {"ok": False, "error": "Choose or download a model first."}
-        if load_faster_whisper() is None and not (os.path.isfile(c["local_model"]) and cpp_server_path()):
+        if load_faster_whisper() is None and not (os.path.isfile(c["local_model"]) and cpp_server_path()) \
+                and not (is_vosk_dir(c["local_model"]) and vosk_lib_path()):
             return {"ok": False, "error": "The local model engine is not included in this program version. "
                                           "Download the latest release (or build the exe again with build_exe.bat). (" + (_fw["error"] or "") + ")"}
         LOCAL.load(c["local_model"], c["local_device"])
@@ -11458,7 +11828,7 @@ class App:
             except ValueError as e:
                 return {"ok": False, "error": str(e)}
         else:
-            item = next((m for m in LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []) if m["id"] == id), None)
+            item = next((m for m in LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []) + vosk_catalog() if m["id"] == id), None)
         if not item:
             return {"ok": False, "error": "Unknown model."}
         with self.dl_lock:                                  # a double click never starts two downloads
@@ -11488,13 +11858,15 @@ class App:
                                if chosen else f"Model '{st['id']}' downloaded. Choose it in the Model list (after the meeting, if one is running) and press Test.")
             elif st["state"] == "error":
                 self.hub.toast("error", "Download failed: " + st["error"])
-        self.download = ModelDownload(item, proxy, progress)
+        self.download = (ZipDownload if item.get("engine") == "vosk" else ModelDownload)(item, proxy, progress)
         log(f"Downloading model '{item['id']}' (~{item['mb']} MB){' through ' + mask_proxy(proxy) if proxy else ''}")
         self.download.thread.start()
         return {"ok": True, "download": self.download.state}
 
     def api_local_delete(self, path=""):
         chosen, _ = model_folder(path)
+        if not chosen and is_vosk_dir(path):           # a Vosk model can be deleted even when its engine is gone
+            chosen = os.path.abspath(path)
         folder = os.path.dirname(chosen) if chosen and os.path.isfile(chosen) else chosen   # a whisper.cpp model: its folder
         if not folder or os.path.normcase(os.path.dirname(folder)) != os.path.normcase(os.path.abspath(MODELS_DIR)):
             return {"ok": False, "error": "Only models in the program's 'models' folder can be deleted here."}

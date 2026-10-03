@@ -44,6 +44,7 @@ Ways of checking:
 | ffmpeg help (files, links, health check, winget folder) | yes (no ffmpeg on PATH, winget Links folder) | yes (screenshots) | yes | – | a real winget install on Windows |
 | UX of the 6.14 screens (file/link window, speakers, ▶, local model, overlay "more") | – | yes (screenshots, play / switch / grouped lines) | yes (3 UX reviewers + re-review of the fixes) | – | WebView2 look, real Intel / AMD driver messages |
 | Keep the sound, ▶ on a line | yes (WAV here) | yes (play, switch lines, stop at line end) | yes | – | Opus files (soundfile on Windows), 3-hour meetings |
+| Vosk light model (engine via ctypes, zip download, language warning) | yes (download from a local server, unsafe zip paths, which download is used; the real engine with a real English model when given) | yes (real engine + real English model: choose, Test, a real recording) | yes (independent review) | – | the Windows engine (libvosk.dll), downloads from alphacephei.com, Persian and other models, folders with Persian letters |
 | Build (exe) and release | – | – | yes | build job | first run of the exe on a clean PC |
 
 Setup › Services › **Check this computer** tests the Windows parts on the user's own machine and can copy a report.

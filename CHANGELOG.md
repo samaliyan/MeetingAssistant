@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.15]
+
+**A very light local model (Vosk), as a choice.** For weak computers, or when the internet is bad.
+
+- Setup › Services › Local model › the download list has a new group, **Vosk**: English, German, French, Spanish, Italian, Dutch, Russian, Turkish and Persian, each about 35–55 MB.
+- The first time, the Vosk engine (about 15 MB, from github.com) is downloaded with the model. **The program file does not get bigger.**
+- Vosk is very fast on any processor (in the test: 11 seconds of speech in about 1.5 seconds, with no graphics card), but it is less accurate than Whisper, writes no punctuation, and understands only the one language of its model. The status line says so when the meeting has other languages.
+- It works for live meetings, for recorded files and for links.
+- The models come from alphacephei.com (the makers of Vosk); from Iran a VPN may be needed.
+- 122 automated tests.
+
 ## [6.14]
 
 Six ideas from the open-source program Buzz, built into this program.

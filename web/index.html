@@ -1088,7 +1088,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <span class="mini">Model</span>
           <div class="input-row"><select class="input select" id="localModel"></select>
             <button class="btn sm" id="localBrowse"><span data-icon="folder"></span>Choose folder…</button></div>
-          <div class="help">Downloaded a model yourself? Press <b>Choose folder…</b> and open the folder that holds its <b>model.bin</b> file. It must be a <b>faster-whisper</b> model (a folder with model.bin, config.json and tokenizer.json). A <b>whisper.cpp</b> model works too: open its folder and choose the ggml-….bin file.</div>
+          <div class="help">Downloaded a model yourself? Press <b>Choose folder…</b> and open the folder that holds its <b>model.bin</b> file. It must be a <b>faster-whisper</b> model (a folder with model.bin, config.json and tokenizer.json). A <b>whisper.cpp</b> model works too: open its folder and choose the ggml-….bin file. So does a <b>Vosk</b> model folder.</div>
         </div>
         <div>
           <span class="mini">Or download one here (once — it is kept in the program's "models" folder)</span>
@@ -2475,7 +2475,7 @@ async function brLoad(path){
   const use = $("#brUse");
   use.hidden = BR.kind !== "model" || !r.is_model;
   $("#brHint").textContent = BR.kind === "model"
-    ? (r.is_model ? "This folder is a model." : "Open the model's folder (the one that contains model.bin), or click a whisper.cpp model file (ggml-….bin).")
+    ? (r.is_model ? "This folder is a model." : "Open the model's folder (the one with model.bin, or a Vosk model folder), or click a whisper.cpp model file (ggml-….bin).")
     : BR.kind === "gguf" ? "Click the model file to use it." : BR.kind === "doc" ? "Click your file (.docx, .pdf, .txt, .md)."
     : rows.length ? "Click a file to transcribe it." : "";
   list.scrollTop = 0;
@@ -3106,6 +3106,15 @@ function renderLocal(){
   else if(L.state === "ready"){ cls = "ok"; txt = `${icon("check")}<span><b>${esc(L.name)}</b> is ready on the ${esc(L.device)}${L.load_secs ? ` (loaded in ${L.load_secs} s)` : ""}.${L.note ? `<br><span class="m">${esc(L.note)}</span>` : ""}</span>`; }
   else if(L.state === "error"){ cls = "bad"; txt = `${icon("alert")}<span>${esc(L.error)}</span>`; }
   else { txt = `${icon("info")}<span><b>${esc(basename(c.local_model))}</b> is chosen. It is loaded when you use it — press <b>Test on this computer</b>.</span>`; }
+  const curM = (S.localModels || []).find(m => m.path === c.local_model);
+  if(curM && curM.engine === "vosk" && curM.lang){                  // a one-language model
+    const others = (c.languages || []).filter(l => l !== curM.lang);
+    if(!(c.languages || []).includes(curM.lang)){
+      cls = "bad"; txt += `<br><span>This Vosk model understands only <b>${esc(langName(curM.lang))}</b>, but the meeting languages are ${esc((c.languages || []).map(langName).join(", "))}. Download the Vosk model of the meeting language.</span>`;
+    } else if(others.length){
+      txt += `<br><span class="m">Vosk understands only ${esc(langName(curM.lang))}: speech in ${esc(others.map(langName).join(", "))} will be written wrong. Remove the other meeting languages (Setup › Meeting), or use a Whisper model.</span>`;
+    }
+  }
   st.className = "local-status " + cls; st.innerHTML = txt;
   const ls = $("#localSummary"), role0 = localRole();
   ls.className = "opt-state" + (role0 === "off" || !c.local_model ? " off" : "");
@@ -3117,14 +3126,17 @@ function renderLocal(){
   sel.value = c.local_model || "";
   const cur = models.find(m => m.path === c.local_model);
   $("#localDelete").hidden = !(cur && cur.removable);
-  const have = new Set(models.filter(m => m.removable).map(m => m.name));
+  const have = new Set(models.filter(m => m.removable).flatMap(m => [m.name, basename(m.path)]));   // Vosk: the folder is the id
   const cat = $("#localCatalog");
   if(cat.options.length !== (S.catalog || []).length || cat.dataset.have !== [...have].join()){
     const keep = cat.value;
     const opt = m => `<option value="${esc(m.id)}" title="${esc(m.note)}">${esc(m.id)} — ${m.mb >= 1000 ? (m.mb / 1000).toFixed(1) + " GB" : m.mb + " MB"} — ${esc(m.note)}${have.has(m.id) ? " (downloaded)" : ""}</option>`;
-    const fw = (S.catalog || []).filter(m => m.engine !== "cpp"), cpp = (S.catalog || []).filter(m => m.engine === "cpp");
-    cat.innerHTML = cpp.length ? `<optgroup label="faster-whisper (processor, or an NVIDIA graphics card)">${fw.map(opt).join("")}</optgroup>`
-      + `<optgroup label="whisper.cpp (any graphics card: Intel, AMD, NVIDIA)">${cpp.map(opt).join("")}</optgroup>` : fw.map(opt).join("");
+    const fw = (S.catalog || []).filter(m => !m.engine), cpp = (S.catalog || []).filter(m => m.engine === "cpp"),
+          vosk = (S.catalog || []).filter(m => m.engine === "vosk");
+    cat.innerHTML = (cpp.length || vosk.length) ? `<optgroup label="faster-whisper (processor, or an NVIDIA graphics card)">${fw.map(opt).join("")}</optgroup>`
+      + (cpp.length ? `<optgroup label="whisper.cpp (any graphics card: Intel, AMD, NVIDIA)">${cpp.map(opt).join("")}</optgroup>` : "")
+      + (vosk.length ? `<optgroup label="Vosk (very light: weak computers; one language, less accurate)">${vosk.map(opt).join("")}</optgroup>` : "")
+      : fw.map(opt).join("");
     const gpuName = (S.local?.gpu || "").toLowerCase();             // Intel or AMD graphics: whisper.cpp is the better start
     cat.value = keep || (cpp.length && gpuName && !/nvidia/.test(gpuName) ? "cpp-small" : "small"); cat.dataset.have = [...have].join();
   }

@@ -1876,3 +1876,90 @@ def test_play_button_knows_when_a_meeting_has_sound(app, tmp_path):
     assert app.session_has_audio(s)
     gone = types.SimpleNamespace(path=path, recording=os.path.join(str(tmp_path), "moved.mp3"))
     assert not app.session_has_audio(gone)
+
+
+def test_vosk_model_is_downloaded_unpacked_and_found(app, tmp_path):
+    import os, io, zipfile, threading, http.server, functools
+    base = str(tmp_path)
+    srv_dir = os.path.join(base, "site")
+    os.makedirs(srv_dir)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:                         # the layout of a real Vosk model zip
+        z.writestr("vosk-model-small-xx-0.1/am/final.mdl", b"m" * 5000)
+        z.writestr("vosk-model-small-xx-0.1/conf/model.conf", b"--sample-frequency=16000\n")
+        z.writestr("vosk-model-small-xx-0.1/graph/HCLr.fst", b"g" * 3000)
+        z.writestr("../../evil.txt", b"never outside the models folder")
+    open(os.path.join(srv_dir, "m.zip"), "wb").write(buf.getvalue())
+    h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=srv_dir)
+    h.log_message = lambda *a: None
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    lib = os.path.join(base, "libvosk.so")
+    open(lib, "wb").write(b"x")
+    old = os.environ.get("MA_VOSK_LIB")
+    os.environ["MA_VOSK_LIB"] = lib                              # the engine is "already there": only the model comes
+    try:
+        item = {"id": "vosk-model-small-xx-0.1", "url": f"http://127.0.0.1:{srv.server_address[1]}/m.zip", "mb": 1,
+                "engine": "vosk", "ui": "stt", "lang": "xx", "note": ""}
+        seen = []
+        dl = app.ZipDownload(item, "", seen.append)
+        dl.run()
+        assert dl.state["state"] == "done", dl.state
+        dest = os.path.join(app.MODELS_DIR, item["id"])
+        assert app.is_vosk_dir(dest) and app.model_folder(dest)[0] == os.path.abspath(dest)
+        assert app.model_folder(os.path.join(dest, "am", "final.mdl"))[0] == os.path.abspath(dest)   # a file inside works too
+        assert not os.path.exists(os.path.join(app.MODELS_DIR, "evil.txt")) and not os.path.exists(os.path.join(base, "evil.txt"))
+        assert not os.path.exists(dest + ".zip.part") and not os.path.exists(dest + ".tmp")
+        assert app.model_label(dest).endswith("(Vosk)") and app.folder_mb(dest) == 0 and app.vosk_lang(dest) == "xx"
+        m = [x for x in app.find_models() if x["path"] == os.path.abspath(dest)]
+        assert m and m[0]["engine"] == "vosk" and m[0]["lang"] == "xx"
+        assert any(x["id"].startswith("vosk-model-small-en") for x in app.vosk_catalog())
+    finally:
+        srv.shutdown()
+        if old is None:
+            os.environ.pop("MA_VOSK_LIB", None)
+        else:
+            os.environ["MA_VOSK_LIB"] = old
+
+
+def test_vosk_real_engine_when_available(app):
+    """Runs only where the Vosk engine and an English model are given (MA_VOSK_LIB, MA_VOSK_TEST_MODEL, MA_VOSK_TEST_WAV)."""
+    import os, wave
+    lib, model, wav = (os.environ.get(k, "") for k in ("MA_VOSK_LIB", "MA_VOSK_TEST_MODEL", "MA_VOSK_TEST_WAV"))
+    if not (os.path.isfile(lib) and os.path.isdir(model) and os.path.isfile(wav)) or open(lib, "rb").read(4) == b"x":
+        return
+    np = app.np
+    with wave.open(wav) as w:
+        a = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
+    m = app.VoskModel(model)
+    try:
+        r = m.transcribe(a, "en")
+        assert "country" in r["text"].lower() and r["text"][0].isupper() and r["segments"][0]["end"] > 5
+    finally:
+        m.free()
+
+
+def test_vosk_download_button_uses_the_zip_download(app, tmp_path):
+    import os
+    lib = os.path.join(str(tmp_path), "libvosk.so")
+    open(lib, "wb").write(b"x")
+    old_env, old_run, old_mrun = os.environ.get("MA_VOSK_LIB"), app.ZipDownload.run, app.ModelDownload.run
+    os.environ["MA_VOSK_LIB"] = lib
+    app.ZipDownload.run = app.ModelDownload.run = lambda self: None     # no real download here: only which path is taken
+    a = app.App()
+    try:
+        r = a.api_local_download(id="vosk-model-small-fa-0.42")
+        assert r["ok"] and isinstance(a.download, app.ZipDownload) and a.download.item["lang"] == "fa"
+        a.download.thread.join(2)
+        r = a.api_local_download(id="small")
+        assert r["ok"] and isinstance(a.download, app.ModelDownload)
+        a.download.cancel.set()
+        a.download.thread.join(5)
+        assert app._vosk_text("i think i ragazzi", "it") == "I think i ragazzi" and app._vosk_text("i am here", "en") == "I am here"
+    finally:
+        app.ZipDownload.run, app.ModelDownload.run = old_run, old_mrun
+        if old_env is None:
+            os.environ.pop("MA_VOSK_LIB", None)
+        else:
+            os.environ["MA_VOSK_LIB"] = old_env
+        a.closing.set()
