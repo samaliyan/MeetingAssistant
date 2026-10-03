@@ -1459,8 +1459,8 @@ def test_model_news_odd_items_and_custom_match(app, tmp_path):
 
 def test_vtt_export_and_keep_awake(app):
     import types
-    rows = [{"id": 1, "source": "them", "t0": 100.0, "t_end": 103.5, "text": "Hello there", "translation": "سلام", "speaker": None}]
-    s = types.SimpleNamespace(ordered=lambda: rows, started=__import__("datetime").datetime.fromtimestamp(99.0), recording=False,
+    rows = [{"id": 1, "source": "them", "t0": 1_700_000_100.0, "t_end": 1_700_000_103.5, "text": "Hello there", "translation": "سلام", "speaker": None}]
+    s = types.SimpleNamespace(ordered=lambda: rows, started=__import__("datetime").datetime.fromtimestamp(1_700_000_099.0), recording=False,
                               label=lambda r: "Them")
     v = app.export_bytes(s, "vtt").decode("utf-8")
     assert v.startswith("WEBVTT\n\n") and "00:00:01.000 --> 00:00:04.500" in v and "," not in v.split("\n")[2]
@@ -1734,9 +1734,9 @@ def test_subtitles_never_hang_on_a_long_word_and_escape_vtt(app):
 
     class S:
         recording = None
-        started = app.datetime.datetime.fromtimestamp(1000.0)
+        started = app.datetime.datetime.fromtimestamp(1_700_001_000.0)   # a real date: Windows cannot go back to 1970
         def ordered(self):
-            return [{"source": "them", "t0": 1001.0, "t_end": 1003.0, "text": "a < b & c", "translation": "", "speaker": None}]
+            return [{"source": "them", "t0": 1_700_001_001.0, "t_end": 1_700_001_003.0, "text": "a < b & c", "translation": "", "speaker": None}]
         def label(self, r):
             return "Them"
     vtt = app.export_bytes(S(), "vtt").decode()
