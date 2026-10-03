@@ -1805,3 +1805,74 @@ def test_meeting_sound_keeps_silence_while_paused_and_never_blocks(app, tmp_path
         with wave.open(fp) as w:
             y = np.frombuffer(w.readframes(w.getnframes()), np.int16)
         assert np.abs(y[:16000]).mean() > 10000 and np.abs(y[16000:]).max() == 0
+
+
+def test_ffmpeg_is_found_where_winget_puts_it_and_the_window_is_told(app, tmp_path):
+    import os, shutil
+    base = str(tmp_path)
+    links = os.path.join(base, "Microsoft", "WinGet", "Links")
+    os.makedirs(links)
+    old_which, old_la = shutil.which, os.environ.get("LOCALAPPDATA")
+    m4a = os.path.join(base, "talk.m4a")
+    open(m4a, "wb").write(b"\0\0\0\x18ftypM4A " + b"\0" * 200)
+    a = app.App()
+    try:
+        shutil.which = lambda name, *x, **k: None if name in ("ffmpeg", "ffprobe") else old_which(name, *x, **k)
+        os.environ["LOCALAPPDATA"] = base
+        assert app.ffmpeg_path() is None and app.needs_ffmpeg(m4a)
+        a.missing_tasks = lambda *x: []
+        r = a.api_recording(m4a)
+        assert r["ok"] is False and r["error"] == "ffmpeg" and "m4a" in r["detail"] and a.recording is None
+        assert "winget install Gyan.FFmpeg" in str(a.api_selfcheck())
+        open(os.path.join(links, "ffmpeg.exe"), "wb").write(b"x")
+        assert app.ffmpeg_path() == os.path.join(links, "ffmpeg.exe") and not app.needs_ffmpeg(m4a)
+    finally:
+        shutil.which = old_which
+        if old_la is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = old_la
+        a.closing.set()
+
+
+def test_link_problems_are_plain_and_stop_is_quick(app):
+    import socket, threading, time
+    assert app.link_problem("ERROR: [youtube] x: Private video. Sign in if you've been granted access").startswith("This video is private")
+    assert "VPN" in app.link_problem("Unable to download webpage: <urlopen error [Errno 11001] getaddrinfo failed>")
+    assert "robot" in app.link_problem("Sign in to confirm you’re not a bot")
+    assert app.link_problem("something odd").startswith("The link could not be downloaded.")
+    try:
+        import yt_dlp  # noqa: F401
+    except ImportError:
+        return
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)                                               # accepts, never answers: a very slow site
+    a = app.App()
+    try:
+        job = app.LinkJob(a, f"http://127.0.0.1:{srv.getsockname()[1]}/v.mp3")
+        a.recording = job
+        job.thread.start()
+        time.sleep(0.8)
+        t = time.time()
+        a.api_recording(cancel=True)
+        job.thread.join(5)
+        assert not job.thread.is_alive() and time.time() - t < 3 and a.recording is None
+        assert job.state["state"] == "cancelled"
+    finally:
+        srv.close()
+        a.closing.set()
+
+
+def test_play_button_knows_when_a_meeting_has_sound(app, tmp_path):
+    import os, types
+    np = app.np
+    path = os.path.join(str(tmp_path), "meeting_h.md")
+    s = types.SimpleNamespace(path=path, recording="")
+    assert not app.session_has_audio(s) and not app.session_has_audio(None)
+    rec = app.MeetingAudio(path)
+    rec.write("them", np.full(16000, 0.1, np.float32), 16000)
+    rec.close()
+    assert app.session_has_audio(s)
+    gone = types.SimpleNamespace(path=path, recording=os.path.join(str(tmp_path), "moved.mp3"))
+    assert not app.session_has_audio(gone)

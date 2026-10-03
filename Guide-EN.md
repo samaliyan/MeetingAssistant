@@ -1318,7 +1318,14 @@ model.bin
 Use this model
 ```
 
-**Important:** The model must be a faster-whisper model. If you select a model file from the Transcribe program or whisper.cpp (for example a file whose name starts with ggml or that has the pt extension), the app says this type cannot be used.
+**Important:** Two kinds of model work:
+
+- a faster-whisper model: a folder with model.bin, config.json and tokenizer.json;
+- a whisper.cpp model: one file whose name starts with ggml and ends with .bin (for example ggml-small-q5_1.bin). In the folder window, click that file.
+
+A file with the pt extension (from the openai-whisper program) cannot be used; the app says so.
+
+**Which one to choose:** with an NVIDIA graphics card, or only a processor, use small. With Intel or AMD graphics (most laptops), download cpp-small: it runs on the graphics card. If the graphics card cannot be used (an old driver), it runs on the processor by itself, and the status line says so.
 
 **Note:** If you copy the model folder into the Data folder and then into models, the app finds it by itself and shows it in the model list. On another computer you can also copy this same folder so you do not need to download it again.
 
@@ -1628,8 +1635,32 @@ flac
 ogg
 ```
 
-- For other files (such as m4a or mp4), the free program ffmpeg must be installed on the computer. If it is not installed, the app says so. In that case, convert the file to mp3, or put the ffmpeg.exe file next to the app file.
-- In a recorded file, speakers are not separated, and all lines are written under the other person's name.
+- For other files (such as m4a or mp4) and for YouTube links, the free program ffmpeg must be installed on the computer. If it is not installed, the app opens a window with these steps.
+
+**Installing ffmpeg (once):**
+
+1. Open the Windows Start menu.
+2. Type cmd and press Enter.
+3. Paste this line into the black window and press Enter:
+
+```
+winget install Gyan.FFmpeg
+```
+
+4. If it asks whether you agree, type Y and press Enter.
+5. Wait until it says the installation is done.
+6. Go back to the app and choose the file or link again. If it still says ffmpeg is missing, close the app and open it again.
+
+Another way: download ffmpeg.exe and put it next to the app file.
+
+To see whether ffmpeg is found:
+
+1. Click Setup.
+2. Click the Services tab.
+3. Click Check this computer.
+4. The ffmpeg line in the report should be green.
+
+- To tell the speakers apart, choose Tell the speakers apart under Who is speaking before you pick the file. Otherwise all lines are written under the other person's name.
 - For a recorded file, suggested answers are not written automatically. But you can get an answer with the answer button or by selecting words.
 - The Groq free quota is usually enough for a file of one or two hours. For very long files, the hourly or per-minute quota may run out. In that case the app waits by itself and then continues (this is written at the bottom of the window).
 - If you chose the local model for all speech to text, the file is turned into text on the computer itself.

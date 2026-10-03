@@ -41,6 +41,8 @@ Ways of checking:
 | whisper.cpp engine (Vulkan) | yes (fake server); real Linux server with the tiny test model, by hand | – | yes | build job | Vulkan on Intel / AMD, speed, the first run of the exe |
 | Subtitles (.srt / .vtt) | yes (long lines, long words, escaping, no overlap) | – | yes | – | how they look in a real video player |
 | Link to text (yt-dlp) | yes (a page on this computer) | – | yes | – | real YouTube (needs its scripts and quickjs) |
+| ffmpeg help (files, links, health check, winget folder) | yes (no ffmpeg on PATH, winget Links folder) | yes (screenshots) | yes | – | a real winget install on Windows |
+| UX of the 6.14 screens (file/link window, speakers, ▶, local model, overlay "more") | – | yes (screenshots, play / switch / grouped lines) | yes (3 UX reviewers + re-review of the fixes) | – | WebView2 look, real Intel / AMD driver messages |
 | Keep the sound, ▶ on a line | yes (WAV here) | yes (play, switch lines, stop at line end) | yes | – | Opus files (soundfile on Windows), 3-hour meetings |
 | Build (exe) and release | – | – | yes | build job | first run of the exe on a clean PC |
 

@@ -1347,6 +1347,17 @@ def audio_for_line(session, e):
     return None
 
 
+def session_has_audio(session):
+    """True when a line of this meeting can be played: a recording's own file, or the kept sound of a meeting."""
+    if session is None:
+        return False
+    if getattr(session, "recording", None):
+        return os.path.isfile(session.recording)
+    folder = os.path.dirname(session.path or "")
+    return any(os.path.isfile(os.path.join(folder, p_["file"]))
+               for p_ in load_audio_index(os.path.splitext(session.path or "")[0] + ".audio.json"))
+
+
 class AudioCapture(threading.Thread):
     """Reads one device (your microphone or the system-sound loopback)."""
 
@@ -2219,6 +2230,7 @@ def strip_think(t):
 # Live speech-to-text (WebSocket) - used for services such as Deepgram
 # ----------------------------------------------------------------------------
 import base64
+import glob
 import hashlib
 import select
 import socket
@@ -2806,6 +2818,39 @@ def model_fit(ram_need, ram_have):
     if not ram_have:
         return "unknown"
     return "ok" if ram_need <= ram_have * 0.6 else "tight" if ram_need <= ram_have * 0.85 else "no"
+
+
+_GPU = {}
+
+
+def gpu_names():
+    """The graphics cards Windows knows (from the registry, no extra program), e.g. ['Intel(R) Iris(R) Xe Graphics']."""
+    if "names" in _GPU:
+        return _GPU["names"]
+    names = []
+    if sys.platform == "win32":
+        try:
+            import winreg
+            key = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+                for i in range(64):
+                    try:
+                        sub = winreg.EnumKey(k, i)
+                    except OSError:
+                        break
+                    try:
+                        with winreg.OpenKey(k, sub) as d:
+                            n = str(winreg.QueryValueEx(d, "DriverDesc")[0]).strip()
+                        low = n.lower()
+                        if n and n not in names and not any(k in low for k in ("basic display", "basic render", "remote", "virtual",
+                                                                                 "parsec", "citrix", "vmware", "hyper-v", "indirect", "displaylink")):
+                            names.append(n)
+                    except OSError:
+                        continue
+        except Exception:
+            pass
+    _GPU["names"] = names
+    return names
 
 
 def catalog_view(items, kind):
@@ -3595,7 +3640,7 @@ class LocalWhisper:
         return {"state": self.state, "path": self.path, "name": model_label(self.path) if self.path else "",
                 "device": self.device, "error": self.error,
                 "engine": _fw["mod"] is not None or bool(cpp_server_path()),     # either engine can run a model
-                "engine_error": _fw["error"], "load_secs": self.load_secs,
+                "engine_error": _fw["error"], "load_secs": self.load_secs, "note": getattr(self, "cpu_note", ""), "gpu": ", ".join(gpu_names()),
                 "quick": round(self.quick_avg, 2) if self.quick_avg else None}
 
     def ready(self):
@@ -3676,20 +3721,34 @@ class LocalWhisper:
         t0 = time.time()
         pc = physical_cores()
         threads = max(1, min(8, pc - 1 if pc >= 6 else pc))
-        srv = CppServer(path, threads, gpu=device != "cpu")
-        try:
-            if not srv.start(should_stop=lambda: g != self.gen):
+        tries = [True, False] if device != "cpu" else [False]   # the graphics card first; if it fails, the processor
+        srv, first_err = None, None
+        for gpu in tries:
+            srv = CppServer(path, threads, gpu=gpu)
+            try:
+                if not srv.start(should_stop=lambda: g != self.gen):
+                    return
+                srv.transcribe(np.zeros(16000, np.float32), "en")     # a first run loads everything on the graphics card
+                if first_err is not None:
+                    log("whisper.cpp: the graphics card could not be used, it runs on the processor:", short(first_err, 200), level="warn")
+                    self.cpu_note = ("The graphics card could not be used (update its driver, e.g. the Intel or AMD graphics "
+                                     "driver); the model runs on the processor.")
+                break
+            except Exception as e:
+                srv.stop()
+                if first_err is None and gpu and len(tries) > 1 and g == self.gen:
+                    first_err = e
+                    continue
+                with self.lock:
+                    if g == self.gen:
+                        why = short(e, 200)
+                        hint = (" It failed on the graphics card and on the processor." if first_err is not None
+                                else " Try 'Run on: processor only', or update the graphics driver." if gpu else "")
+                        self.model, self.state, self.error = None, "error", "whisper.cpp could not start: " + why + "." + hint
+                        self.done.set()
+                log("Local model (whisper.cpp) failed:", short(e, 300), level="error")
+                self._notify()
                 return
-            srv.transcribe(np.zeros(16000, np.float32), "en")         # a first run loads everything on the graphics card
-        except Exception as e:
-            srv.stop()
-            with self.lock:
-                if g == self.gen:
-                    self.model, self.state, self.error = None, "error", "whisper.cpp could not start: " + short(e, 200)
-                    self.done.set()
-            log("Local model (whisper.cpp) failed:", short(e, 300), level="error")
-            self._notify()
-            return
         with self.lock:
             if g != self.gen:
                 srv.stop()
@@ -3703,6 +3762,7 @@ class LocalWhisper:
         self._notify()
 
     def _load_now(self, g, folder, device):
+        self.cpu_note = ""
         if os.path.isfile(folder):
             return self._load_cpp(g, folder, device)
         t0 = time.time()
@@ -8256,6 +8316,21 @@ STOPPED = {}
 OPEN_READERS = {}                  # generator id -> function that stops its reader at once
 
 
+def needs_ffmpeg(path):
+    """True when this file cannot be read without ffmpeg and ffmpeg is not on this computer."""
+    if ffmpeg_path():
+        return False
+    if os.path.splitext(path)[1].lower() in (".wav", ".mp3", ".flac", ".ogg", ".oga", ".opus"):
+        return False                                   # read without ffmpeg: a damaged file shows its own error
+    if sf is not None:
+        try:
+            with sf.SoundFile(path):
+                return False
+        except Exception:
+            pass
+    return True
+
+
 def open_recording(path):
     """(blocks of 16 kHz mono audio, length in seconds or None). mp3/wav/flac/ogg are read directly;
     other types (m4a, mp4, ...) need ffmpeg installed on the computer."""
@@ -8521,8 +8596,17 @@ DOWNLOADS_DIR = os.path.join(DATA_DIR, "downloads")
 
 
 def ffmpeg_path():
-    return shutil.which("ffmpeg") or next((p for p in (os.path.join(APP_DIR, "ffmpeg.exe"), os.path.join(APP_DIR, "ffmpeg", "bin", "ffmpeg.exe"))
-                                           if os.path.isfile(p)), None)
+    """ffmpeg on the PATH, next to the program, or where winget put it (found at once, with no restart)."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    places = [os.path.join(APP_DIR, "ffmpeg.exe"), os.path.join(APP_DIR, "ffmpeg", "bin", "ffmpeg.exe")]
+    la = os.environ.get("LOCALAPPDATA", "")
+    if la:
+        places.append(os.path.join(la, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
+        places += sorted(glob.glob(os.path.join(la, "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg*", "*", "bin", "ffmpeg.exe")),
+                         reverse=True)
+    return next((p for p in places if os.path.isfile(p)), None)
 
 
 class LinkJob:
@@ -8533,7 +8617,7 @@ class LinkJob:
         self.cancel = threading.Event()
         self.blocks = None
         self.name = url
-        self.state = {"state": "downloading", "name": url, "pos": 0.0, "total": None, "lines": 0, "error": "", "note": "Looking at the link…"}
+        self.state = {"state": "downloading", "name": url, "pos": 0.0, "total": None, "lines": 0, "error": "", "note": "Looking at the link…", "speakers": bool(speakers)}
         self.thread = threading.Thread(target=self.run, daemon=True, name="link")
         self._last = 0.0
 
@@ -8574,14 +8658,29 @@ class LinkJob:
             # YouTube needs a JavaScript runtime: Deno or Node if the computer has one, else the small QuickJS inside the exe
             qjs = next((p for p in (os.path.join(RES_DIR, "jsrt", "qjs.exe"), os.path.join(APP_DIR, "qjs.exe")) if os.path.isfile(p)), None)
             opts["js_runtimes"] = {"deno": {}, "node": {}, **({"quickjs": {"path": qjs}} if qjs else {})}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(self.url, download=True)
-                if info and info.get("entries"):
-                    info = next((x for x in info["entries"] if x), None)
-                if not info:
-                    raise DownloadError("nothing to download at this link")
-                self.name = str(info.get("title") or self.url)[:120]
-                path = ((info.get("requested_downloads") or [{}])[0].get("filepath")) or ydl.prepare_filename(info)
+            box = {}
+
+            def fetch():                                     # in its own thread: Stop never waits for a slow site
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(self.url, download=True)
+                        if info and info.get("entries"):
+                            info = next((x for x in info["entries"] if x), None)
+                        if not info:
+                            raise DownloadError("nothing to download at this link")
+                        box["name"] = str(info.get("title") or self.url)[:120]
+                        box["path"] = ((info.get("requested_downloads") or [{}])[0].get("filepath")) or ydl.prepare_filename(info)
+                except BaseException as e:                   # noqa: B036 - handed to the job thread
+                    box["error"] = e
+            t = threading.Thread(target=fetch, daemon=True, name="link-fetch")
+            t.start()
+            while t.is_alive() and not self.cancel.is_set():
+                t.join(0.2)
+            if self.cancel.is_set():
+                raise DownloadError("cancelled")
+            if "error" in box:
+                raise box["error"]
+            self.name, path = box.get("name") or self.url, box.get("path") or ""
             if not path or not os.path.isfile(path):
                 raise DownloadError("the downloaded file was not found")
             log(f"Link downloaded: {self.name} -> {path}")
@@ -8594,21 +8693,47 @@ class LinkJob:
                 self.app.recording = None
         if err:
             if err != "cancelled":
-                self._emit(True, state="error", error="The link could not be downloaded: " + err)
-                self.app.hub.toast("error", "The link could not be downloaded: " + err
-                                   + (" (from Iran a proxy is usually needed: Setup › Services › proxy)" if "403" in err or "timed out" in err.lower() else ""))
+                why = link_problem(err)
+                self._emit(True, state="error", error=why)
+                self.app.hub.toast("error", why)
             else:
                 self._emit(True, state="cancelled")
+                self.app.hub.toast("info", "Download stopped.")
             self.app.publish_running()
             return
         if self.cancel.is_set():
             self._emit(True, state="cancelled")
+            self.app.hub.toast("info", "Download stopped.")
             self.app.publish_running()
             return
         r = self.app.api_recording(path=path, speakers=self.speakers, name=self.name)
         if not r.get("ok"):
-            self.app.hub.toast("error", r.get("error") if r.get("error") != "setup" else "Setup is not complete.")
-            self._emit(True, state="error", error=str(r.get("error")))
+            msg = {"setup": "Setup is not complete (Setup › Services).", "ffmpeg": r.get("detail") or "ffmpeg is needed."}.get(
+                r.get("error"), r.get("error") or "The downloaded file could not be opened.")
+            self.app.hub.toast("error", f"The link was downloaded to the “downloads” folder, but: {msg}")
+            self._emit(True, state="error", error=str(msg))
+
+
+def link_problem(err):
+    """A plain sentence for what went wrong with a link (yt-dlp's own words are kept at the end, short)."""
+    low = err.lower()
+    net = "Setup › Services › Network (VPN / proxy)"
+    if "not a bot" in low or "confirm you" in low:
+        why = f"YouTube asks to confirm you are not a robot. Try again later, or use another VPN server ({net})."
+    elif "private" in low or "sign in" in low or "login" in low or "members-only" in low:
+        why = "This video is private or needs a sign-in, so it cannot be downloaded."
+    elif "unsupported url" in low or "is not a valid url" in low or "no video formats" in low or "nothing to download" in low:
+        why = "There is no audio or video at this link. Open the video page itself and copy its address."
+    elif "unavailable" in low or "removed" in low or "404" in low:
+        why = "This video is not available (removed, or blocked in your region)."
+    elif any(k in low for k in ("getaddrinfo", "name resolution", "timed out", "refused", "reset", "ssl", "403",
+                                "unreachable", "proxy", "connection")):
+        why = f"The site could not be reached. Turn on your VPN, or set a proxy in {net}."
+    elif "javascript" in low or "js runtime" in low or "ejs" in low or "challenge" in low:
+        why = "YouTube needs a part that is missing in this copy (a JavaScript runtime). Use the latest release."
+    else:
+        why = "The link could not be downloaded."
+    return f"{why} ({short(err, 120)})"
 
 
 class _YtLog:
@@ -8637,7 +8762,7 @@ class RecordingJob:
         self.cancel = threading.Event()
         self.session = Session(app.cfg, recording=path)
         self.engine = Engine(app, self.session, file_mode=True)
-        self.state = {"state": "starting", "name": self.name, "pos": 0.0, "total": None, "lines": 0, "error": ""}
+        self.state = {"state": "starting", "name": self.name, "pos": 0.0, "total": None, "lines": 0, "error": "", "speakers": bool(self.speakers)}
         self.thread = threading.Thread(target=self.run, daemon=True, name="recording")
         self._last = 0.0
         self.blocks = None
@@ -8656,12 +8781,14 @@ class RecordingJob:
         try:
             import onnxruntime  # noqa: F401
         except Exception:
-            self.app.hub.toast("warn", "Telling speakers apart is not included in this copy of the program (onnxruntime).")
+            self.app.hub.toast("warn", "Telling speakers apart is not included in this copy of the program (onnxruntime). "
+                               "The lines are saved without names.")
             return
         if not os.path.isfile(model):
-            self._emit(True, state="speakers", note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…")
+            self._emit(True, state="speakers", frac=0.0, note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…")
             dl = ModelDownload(SPK_MODEL, detect_proxy(self.app.cfg["proxy"])[0],
-                               lambda st: self._emit(note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
+                               lambda st: self._emit(frac=st['done'] / max(1, st['total']),
+                                                     note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
             dl.cancel = self.cancel
             try:
                 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -8672,17 +8799,18 @@ class RecordingJob:
                 return
             if not os.path.isfile(model):
                 self.app.hub.toast("error", "Speakers were not told apart: the voice model could not be downloaded ("
-                                   + short(dl.state.get("error") or "no answer", 120) + ").")
+                                   + short(dl.state.get("error") or "no answer", 120) + "). The lines are saved without names. "
+                                   "Hugging Face may need a VPN or proxy (Setup › Services › Network (VPN / proxy)).")
                 return
         blocks = None
         try:
-            self._emit(True, state="speakers", note="Telling the speakers apart…")
+            self._emit(True, state="speakers", frac=0.0, note="Telling the speakers apart…")
             prints = VoicePrints(model)
             blocks, _ = open_recording(self.path)
             self.blocks = blocks
             rows = self.session.ordered()
             got = speakers_for_rows(rows, blocks, base, prints, max(0, self.speakers), self.cancel,
-                                    lambda f: self._emit(note=f"Telling the speakers apart… {round(100 * f)}%"))
+                                    lambda f: self._emit(frac=f, note=f"Telling the speakers apart… {round(100 * f)}%"))
         except Exception as e:
             log("speakers:", traceback.format_exc(), level="warn")
             self.app.hub.toast("error", "Speakers were not told apart: " + short(e, 140))
@@ -9076,10 +9204,12 @@ class App:
                 "running": self.running, "stopping": self.stopping,
                 "monitoring": self.monitor_until > time.time(),
                 "started_at": self.started_at, "entries": s.ordered() if s else [],
+                "has_audio": False if self.running else session_has_audio(s),
                 "session_file": s.path if s else "", "meetings_dir": MEETINGS_DIR,
                 "proxy": self.shown_proxy(), "net": self.net,
                 "stats": self.stats.summary(), "quota": eng.quota_info() if eng else None,
                 "audio_ok": pyaudio is not None,
+                "spk_ok": importlib.util.find_spec("onnxruntime") is not None,     # speakers in a recording can be told apart
                 "speech_mode": eng.speech_mode() if eng else None,
                 "coach": eng.coach_state if eng else None,
                 "coach_notes": (s.coach_notes if s else {}),
@@ -9106,7 +9236,8 @@ class App:
         s = self.session or self.last_session
         self.hub.publish("running", running=self.running, stopping=self.stopping,
                          monitoring=self.monitor_until > time.time(), started_at=self.started_at,
-                         session_file=s.path if s else "", resume=self.resume_info())
+                         session_file=s.path if s else "", resume=self.resume_info(),
+                         has_audio=False if self.running else session_has_audio(s))
 
     # ---- actions called from the window --------------------------------------------------
     def call(self, name, body):
@@ -10112,13 +10243,21 @@ class App:
         keys = [p["name"] for p in c.get("providers", []) if p.get("api_key")] + (["Groq"] if c.get("api_key") else [])
         add("Services with a key", "ok" if keys else "bad", ", ".join(keys) if keys else "none yet: Setup > Services")
         add("Proxy", "info", "set" if c.get("proxy") else "none (if the services do not answer from your country, set one)")
+        latest = "not in this copy. Download the latest MeetingAssistant.exe from github.com/samaliyan/MeetingAssistant/releases"
+        gpus = gpu_names()
+        if gpus:
+            add("Graphics card", "ok", ", ".join(gpus) + (" (for the local model choose small)" if any("nvidia" in g.lower() for g in gpus)
+                                                          else " (for the local model choose cpp-small)"))
         add("whisper.cpp engine (local model on any graphics card)", "ok" if cpp_server_path() else "info",
-            "included" if cpp_server_path() else "not in this copy (it is in the Windows exe from the release page)")
-        for mod, what in (("onnxruntime", "Fast file mode and telling speakers apart"), ("yt_dlp", "Links (YouTube and other sites)")):
+            "included" if cpp_server_path() else latest)
+        for mod, what in (("onnxruntime", "Faster transcribing of files, and telling speakers apart"),
+                          ("yt_dlp", "Links (YouTube and other sites)")):
             ok_ = importlib.util.find_spec(mod) is not None
-            add(what, "ok" if ok_ else "info", "included" if ok_ else "not in this copy")
-        add("ffmpeg (for recordings)", "ok" if shutil.which("ffmpeg") or os.path.isfile(os.path.join(APP_DIR, "ffmpeg.exe")) else "info",
-            "found" if shutil.which("ffmpeg") or os.path.isfile(os.path.join(APP_DIR, "ffmpeg.exe")) else "not found: only mp3 and wav recordings can be read")
+            add(what, "ok" if ok_ else "info", "included" if ok_ else latest)
+        ffp = ffmpeg_path()
+        add("ffmpeg (for m4a / mp4 files and links)", "ok" if ffp else "warn",
+            ("found: " + ffp) if ffp else "not found: only mp3, wav, flac and ogg files can be read, and links do not work. "
+            "To install it, open cmd, type this line and press Enter:\nwinget install Gyan.FFmpeg")
         if overlay_live and sys.platform == "win32":
             if self.overlay.on:
                 add("Overlay test", "info", "The overlay is already on. Turn it off first (Ctrl+Alt+O).")
@@ -10373,6 +10512,15 @@ class App:
             return {"ok": False, "error": "Copy the recording to this computer first (network folders are not opened)."}
         if not os.path.isfile(path):
             return {"ok": False, "error": f"File not found: {path}"}
+        if needs_ffmpeg(path):                         # the window shows how to install it (one line in cmd)
+            self.cfg["last_recording_dir"] = os.path.dirname(path)      # after installing, the same folder opens
+            try:
+                save_config(self.cfg)
+            except OSError:
+                pass
+            ext = os.path.splitext(path)[1].lower().lstrip(".") or "this"
+            return {"ok": False, "error": "ffmpeg", "detail": f"The program cannot read {ext} files by itself. "
+                    "With ffmpeg it reads every audio and video type (m4a, mp4, webm, …). Or convert the file to mp3 or wav."}
         with self.lock:
             if self.running or self.stopping or self.recording:     # something started while the dialog was open
                 return {"ok": False, "error": "A meeting or another recording is running — stop it first."}
@@ -10390,7 +10538,7 @@ class App:
             with _usage_lock:
                 USAGE.clear()
             USAGE_ON[0] = True
-        self.hub.publish("session", session_file=job.session.path, recording=job.name)
+        self.hub.publish("session", session_file=job.session.path, recording=job.name, has_audio=True)
         self.publish_running()
         job.thread.start()
         return {"ok": True, "job": job.state}
@@ -10408,7 +10556,15 @@ class App:
             e = None
         where = audio_for_line(s, e)
         if not where:
-            return {"ok": False, "error": "There is no sound for this line (turn on Setup › Audio › “Keep the sound of meetings”)."}
+            if getattr(s, "recording", None) and not os.path.isfile(s.recording):
+                why = f"The recorded file was moved or deleted: {s.recording}"
+            elif session_has_audio(s):
+                why = "The kept sound does not cover this line (the sound device was away at that moment)."
+            elif self.cfg.get("save_audio"):
+                why = "There is no sound for this meeting: it was held before “Keep the sound of meetings” was on, or the sound files were deleted."
+            else:
+                why = "There is no sound for this meeting. To hear lines again next time, turn on Setup › Audio › “Keep the sound of meetings”."
+            return {"ok": False, "error": why}
         key = secrets.token_urlsafe(12)
         with self.lock:
             self.media = {k: v for k, v in getattr(self, "media", {}).items() if time.time() - v[1] < 3600}
@@ -11267,7 +11423,7 @@ class App:
         c = self.cfg
         if not c["local_model"]:
             return {"ok": False, "error": "Choose or download a model first."}
-        if load_faster_whisper() is None:
+        if load_faster_whisper() is None and not (os.path.isfile(c["local_model"]) and cpp_server_path()):
             return {"ok": False, "error": "The local model engine is not included in this program version. "
                                           "Download the latest release (or build the exe again with build_exe.bat). (" + (_fw["error"] or "") + ")"}
         LOCAL.load(c["local_model"], c["local_device"])
@@ -11321,13 +11477,15 @@ class App:
         def progress(st):
             self.hub.publish("download", download=st)
             if st["state"] == "done":
+                chosen = False
                 try:
-                    if not self.cfg["local_model"] or not model_folder(self.cfg["local_model"])[0]:
-                        self.api_local_choose(st["path"])
+                    if not (self.running or self.stopping or self.recording):   # the model just downloaded is the one they want
+                        chosen = bool(self.api_local_choose(st["path"]).get("ok", True))
                 except Exception as e:                      # the model is downloaded - only choosing it failed
                     log("the downloaded model could not be chosen automatically:", short(e), level="warn")
                 self.hub.publish("local", local=LOCAL.info())
-                self.hub.toast("ok", f"Model '{st['id']}' downloaded. Press Test to see how fast it is on this computer.")
+                self.hub.toast("ok", f"Model '{st['id']}' downloaded and chosen. Press Test on this computer to see how fast it is."
+                               if chosen else f"Model '{st['id']}' downloaded. Choose it in the Model list (after the meeting, if one is running) and press Test.")
             elif st["state"] == "error":
                 self.hub.toast("error", "Download failed: " + st["error"])
         self.download = ModelDownload(item, proxy, progress)

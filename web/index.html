@@ -204,6 +204,9 @@ button.chip:hover{filter:brightness(.97)}
 .entry.cont .meta .who,.entry.cont .meta .time,.entry.cont .meta .tag,.entry.cont .meta .edited{display:none}
 .entry.cont .meta{position:absolute;right:10px;top:4px;z-index:1}
 .entry.cont .orig{margin-top:0}
+.entry.cont.has-play .orig{padding-right:2.6rem}                 /* the ▶ on a grouped line never sits on the text */
+.entry.cont.latest:not(.answered) .orig{padding-right:9rem}
+.entry.cont.latest:not(.answered).has-play .orig{padding-right:11.5rem}
 .entry.turn-start{margin-top:6px}
 .ctxbar{position:absolute;left:14px;right:22px;z-index:6;background:var(--surface);border:1px solid var(--them);border-inline-start-width:4px;border-radius:12px;box-shadow:var(--shadow-lg);padding:8px 12px;cursor:pointer;max-height:42%;overflow:auto}
 .ctxbar .cx-h{display:flex;align-items:center;gap:8px;font-size:.78rem;font-weight:700;color:var(--them)}
@@ -270,6 +273,8 @@ body.ov #newQ{margin:0 0 6px;padding:2px 8px;font-size:.8rem;background:#57607a;
 body.ov #newQ span,body.ov #newQ u{display:none}
 body.ov .answer-body{padding:2px 4px;opacity:max(.6,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.45);flex:1 12 auto;min-height:2.4em;overflow-y:auto}
 body.ov .q-label,body.ov .a-fa-label,body.ov .rep-note{display:none}
+#ovMore{align-self:flex-end;font-size:.75rem;color:#c9d0db;background:rgba(0,0,0,.25);border-radius:6px;padding:0 6px;margin-top:-2px}
+#ovMore[hidden]{display:none}
 body.ov .q-block{background:transparent;border:0;padding:0;margin-bottom:8px}
 body.ov .q-orig,body.ov .q-fa{font-size:.95rem;color:#dfe5ee;-webkit-line-clamp:1;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
 body.ov .a-rest{color:#e6eaf1}
@@ -386,6 +391,8 @@ body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · C
 /* ---------- toasts ---------- */
 .toasts{position:fixed;bottom:46px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60;width:min(400px,calc(100vw - 32px))}
 body.capturing .toasts{right:auto;left:16px}
+body.drawer-open .toasts{right:calc(min(560px,100vw) + 16px)}   /* never on top of Setup */
+@media (max-width:980px){body.drawer-open .toasts{right:auto;left:16px;bottom:16px}}
 .toast{display:flex;gap:10px;align-items:flex-start;padding:11px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-lg);font-size:.86rem;line-height:1.45;animation:rise .2s ease-out}
 .toast .msg{flex:1}
 .toast.error{border-color:var(--danger-border)} .toast.error > svg{color:var(--danger)}
@@ -433,7 +440,9 @@ textarea.input{resize:vertical;min-height:76px}
 .br-card{width:min(680px,100%);height:min(620px,calc(100vh - 32px))}
 .br-bar{display:flex;gap:6px;align-items:center;padding:10px 16px 6px}
 .br-bar .input{flex:1;min-width:0;padding:7px 10px;font-family:var(--mono);font-size:.82rem}
-.br-rec{display:grid;gap:8px;padding:8px 16px 10px;border-bottom:1px solid var(--border)}
+.br-rec{display:grid;gap:8px;padding:10px 16px 8px;border-bottom:1px solid var(--border)}
+.br-rec .br-or{font-weight:600;color:var(--muted)}
+.br-rec-row .mini{flex-basis:100%;margin-inline-start:178px;color:var(--muted)}
 .br-rec-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .br-rec-row .help{min-width:170px}
 .br-rec-row #brLink{flex:1;min-width:220px}
@@ -986,7 +995,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="help">Makes your own voice louder or quieter inside the program (it does not change Windows). Raise it if your voice is weak, lower it if you are too loud.</div>
       </div>
       <label class="toggle"><input type="checkbox" data-key="transcribe_me"><span class="switch"></span><span class="tt"><b>Transcribe my voice</b><span>Your own words are written and saved too.</span></span></label>
-      <label class="toggle"><input type="checkbox" data-key="save_audio"><span class="switch"></span><span class="tt"><b>Keep the sound of meetings</b><span>After the meeting, the ▶ button on a line plays what was said (about 7 MB an hour, next to the meeting file). Ask the other side if recording is allowed.</span></span></label>
+      <label class="toggle"><input type="checkbox" data-key="save_audio"><span class="switch"></span><span class="tt"><b>Keep the sound of meetings</b><span>Starts with the next meeting. After the meeting, the ▶ button on a line plays what was said, while that meeting is on screen (about 7 MB an hour, saved next to the meeting file). Nothing is kept while the meeting is paused. Ask the other side if recording is allowed.</span></span></label>
 
     </section>
 
@@ -1017,7 +1026,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           </div>
           <div class="svc-body">
             <div class="callout" id="keyWelcome" hidden><span data-icon="key"></span><div><b>How to get a free Groq key</b>
-              <ol><li>Open <a class="link" href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a></li><li>Click <b>Create API Key</b> and copy it</li><li>Paste it below</li></ol></div></div>
+              <ol><li>Open <a class="link" href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a></li><li>Click <b>Create API Key</b> and copy it</li><li>Paste it below</li></ol><div class="help">From Iran the Groq site and service need a VPN (or set a proxy below in Network).</div></div></div>
             <div class="field">
               <label for="fKey">API key</label>
               <div class="input-row">
@@ -1072,7 +1081,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
 
       <details class="more" id="optLocal">
         <summary><span class="opt-ic ok"><span data-icon="cpu"></span></span><div class="opt-text"><b>Local model</b> <span class="tag free">Free · offline</span><span class="opt-state" id="localSummary"></span>
-          <p>Speech to text on this computer: no internet and no limits. Needs a fast processor (press Test on this computer).</p></div><span class="chev"></span></summary>
+          <p>Speech to text on this computer: no internet and no limits. Needs a fast processor or a graphics card (press Test on this computer).</p></div><span class="chev"></span></summary>
         <div class="opt-body" id="localCard">
         <div class="local-status" id="localStatus"></div>
         <div>
@@ -1091,7 +1100,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         </div>
         <div class="input-row" style="flex-wrap:wrap">
           <button class="btn sm primary" id="localTest"><span data-icon="zap"></span>Test on this computer</button>
-          <select class="input select" id="localDevice" style="width:auto"><option value="auto">Run on: automatic</option><option value="cpu">Run on: processor only</option></select>
+          <select class="input select" id="localDevice" style="width:auto"><option value="auto">Run on: automatic (graphics card if possible)</option><option value="cpu">Run on: processor only</option></select>
           <button class="btn sm ghost" id="localFolder">Open models folder</button>
           <button class="btn sm ghost" id="localDelete" hidden>Delete this model</button>
         </div>
@@ -1254,23 +1263,25 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="modal-card br-card" role="dialog" aria-modal="true" aria-labelledby="brTitle">
     <div class="modal-head"><h2 id="brTitle"><span data-icon="folder"></span><span>Choose</span></h2><span class="spacer"></span>
       <button class="btn icon ghost" id="brClose" aria-label="Close"><span data-icon="x"></span></button></div>
+    <div class="br-rec" id="brRec" hidden>
+      <div class="br-rec-row"><label class="help" for="brSpk">Who is speaking</label>
+        <select class="input select" id="brSpk" style="max-width:300px">
+          <option value="0">One voice (do not separate)</option>
+          <option value="-1">Separate the speakers (count them by itself)</option>
+          <option value="2">Separate: 2 people</option><option value="3">Separate: 3 people</option><option value="4">Separate: 4 people</option><option value="5">Separate: 5 people</option>
+        </select>
+        <span class="mini" id="brSpkNote">Separating takes a little longer; a small voice model (27 MB) is downloaded once.</span></div>
+      <div class="br-rec-row"><label class="help" for="brLink">A link (YouTube or another site)</label>
+        <input class="input" id="brLink" dir="ltr" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…">
+        <button class="btn sm primary" id="brLinkGo"><span data-icon="play"></span><span>Transcribe the link</span></button></div>
+      <div class="mini br-or">Or open a file on this computer:</div>
+    </div>
     <div class="br-bar">
       <button class="btn sm ghost" id="brUp" title="Up one folder" aria-label="Up one folder"><span data-icon="down" style="display:inline-block;transform:rotate(180deg)"></span></button>
       <input class="input" id="brPath" spellcheck="false" dir="ltr" aria-label="Folder">
       <button class="btn sm" id="brGo">Open</button>
     </div>
     <div class="br-places" id="brPlaces"></div>
-    <div class="br-rec" id="brRec" hidden>
-      <div class="br-rec-row"><span class="help">Who is speaking</span>
-        <select class="input select" id="brSpk" style="max-width:260px">
-          <option value="0">One voice (do not separate)</option>
-          <option value="-1">Tell the speakers apart</option>
-          <option value="2">2 people</option><option value="3">3 people</option><option value="4">4 people</option><option value="5">5 people</option>
-        </select></div>
-      <div class="br-rec-row"><span class="help">Or a link (YouTube or another site)</span>
-        <input class="input" id="brLink" dir="ltr" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…">
-        <button class="btn sm primary" id="brLinkGo"><span data-icon="play"></span><span>Transcribe the link</span></button></div>
-    </div>
     <div class="br-list" id="brList" dir="ltr"></div>
     <div class="modal-note br-foot"><span id="brHint" class="br-hint"></span><span class="spacer"></span>
       <button class="btn sm primary" id="brUse" hidden><span data-icon="check"></span><span>Use this model</span></button></div>
@@ -1419,7 +1430,7 @@ function handle(m){
   switch(m.type){
     case "hello": S.fbBusy = false; S.scrBusy = false; return onHello(m);
     case "config": S.cfg = m.config; if(m.proxy) S.proxy = m.proxy; applyConfig(); fillDrawer(false); return;
-    case "running": if(!m.running) S.paused = false; if(S.running !== m.running) setTimeout(renderAnswer, 0); S.running=m.running; S.stopping=m.stopping; S.monitoring=m.monitoring; S.startedAt=m.started_at; if(m.session_file) S.sessionFile=m.session_file; S.resume=m.resume||null; renderRunning(); refreshPlay(); return;
+    case "running": if(!m.running) S.paused = false; if(S.running !== m.running) setTimeout(renderAnswer, 0); S.running=m.running; S.stopping=m.stopping; S.monitoring=m.monitoring; S.startedAt=m.started_at; if(m.session_file) S.sessionFile=m.session_file; S.resume=m.resume||null; if(m.has_audio !== undefined) S.hasAudio = !!m.has_audio; renderRunning(); refreshPlay(); return;
     case "level": return onLevel(m);
     case "speaking": return onSpeaking(m);
     case "entry": return upsertEntry(m.entry);
@@ -1463,7 +1474,7 @@ function clearTranscript(){
   $("#jump").hidden = true;
 }
 function newSession(m){
-  clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false; S.notes = m.coach_notes || {};
+  clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.hasAudio = !!m.has_audio; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false; S.notes = m.coach_notes || {};
   replayEntries(m.entries);
   if((m.entries || []).length) feed.scrollTop = feed.scrollHeight;
   S.sumState = ""; $("#sumBody").innerHTML = ""; $("#sumNote").innerHTML = ""; $("#sumModal").hidden = true;
@@ -1475,11 +1486,12 @@ function onHello(m){
   document.title = OVERLAY ? "MA-Overlay" : "Meeting Assistant " + (m.version || "");
   S.cfg = m.config; S.running=m.running; S.stopping=m.stopping; S.monitoring=m.monitoring; S.startedAt=m.started_at;
   S.sessionFile=m.session_file||""; S.meetingsDir=m.meetings_dir; S.proxy=m.proxy||["",""]; S.net=m.net||{};
-  S.stats=m.stats||{}; S.quota=m.quota; S.audioOk=m.audio_ok; S.speechMode = m.speech_mode; S.usage = m.usage || {};
+  S.stats=m.stats||{}; S.quota=m.quota; S.audioOk=m.audio_ok; S.spkOk = m.spk_ok !== false; S.speechMode = m.speech_mode; S.usage = m.usage || {};
   S.local = m.local || {}; S.download = m.download; loadLocal();
   S.llm = m.llm || {}; loadLlm();
   S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbScores = m.feedback_scores || {}; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
   S.recName = m.recording && ["starting","reading","finishing","downloading","speakers"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
+  S.hasAudio = !!m.has_audio;
   clearTranscript(); renderTitle();
   S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {}; S.overlay = !!m.overlay; renderOverlayBtn();
   replayEntries(m.entries);
@@ -1612,7 +1624,7 @@ function groupTurns(){
   let prev = null;
   for(const el of list.children){
     if(!el.classList || !el.classList.contains("entry")) continue;
-    const src = el.classList.contains("me") ? "me" : "them";
+    const src = (el.classList.contains("me") ? "me" : "them") + "|" + (el.dataset.who || "");   // another speaker starts a new turn
     const gap = prev ? Math.abs(+el.dataset.t - +prev.dataset.t) : 1e9;
     const same = prev && prev.dataset.src2 === src && gap <= 25;
     el.classList.toggle("cont", !!same);
@@ -1719,7 +1731,9 @@ function entryShell(e){
   return el;
 }
 const PLAY = {audio: null, stopAt: 0, btn: null, seq: 0};
-function refreshPlay(){ S.entries.forEach(e => { const el = document.getElementById("e" + e.id); const b = el && el.querySelector(".play"); if(b) b.hidden = S.running || !(S.recName || S.cfg?.save_audio) || !e.t_end; }); }
+function setPlayLabel(b, on){ if(b){ b.title = on ? "Stop" : "Play this line"; b.setAttribute("aria-label", b.title); } }
+function canPlay(e){ return !S.running && !!S.hasAudio && !!e.t_end; }        // only when this meeting really has its sound
+function refreshPlay(){ S.entries.forEach(e => { const el = document.getElementById("e" + e.id); const b = el && el.querySelector(".play"); if(b){ b.hidden = !canPlay(e); el.classList.toggle("has-play", !b.hidden); } }); }
 async function playLine(id, btn){
   if(PLAY.btn === btn && PLAY.audio && !PLAY.audio.paused){ PLAY.audio.pause(); return; }
   const seq = ++PLAY.seq;                     // a later click wins over an older answer still on its way
@@ -1729,13 +1743,13 @@ async function playLine(id, btn){
   if(!PLAY.audio){
     PLAY.audio = new Audio();
     PLAY.audio.ontimeupdate = () => { if(PLAY.audio.currentTime >= PLAY.stopAt) PLAY.audio.pause(); };
-    PLAY.audio.onpause = () => { if(PLAY.btn && !PLAY.loading) PLAY.btn.classList.remove("on"); };   // a pause from the old line while the new one loads is ignored
+    PLAY.audio.onpause = () => { if(PLAY.btn && !PLAY.loading){ PLAY.btn.classList.remove("on"); setPlayLabel(PLAY.btn, false); } };   // a pause from the old line while the new one loads is ignored
     PLAY.audio.onplaying = () => { PLAY.loading = false; };
     PLAY.audio.onerror = () => { PLAY.loading = false; if(PLAY.btn) PLAY.btn.classList.remove("on"); toast("error", "This sound file cannot be played here."); };
   }
-  if(PLAY.btn) PLAY.btn.classList.remove("on");
+  if(PLAY.btn){ PLAY.btn.classList.remove("on"); setPlayLabel(PLAY.btn, false); }
   PLAY.loading = true;
-  PLAY.btn = btn; btn.classList.add("on");
+  PLAY.btn = btn; btn.classList.add("on"); setPlayLabel(btn, true);
   PLAY.stopAt = r.end;
   const a = PLAY.audio;
   const go = () => { try{ a.currentTime = r.start; }catch{} a.play().catch(() => { PLAY.loading = false; btn.classList.remove("on"); toast("error", "The sound could not be played."); }); };
@@ -1749,7 +1763,9 @@ function fillEntry(el, e){
   el.querySelector(".time").textContent = clock(e.t0);
   const tag = el.querySelector(".tag"); tag.hidden = !e.lang || (S.cfg?.languages || []).length < 2; tag.textContent = (e.lang||"").toUpperCase();
   el.querySelector(".act").hidden = e.source === "me" && !S.cfg?.answer_me;
-  el.querySelector(".play").hidden = S.running || !(S.recName || S.cfg?.save_audio) || !e.t_end;
+  el.dataset.who = e.who || (e.speaker != null ? "s" + e.speaker : "");
+  el.querySelector(".play").hidden = !canPlay(e);
+  el.classList.toggle("has-play", !el.querySelector(".play").hidden);
   el.classList.toggle("answered", !!e.answer);
   el.querySelector(".act").lastChild.textContent = e.answer ? "Answer again" : "Answer this";
   if(!el.dataset.editing) el.querySelector(".orig").textContent = e.text;
@@ -2071,7 +2087,7 @@ function markLatest(){
   if(best && best.translation && !S.tipShown){
     let seen = false; try{ seen = localStorage.getItem("ma.tip.select") === "1"; }catch{}
     S.tipShown = true;
-    if(!seen) setTimeout(() => toast("info", "Tip: select words in a line to get their meaning in " + myLang().name + " or an answer about them. Press F8 to pause."), 800);
+    if(!seen) setTimeout(() => toast("info", "Tip: select words in a line to get their meaning in " + myLang().name + " or an answer about them." + (S.running ? " Press F8 to pause." : "")), 800);
     try{ localStorage.setItem("ma.tip.select", "1"); }catch{}
   }
 }
@@ -2085,7 +2101,8 @@ function renderEmpty(){
   box.hidden = false;
   if(recActive()){
     box.innerHTML = `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
-      <h3>Reading the recording…</h3><p>Lines and their ${esc(myLang().name)} translation appear here as the file is transcribed. Speakers are not told apart in a recording.</p></div>`;
+      ${S.rec?.state === "downloading" ? `<h3>Downloading the link…</h3><p>The sound of the video is downloaded first (see the bar above). Then lines and their ${esc(myLang().name)} translation appear here.</p>`
+        : `<h3>Reading the recording…</h3><p>Lines and their ${esc(myLang().name)} translation appear here as the file is transcribed.${S.rec?.speakers ? " Speaker names are added after all lines are written." : ""}</p>`}</div>`;
     return;
   }
   if(S.running){
@@ -2181,7 +2198,19 @@ function renderAnswer(){
   requestAnimationFrame(() => body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8));
   if(S.flashId !== e.id){ S.flashId = e.id; const a = body.querySelector(".a-text"); a.classList.add("fresh"); setTimeout(() => a.classList.remove("fresh"), 900); }
 }
-$("#answerBody").addEventListener("scroll", () => { const b = $("#answerBody"); b.classList.toggle("more", b.scrollHeight - b.scrollTop - b.clientHeight > 8); });
+function updMore(){                                   // more text below: a fade, and in the overlay a small sign with the key
+  const b = $("#answerBody"); if(!b) return;
+  const more = b.style.display !== "none" && b.scrollHeight - b.scrollTop - b.clientHeight > 8;
+  b.classList.toggle("more", more);
+  if(OVERLAY){
+    let t = $("#ovMore");
+    if(!t){ t = document.createElement("div"); t.id = "ovMore"; t.textContent = "▼ more · Ctrl+Alt+↓"; b.after(t); }
+    t.hidden = !more;
+  }
+}
+$("#answerBody").addEventListener("scroll", updMore);
+new MutationObserver(() => requestAnimationFrame(updMore)).observe($("#answerBody"), {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["style"]});
+window.addEventListener("resize", updMore);
 function renderAnswerIfIdle(){
   const e = S.panelId != null ? S.entries.get(S.panelId) : null;
   if(!e || !e.answer) renderAnswer();
@@ -2361,6 +2390,7 @@ function renderRec(){
   b.querySelector(".rname").textContent = j.name;
   const pct = j.total ? Math.min(100, Math.round(j.pos / j.total * 100)) : null;
   b.querySelector(".dlbar i").style.width = (pct == null ? 0 : pct) + "%";
+  if(j.state === "speakers") b.querySelector(".dlbar i").style.width = Math.round(100 * (j.frac || 0)) + "%";   // its own progress
   if(j.state === "downloading" || j.state === "speakers"){ b.querySelector(".rtext").textContent = j.note || ""; return; }
   b.querySelector(".rtext").textContent = (j.state === "finishing" ? "Finishing the last lines… · " : "")
     + fmtDur(j.pos) + (j.total ? " / " + fmtDur(j.total) + " (" + pct + "%)" : "") + " · " + j.lines + " lines";
@@ -2372,6 +2402,7 @@ async function startRecording(path){
   $("#recBtn").disabled = false;
   if(!r.ok){
     if(r.error === "setup"){ openDrawer("connection"); toast("warn", "Setup is not complete: " + (r.missing || []).join("; ") + "."); }
+    else if(r.error === "ffmpeg") ffmpegHelp(r.detail, () => startRecording(path));
     else toast("error", r.error || "Could not open the recording.");
   }
 };
@@ -2380,21 +2411,33 @@ $("#recCancel").onclick = () => api("recording", {cancel: true});
 const BR = {kind: "model", onPick: null, path: ""};
 function openBrowser(kind, onPick){
   BR.kind = kind; BR.onPick = onPick;
-  $("#brTitle span:last-child").textContent = kind === "model" ? "Choose a model folder" : kind === "gguf" ? "Choose a .gguf model file" : kind === "doc" ? "Choose your CV or background file" : "Choose a recording";
+  $("#brTitle span:last-child").textContent = kind === "model" ? "Choose a model folder" : kind === "gguf" ? "Choose a .gguf model file" : kind === "doc" ? "Choose your CV or background file" : "Transcribe a file or a link";
   $("#brModal").hidden = false; brLoad(""); setTimeout(() => $("#brPath").focus(), 0);
   $("#brRec").hidden = kind !== "audio";
-  if(kind === "audio"){ let v = "0"; try{ v = localStorage.getItem("ma.rec.spk") || "0"; }catch{} $("#brSpk").value = v; }
+  if(kind === "audio"){
+    let v = "0"; try{ v = localStorage.getItem("ma.rec.spk") || "0"; }catch{}
+    const ok = S.spkOk !== false;                          // this copy can tell speakers apart (onnxruntime)
+    [...$("#brSpk").options].forEach(o => { o.disabled = !ok && o.value !== "0"; });
+    $("#brSpkNote").textContent = ok ? "Separating takes a little longer; a small voice model (27 MB) is downloaded once."
+      : "Separating speakers is not in this copy of the program.";
+    $("#brSpk").value = ok ? v : "0";
+  }
 }
 function recSpeakers(){ const v = $("#brSpk").value; try{ localStorage.setItem("ma.rec.spk", v); }catch{} return +v || 0; }
-function ffmpegHelp(detail){
+function ffmpegHelp(detail, retry){
   openTool("ffmpeg", "ffmpeg is needed", "alert");
   $("#toolBody").innerHTML = `<p class="help">${esc(detail || "This kind of file needs ffmpeg.")}</p>
+    <p class="help"><b>Install it once (free):</b></p>
     <ol class="help" style="line-height:1.9"><li>Open the Windows Start menu, type <b>cmd</b> and press Enter.</li>
-    <li>Paste this line and press Enter:</li></ol>
+    <li>Paste this line into the black window and press Enter:</li></ol>
     <pre dir="ltr" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;user-select:all">winget install Gyan.FFmpeg</pre>
-    <ol class="help" start="3" style="line-height:1.9"><li>When it is done, close this program and open it again.</li></ol>
-    <p class="help">Or download ffmpeg.exe and put it next to MeetingAssistant.exe.</p>`;
-  toolActions([{icon: "copy", text: "Copy the line", run: () => copyText("winget install Gyan.FFmpeg", "Copied.")}, {icon: "check", text: "Close", run: closeTool}]);
+    <ol class="help" start="3" style="line-height:1.9"><li>If it asks whether you agree, type <b>Y</b> and press Enter.</li>
+    <li>Wait until it says the installation is done.</li>
+    <li>Press <b>Try again</b> below. If it is still not found, close this program and open it again.</li></ol>
+    <p class="help">No winget? Download the “essentials” build from <a class="link" href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" rel="noopener">gyan.dev/ffmpeg/builds</a>, unzip it, and put <b>ffmpeg.exe</b> (from its <b>bin</b> folder) next to MeetingAssistant.exe.</p>`;
+  const acts = [{icon: "copy", text: "Copy the line", run: () => copyText("winget install Gyan.FFmpeg", "Copied.")}];
+  if(retry) acts.push({icon: "play", text: "Try again", primary: true, run: () => { closeTool(); retry(); }});
+  toolActions(acts);
 }
 $("#brLinkGo").onclick = async () => {
   const url = $("#brLink").value.trim(), b = $("#brLinkGo");
@@ -2403,7 +2446,7 @@ $("#brLinkGo").onclick = async () => {
   const r = await api("recording_link", {url, speakers: recSpeakers()});
   b.disabled = false;
   if(r.ok){ closeBrowser(); $("#brLink").value = ""; return; }
-  if(r.error === "ffmpeg") return ffmpegHelp(r.detail);
+  if(r.error === "ffmpeg") return ffmpegHelp(r.detail, () => $("#brLinkGo").click());
   if(r.error === "setup"){ closeBrowser(); openDrawer("connection"); return toast("warn", "Setup is not complete: " + (r.missing || []).join("; ") + "."); }
   toast("error", r.error || "The link could not be used.");
 };
@@ -2425,7 +2468,7 @@ async function brLoad(path){
   BR.path = r.path; BR.parent = r.parent; $("#brPath").value = r.path; $("#brUp").disabled = !r.parent;
   const rows = r.dirs.map(d => `<button class="br-row${d.model ? " model" : ""}" data-d="${esc(d.path)}">${icon("folder")}<span class="n">${esc(d.name)}</span>${d.model ? `<span class="tag">model</span>` : ""}</button>`)
     .concat(r.files.map(f => `<button class="br-row" data-f="${esc(f.path)}">${icon("file")}<span class="n">${esc(f.name)}</span><span class="m">${f.mb} MB</span></button>`));
-  list.innerHTML = rows.join("") || `<div class="br-empty">${BR.kind === "model" ? "No folders here." : BR.kind === "gguf" ? "No .gguf files here." : BR.kind === "doc" ? "No Word, PDF or text files here." : "No audio or video files here."}</div>`;
+  list.innerHTML = rows.join("") || `<div class="br-empty">${BR.kind === "model" ? "No folders here." : BR.kind === "audio" ? "No audio or video files in this folder. Open another folder, or paste a link above." : BR.kind === "gguf" ? "No .gguf files here." : BR.kind === "doc" ? "No Word, PDF or text files here." : "No audio or video files here."}</div>`;
   if(r.more) list.insertAdjacentHTML("beforeend", `<div class="br-empty">Only the first 400 are shown — type the path above.</div>`);
   list.querySelectorAll("[data-d]").forEach(b => b.onclick = () => brLoad(b.dataset.d));
   list.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { closeBrowser(); BR.onPick && BR.onPick(b.dataset.f); });
@@ -2433,7 +2476,8 @@ async function brLoad(path){
   use.hidden = BR.kind !== "model" || !r.is_model;
   $("#brHint").textContent = BR.kind === "model"
     ? (r.is_model ? "This folder is a model." : "Open the model's folder (the one that contains model.bin), or click a whisper.cpp model file (ggml-….bin).")
-    : BR.kind === "gguf" ? "Click the model file to use it." : BR.kind === "doc" ? "Click your file (.docx, .pdf, .txt, .md)." : "Click a file to transcribe it.";
+    : BR.kind === "gguf" ? "Click the model file to use it." : BR.kind === "doc" ? "Click your file (.docx, .pdf, .txt, .md)."
+    : rows.length ? "Click a file to transcribe it." : "";
   list.scrollTop = 0;
 }
 $("#brClose").onclick = closeBrowser;
@@ -2524,12 +2568,12 @@ function hideBanner(){ const b = $("#banner"); b.hidden = true; b.dataset.kind =
 /* ---------- setup drawer ---------- */
 function openDrawer(tab){
   selectTab(tab || S.lastTab || (S.cfg && !S.cfg.ready ? "connection" : "meeting"));
-  $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); $("#drawer").setAttribute("aria-hidden","false"); $("#drawer").inert = false;
+  $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); document.body.classList.add("drawer-open"); $("#drawer").setAttribute("aria-hidden","false"); $("#drawer").inert = false;
   fillDrawer(true);
 }
 function closeDrawer(){
   const d = $("#drawer"), wasOpen = d.classList.contains("open");
-  d.classList.remove("open"); $("#scrim").classList.remove("open"); d.setAttribute("aria-hidden","true"); d.inert = true;
+  d.classList.remove("open"); $("#scrim").classList.remove("open"); document.body.classList.remove("drawer-open"); d.setAttribute("aria-hidden","true"); d.inert = true;
   if(wasOpen) $("#setupBtn").focus({preventScroll: true, focusVisible: false});
 }
 function selectTab(name){
@@ -2641,13 +2685,17 @@ let keyTimer = null;
 $("#fKey").addEventListener("input", () => {
   clearTimeout(keyTimer);
   const v = $("#fKey").value.trim();
-  if(v.length < 20) return;
+  if(v.length < 20){                                     // typed or pasted only part of it: say so after a moment
+    if(v && S.keyPasted) keyTimer = setTimeout(() => toast("warn", "This does not look like a whole key yet (a Groq key starts with gsk_ and is about 56 characters). Copy the whole key and paste it again."), 1500);
+    return;
+  }
   keyTimer = setTimeout(async () => {
     const r = await api("save_config", {api_key: v});
     if(r.ok){ S.cfg = r.config; $("#fKey").value = ""; $("#fKey").type = "password"; applyConfig(); fillDrawer(true); testConnection(); }
     else toast("error", r.error || "The key could not be saved. Try again.");
   }, 600);
 });
+$("#fKey").addEventListener("paste", () => { S.keyPasted = true; setTimeout(() => { S.keyPasted = false; }, 3000); });   // the warning is for a pasted part, not for typing
 $("#showKey").onclick = () => { const k = $("#fKey"); k.type = k.type === "password" ? "text" : "password"; };
 async function testConnection(){
   const res = $("#connResult"), btn = $("#testConn");
@@ -3055,7 +3103,7 @@ function renderLocal(){
   if(L.engine === false){ cls = "bad"; txt = `${icon("alert")}<span>The local model engine is not in this program version. Download the latest release, or run <b>build_exe.bat</b> again if you build it yourself. <span class="m">${esc(L.engine_error || "")}</span></span>`; }
   else if(!c.local_model){ txt = `${icon("info")}<span>No model yet. Download one below (<b>small</b> is a good start), or choose one you already have.</span>`; }
   else if(L.state === "loading"){ txt = `<span class="spinner"></span><span>Loading <b>${esc(L.name)}</b> into memory…</span>`; }
-  else if(L.state === "ready"){ cls = "ok"; txt = `${icon("check")}<span><b>${esc(L.name)}</b> is ready on the ${esc(L.device)}${L.load_secs ? ` (loaded in ${L.load_secs} s)` : ""}.</span>`; }
+  else if(L.state === "ready"){ cls = "ok"; txt = `${icon("check")}<span><b>${esc(L.name)}</b> is ready on the ${esc(L.device)}${L.load_secs ? ` (loaded in ${L.load_secs} s)` : ""}.${L.note ? `<br><span class="m">${esc(L.note)}</span>` : ""}</span>`; }
   else if(L.state === "error"){ cls = "bad"; txt = `${icon("alert")}<span>${esc(L.error)}</span>`; }
   else { txt = `${icon("info")}<span><b>${esc(basename(c.local_model))}</b> is chosen. It is loaded when you use it — press <b>Test on this computer</b>.</span>`; }
   st.className = "local-status " + cls; st.innerHTML = txt;
@@ -3073,8 +3121,12 @@ function renderLocal(){
   const cat = $("#localCatalog");
   if(cat.options.length !== (S.catalog || []).length || cat.dataset.have !== [...have].join()){
     const keep = cat.value;
-    cat.innerHTML = (S.catalog || []).map(m => `<option value="${esc(m.id)}">${esc(m.id)} — ${m.mb >= 1000 ? (m.mb / 1000).toFixed(1) + " GB" : m.mb + " MB"} — ${esc(m.note)}${have.has(m.id) ? " (downloaded)" : ""}</option>`).join("");
-    cat.value = keep || "small"; cat.dataset.have = [...have].join();
+    const opt = m => `<option value="${esc(m.id)}" title="${esc(m.note)}">${esc(m.id)} — ${m.mb >= 1000 ? (m.mb / 1000).toFixed(1) + " GB" : m.mb + " MB"} — ${esc(m.note)}${have.has(m.id) ? " (downloaded)" : ""}</option>`;
+    const fw = (S.catalog || []).filter(m => m.engine !== "cpp"), cpp = (S.catalog || []).filter(m => m.engine === "cpp");
+    cat.innerHTML = cpp.length ? `<optgroup label="faster-whisper (processor, or an NVIDIA graphics card)">${fw.map(opt).join("")}</optgroup>`
+      + `<optgroup label="whisper.cpp (any graphics card: Intel, AMD, NVIDIA)">${cpp.map(opt).join("")}</optgroup>` : fw.map(opt).join("");
+    const gpuName = (S.local?.gpu || "").toLowerCase();             // Intel or AMD graphics: whisper.cpp is the better start
+    cat.value = keep || (cpp.length && gpuName && !/nvidia/.test(gpuName) ? "cpp-small" : "small"); cat.dataset.have = [...have].join();
   }
   showNeed("stt");
   $("#localDevice").value = c.local_device || "auto";
@@ -3252,10 +3304,11 @@ async function runSelfCheck(live){
   if(!r.ok || !Array.isArray(r.items)){ box.innerHTML = ""; return toast("error", r.error || "The check failed."); }
   const ST = {ok: ["ok", "check"], warn: ["bad", "alert"], bad: ["bad", "alert"], info: ["", "info"]};
   box.innerHTML = r.items.map(x => { const [cls, ic] = ST[x.state] || ["", "info"];
-    return `<div class="trow ${cls}">${icon(ic)}<div><b>${esc(x.name)}</b><span class="sub" style="display:block" dir="auto">${esc(x.detail)}</span></div></div>`; }).join("")
+    return `<div class="trow ${cls}">${icon(ic)}<div><b>${esc(x.name)}</b><span class="sub" style="display:block;white-space:pre-line" dir="auto">${esc(x.detail)}</span>${/^ffmpeg/.test(x.name) && x.state !== "ok" ? `<button class="btn sm ghost ffhelp" style="margin-top:4px">How to install ffmpeg</button>` : ""}</div></div>`; }).join("")
     + `<div style="margin-top:6px"><button class="btn sm ghost" id="selfCopy"><span data-icon="copy"></span><span>Copy the report</span></button></div>`;
   paintIcons();
   $("#selfCopy").onclick = () => copyText(r.report || "", "Report copied. You can send it to whoever helps you.");
+  box.querySelectorAll(".ffhelp").forEach(b => b.onclick = () => ffmpegHelp("Files such as m4a and mp4, and links, need ffmpeg.", () => runSelfCheck(false)));
 }
 $("#selfBtn").onclick = () => runSelfCheck(false);
 $("#selfOvBtn").onclick = () => runSelfCheck(true);
@@ -3489,7 +3542,7 @@ function openTool(kind, title, iconName){
 function closeTool(){ if(TM.kind === "practice") practiceLeave(); $("#toolModal").hidden = true; TM.kind = ""; }
 function toolActions(list){
   const box = $("#toolActions"); box.innerHTML = "";
-  list.forEach(a => { const b = document.createElement("button"); b.className = "btn sm ghost"; b.id = a.id || ""; b.disabled = !!a.disabled;
+  list.forEach(a => { const b = document.createElement("button"); b.className = a.primary ? "btn sm primary" : "btn sm ghost"; b.id = a.id || ""; b.disabled = !!a.disabled;
     b.innerHTML = icon(a.icon || "check") + `<span>${esc(a.text)}</span>`; b.onclick = a.run; box.appendChild(b); });
 }
 const rtlAttr = () => { const m = myLang(); return `dir="${m.rtl ? "rtl" : "ltr"}" lang="${m.code}"`; };

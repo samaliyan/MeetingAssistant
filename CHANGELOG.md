@@ -13,7 +13,16 @@ Six ideas from the open-source program Buzz, built into this program.
 - **A link to text.** Paste a YouTube link (or any page with audio or video) in the "Transcribe a file…" window and press **Transcribe the link**. It is downloaded into the "downloads" folder, then transcribed and translated like a file. Needs ffmpeg (the window tells you how to install it).
 - **Hear a line again.** Setup › Audio › **Keep the sound of meetings** (off by default) keeps the sound next to the meeting file. After the meeting (and for every recorded file) the ▶ button on a line plays exactly that part.
 - Fixes from an independent review of these parts: very long words (links) no longer stop the subtitle export; subtitles never overlap; a cancelled download no longer shows an error; reopening a recording keeps the speaker names; the sound link expires after an hour; keeping the sound never slows the microphone (it is written by its own thread); while the meeting is paused, silence is kept instead of the sound; a slow whisper.cpp no longer ends a recording with an error (what was read is kept).
-- 116 automated tests.
+- **ffmpeg help everywhere**: opening an m4a / mp4 file (not only a link) without ffmpeg opens a window with the one line to type in cmd (`winget install Gyan.FFmpeg`) and a **Try again** button; ffmpeg installed by winget is found at once, without restarting; Check this computer finds it in every place the program looks and has a **How to install ffmpeg** button. Both guides have the steps.
+- **A strict UX review** (three independent reviewers, with screenshots), and the fixes:
+  - Speaker 1 / 2 / 3 are shown on every line where the speaker changes (consecutive lines of different people were grouped under the first name).
+  - The ▶ button never sits on the text; it is shown only when that meeting really has its sound; a clear message when the sound is missing (file moved, meeting held before the option was on).
+  - "Transcribe a file or a link" window: who is speaking first, clearer choices ("Separate the speakers (count them by itself)"), a note that it takes a little longer, the link, then the files. The option is off when this copy cannot separate speakers.
+  - The waiting text matches the step (downloading the link / reading / adding speaker names); the bar shows the speaker step's own progress.
+  - Stop works at once while a link is being looked at; plain messages for private videos, "not a robot" checks, no connection (with the VPN / proxy place), and "Download stopped.".
+  - whisper.cpp: if the graphics card cannot be used, it runs on the processor by itself and says so; Intel / AMD computers are offered cpp-small first; the model list is grouped by engine; a downloaded model is chosen at once.
+  - Messages no longer cover the Setup panel; the overlay shows "▼ more · Ctrl+Alt+↓" when the answer continues; a pasted part of a key gets a warning; the Groq help says a VPN is needed from Iran.
+- 119 automated tests.
 
 ## [6.13.1]
 
