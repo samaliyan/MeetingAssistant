@@ -536,7 +536,7 @@ def test_decode_partial_utf8_and_srt_blank_lines(app):
     assert app._decode_text(raw).startswith("سلام دنیا")
     rows = [{"text": "a\n\nb", "translation": "x\n\n\ny", "t0": 1, "t_end": 3}, {"text": "c", "t0": 4, "t_end": 5}]
     blocks = app.srt_text(rows, 0, lambda r: "L").strip().split("\n\n")
-    assert len(blocks) == 2 and blocks[0].count("\n") == 5      # index, time, 4 text lines: no blank line inside a cue
+    assert len(blocks) == 2 and blocks[0].split("\n")[2:] == ["a b", "x y"]   # no blank line inside a cue
 
 
 
@@ -1455,3 +1455,353 @@ def test_model_news_odd_items_and_custom_match(app, tmp_path):
         assert r["items"][0]["sources"][0]["connected"] == "aval"
     finally:
         app.fetch_model_news = orig
+
+
+def test_vtt_export_and_keep_awake(app):
+    import types
+    rows = [{"id": 1, "source": "them", "t0": 100.0, "t_end": 103.5, "text": "Hello there", "translation": "سلام", "speaker": None}]
+    s = types.SimpleNamespace(ordered=lambda: rows, started=__import__("datetime").datetime.fromtimestamp(99.0), recording=False,
+                              label=lambda r: "Them")
+    v = app.export_bytes(s, "vtt").decode("utf-8")
+    assert v.startswith("WEBVTT\n\n") and "00:00:01.000 --> 00:00:04.500" in v and "," not in v.split("\n")[2]
+    assert "Hello there" in v and "Them:" not in v and "سلام" in v          # one speaker: no name on every cue
+    app.keep_awake(True); app.keep_awake(False)                                # off Windows: does nothing, never fails
+
+
+def test_subtitles_are_short_and_timed(app):
+    long = ("First I would confirm that the primary database is really down and not just a network problem, because a "
+            "false failover is worse than a short wait. Then I would fail over to the standby with the broker, check that "
+            "the apply lag was zero, and point the application to the new primary.")
+    rows = [{"source": "them", "t0": 10.0, "t_end": 40.0, "text": long, "translation": "اول مطمئن می‌شوم " * 12, "speaker": None},
+            {"source": "me", "t0": 41.0, "t_end": 43.0, "text": "Okay.", "translation": "", "speaker": None}]
+    srt = app.srt_text(rows, 0.0, lambda r: "Them" if r["source"] == "them" else "Me")
+    cues = [c for c in srt.strip().split("\n\n")]
+    assert len(cues) >= 4
+    times = []
+    for c in cues:
+        ln = c.split("\n")
+        a, b = ln[1].split(" --> ")
+        sec = lambda x: int(x[:2]) * 3600 + int(x[3:5]) * 60 + float(x[6:].replace(",", "."))
+        times.append((sec(a), sec(b)))
+        assert all(len(t) <= 42 or " " not in t for t in ln[2:4])            # lines of at most 42 characters
+        assert sec(b) - sec(a) <= 7.5
+    assert times[0][0] == 10.0 and abs(times[-2][1] - 40.0) < 0.01 and times[-1] == (41.0, 43.0)
+    assert all(times[i][1] <= times[i + 1][0] + 0.001 for i in range(len(times) - 1))   # never overlapping
+    assert cues[0].split("\n")[2].startswith("Them: ") and "Them:" not in cues[1]
+    assert app._sub_pieces("", 84) == [] and app._sub_pieces("a b", 84) == ["a b"]
+
+
+def test_whisper_cpp_engine_with_a_fake_server(app, tmp_path):
+    import os, stat, sys, time
+    if sys.platform == "win32":
+        return                                                    # the fake server below is a shell script
+    srv = os.path.join(str(tmp_path), "whisper-server")
+    with open(srv, "w") as f:
+        f.write("#!" + sys.executable + "\n" + r'''
+import sys, json, http.server
+a = sys.argv; port = int(a[a.index("--port") + 1])
+print("ggml_vulkan: 0 = Intel(R) Iris(R) Xe Graphics (Intel Corporation) | uma: 1", flush=True)
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *x): pass
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b'{"status":"ok"}')
+    def do_POST(self):
+        n = int(self.headers["Content-Length"]); body = self.rfile.read(n)
+        lang = b'name="language"\r\n\r\nen' in body
+        out = {"language": "english", "text": " Hello world.", "segments": [{"text": " Hello world.", "start": 0.0, "end": 1.2,
+               "avg_logprob": -0.2, "no_speech_prob": 0.01}]} if lang else {"error": "no language"}
+        self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(out).encode())
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+''')
+    os.chmod(srv, os.stat(srv).st_mode | stat.S_IEXEC)
+    model = os.path.join(str(tmp_path), "ggml-small-q5_1.bin")
+    with open(model, "wb") as f:
+        f.write(b"lmgg" + b"\0" * 100)
+    old = os.environ.get("MA_WHISPER_SERVER")
+    os.environ["MA_WHISPER_SERVER"] = srv
+    app.DATA_DIR = str(tmp_path)
+    try:
+        assert app.model_folder(model) == (os.path.abspath(model), "") and app.model_label(model) == "small-q5_1 (whisper.cpp)"
+        L = app.LocalWhisper()
+        L.load(model, "auto")
+        assert L.wait(30) and L.state == "ready", L.error
+        assert "Iris" in L.device and "Vulkan" in L.device
+        r = L.transcribe(app.np.zeros(16000, app.np.float32), language="en")
+        assert r["text"] == "Hello world." and r["segments"][0]["end"] == 1.2 and app.clean_transcript(r) == "Hello world."
+        try:
+            L.transcribe(app.np.zeros(16000, app.np.float32), language=None)
+            assert False
+        except app.Transient as e:
+            assert "no language" in str(e)
+        pid = L.model.proc.pid
+        L.unload()
+        time.sleep(1.5)
+        assert not os.path.exists(f"/proc/{pid}") or open(f"/proc/{pid}/stat").read().split()[2] == "Z"   # the engine ends
+    finally:
+        if old is None:
+            os.environ.pop("MA_WHISPER_SERVER", None)
+        else:
+            os.environ["MA_WHISPER_SERVER"] = old
+    os.environ.pop("MA_WHISPER_SERVER", None)
+    with open(model, "wb") as f:
+        f.write(b"lmgg")
+    assert app.model_folder(model)[0] == "" and "whisper.cpp engine is not in this copy" in app.model_folder(model)[1]
+
+
+def test_fast_file_mode_with_the_local_model(app, tmp_path):
+    import os, time
+    np = app.np
+    sr = 16000
+    calls = []
+
+    def blocks():
+        for k in range(72):                                     # 12 minutes in 10 s blocks: speech, then 1 s of silence
+            b = (np.random.default_rng(k).standard_normal(10 * sr) * 0.1).astype(np.float32)
+            b[-sr:] = 0.0
+            yield b
+
+    def long(audio, language=None, prompt=None):
+        calls.append((len(audio) / sr, language, prompt))
+        n = len(audio) / sr
+        return ([{"start": 1.0, "end": 4.0, "text": f" Part {len(calls)} starts here.", "no_speech_prob": 0.01, "avg_logprob": -0.2,
+                  "compression_ratio": 1.1},
+                 {"start": 5.0, "end": 6.0, "text": " Thank you.", "no_speech_prob": 0.9, "avg_logprob": -1.0, "compression_ratio": 1.0},
+                 {"start": n - 3, "end": n - 1, "text": " End of the stretch.", "no_speech_prob": 0.02, "avg_logprob": -0.3,
+                  "compression_ratio": 1.0}], "en")
+    L = app.LOCAL
+    saved = (L.ready, L.long_ok, L.transcribe_long, L.state, app.open_recording)
+    a = app.App()
+    a.cfg.update({"stt_provider": "local", "languages": ["en", "de"], "my_language": "fa", "api_key": ""})
+    L.ready, L.long_ok, L.transcribe_long, L.state = (lambda: True), (lambda: True), long, "ready"
+    app.open_recording = lambda path: (blocks(), 720.0)
+    try:
+        path = os.path.join(str(tmp_path), "talk.mp3")
+        open(path, "wb").close()
+        job = app.RecordingJob(a, path)
+        job.engine._translate_one = lambda *x, **k: None
+        job.run()
+        rows = job.session.ordered()
+        assert [w[0] for w in calls][:2] and all(250 <= w[0] <= 300 for w in calls[:-1]) and sum(w[0] for w in calls) == 720
+        assert calls[0][1] is None and calls[1][1] == "en"                # the language is found once, then kept
+        texts = [r["text"] for r in rows]
+        assert "Thank you." not in " ".join(texts) and texts[0] == f"Part 1 starts here."
+        assert len(rows) == 2 * len(calls)
+        t0s = [r["t0"] for r in rows]
+        assert t0s == sorted(t0s)
+        base = rows[0]["t0"] - 1.0
+        assert abs((rows[2]["t0"] - base) - (calls[0][0] + 1.0)) < 0.01    # times are positions in the recording
+        assert job.state["state"] == "done"
+    finally:
+        L.ready, L.long_ok, L.transcribe_long, L.state, app.open_recording = saved
+    q = np.ones(20 * sr, np.float32)
+    q[int(15.5 * sr):int(15.7 * sr)] = 0
+    assert abs(app.quiet_cut(q) / sr - 15.55) < 0.1
+
+
+def test_voice_prints_cluster_into_people(app):
+    np = app.np
+    rng = np.random.default_rng(1)
+    centers = [rng.standard_normal(64) for _ in range(3)]
+    embs, truth = [], []
+    for i in range(30):
+        who = [0, 1, 0, 2, 1][i % 5]
+        v = centers[who] + 0.35 * rng.standard_normal(64)
+        embs.append(v / np.linalg.norm(v))
+        truth.append(who)
+    auto = app.cluster_voices(embs)
+    assert len(set(auto)) == 3
+    mapping = {}
+    for g, t in zip(auto, truth):
+        mapping.setdefault(g, t)
+        assert mapping[g] == t                                   # every line goes to the right person
+    assert auto[0] == 0 and auto[1] == 1 and auto[3] == 2        # numbered by who speaks first
+    assert len(set(app.cluster_voices(embs, k=2))) == 2 and app.cluster_voices([]) == []
+    assert app.cluster_voices(embs[:1]) == [0]
+
+
+def test_fbank_and_speakers_for_rows(app):
+    np = app.np
+    sr = 16000
+    t = np.arange(sr) / sr
+    f = app.fbank((0.3 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32))
+    assert f.shape == (98, 80) and abs(float(f.mean())) < 1e-3
+    peak = int(np.argmax(f.mean(axis=0) - f.mean()))               # a 1 kHz tone lands in a middle band
+    assert 20 < peak < 45 and app.fbank(np.zeros(100, np.float32)).shape == (0, 80)
+    # two voices: 'A' parts are loud, 'B' parts quiet; the fake print model tells them apart by loudness
+    plan = [("A", 0, 4), ("B", 5, 9), ("A", 10, 14), ("B", 15, 15.5), ("B", 16, 21)]
+    audio = np.zeros(22 * sr, np.float32)
+    for who, a, b in plan:
+        audio[int(a * sr):int(b * sr)] = (0.5 if who == "A" else 0.05) * np.sin(2 * np.pi * 220 * np.arange(int((b - a) * sr)) / sr)
+    base = 1000.0
+    rows = [{"id": i + 1, "t0": base + a, "t_end": base + b} for i, (_w, a, b) in enumerate(plan)]
+    blocks = (audio[i:i + 7 * sr] for i in range(0, len(audio), 7 * sr))
+
+    def prints(seg):
+        loud = float(np.sqrt((seg ** 2).mean()))
+        v = np.array([1.0, 0.0]) if loud > 0.1 else np.array([0.0, 1.0])
+        return v
+    got = app.speakers_for_rows(rows, blocks, base, prints)
+    assert got == {1: 0, 2: 1, 3: 0, 4: 1, 5: 1}                   # the 0.5 s line takes the person nearest in time
+
+
+def test_link_is_downloaded_then_transcribed(app, tmp_path):
+    import importlib.util, os, threading, http.server, functools, time, wave
+    if importlib.util.find_spec("yt_dlp") is None or not app.ffmpeg_path():
+        return                                                    # (yt-dlp and ffmpeg are in the Windows release)
+    np = app.np
+    folder = str(tmp_path)
+    with wave.open(os.path.join(folder, "talk.wav"), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes((np.sin(np.arange(32000) / 5) * 8000).astype(np.int16).tobytes())
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=folder))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    app.DOWNLOADS_DIR = os.path.join(folder, "downloads")
+    a = app.App()
+    a.missing_tasks = lambda *x: []
+    started = []
+    a.api_recording = lambda **k: started.append(k) or {"ok": True}
+    try:
+        assert a.api_recording_link(url="not a link")["ok"] is False
+        r = a.api_recording_link(url=f"http://127.0.0.1:{srv.server_address[1]}/talk.wav", speakers=2)
+        assert r["ok"], r
+        for _ in range(100):
+            if started:
+                break
+            time.sleep(0.1)
+        assert started and started[0]["speakers"] == 2 and os.path.isfile(started[0]["path"])
+        assert started[0]["path"].startswith(app.DOWNLOADS_DIR) and a.recording is None
+    finally:
+        srv.shutdown()
+
+
+def test_meeting_sound_is_kept_and_a_line_can_be_replayed(app, tmp_path):
+    import os, threading, time, httpx, types
+    np = app.np
+    path = os.path.join(str(tmp_path), "meeting_x.md")
+    rec = app.MeetingAudio(path)
+    t = time.time()
+    rec.write("them", np.full(48000, 0.1, np.float32), 48000)          # 1 s at 48 kHz
+    time.sleep(1.2)                                                     # the device was away for a moment
+    rec.write("them", np.full(16000, 0.2, np.float32), 16000)
+    rec.write("me", np.full(8000, 0.05, np.float32), 16000)
+    rec.close()
+    rec.write("them", np.zeros(100, np.float32), 16000)                 # after close: ignored, no error
+    parts = app.load_audio_index(os.path.join(str(tmp_path), "meeting_x.audio.json"))
+    them = next(p for p in parts if p["source"] == "them")
+    assert 2.0 <= them["dur"] <= 2.6 and os.path.isfile(os.path.join(str(tmp_path), them["file"]))   # the gap was filled
+    s = types.SimpleNamespace(path=path, recording="")
+    e = {"source": "them", "t0": them["t0"] + 1.5, "t_end": them["t0"] + 2.0}
+    fp, a, b = app.audio_for_line(s, e)
+    assert fp.endswith(them["file"]) and abs(a - 1.2) < 0.01 and b <= them["dur"]
+    assert app.audio_for_line(s, {"source": "me", "t0": t + 500, "t_end": t + 501}) is None
+    # the window gets it in pieces (Range), only with the key, only files it was given
+    a_ = app.App()
+    app.Handler.app = a_
+    a_.media = {"k1": (fp, time.time())}
+    srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        with httpx.Client(trust_env=False, timeout=10) as c:
+            assert c.get(base + "/media?k=k1").status_code == 403
+            c.get(base + "/?t=" + a_.token)
+            full = c.get(base + "/media?k=k1")
+            assert full.status_code == 200 and len(full.content) == os.path.getsize(fp)
+            part = c.get(base + "/media?k=k1", headers={"Range": "bytes=10-19"})
+            assert part.status_code == 206 and part.content == full.content[10:20] and part.headers["content-range"].endswith(f"/{len(full.content)}")
+            assert c.get(base + "/media?k=k1", headers={"Range": "bytes=99999999-"}).status_code == 416
+            assert c.get(base + "/media?k=other").status_code == 404
+    finally:
+        srv.shutdown()
+        a_.closing.set()
+    assert app.load_audio_index(os.path.join(str(tmp_path), "nothing.json")) == []
+    with open(os.path.join(str(tmp_path), "bad.audio.json"), "w") as f:
+        f.write('{"parts": [{"source": "them", "file": "../../x.ogg", "t0": 1, "dur": 2}]}')
+    assert app.load_audio_index(os.path.join(str(tmp_path), "bad.audio.json")) == []      # no paths out of the folder
+
+
+# ---- 6.14 review round: the cases the independent review found ---------------------------------
+def test_subtitles_never_hang_on_a_long_word_and_escape_vtt(app):
+    import time as _t
+    link = "https://example.com/" + "x" * 400
+    rows = [{"source": "them", "t0": 0.0, "t_end": 60.0, "text": link + " see <b> & --> here", "translation": "", "speaker": None}]
+    t = _t.time()
+    srt = app.srt_text(rows, 0.0, lambda r: "Them")
+    assert _t.time() - t < 2 and "-->" not in "".join(c.split("\n", 2)[2] for c in srt.strip().split("\n\n"))
+    for c in srt.strip().split("\n\n"):
+        assert all(len(x) <= 2 * app.SUB_LINE for x in c.split("\n")[2:])
+
+    class S:
+        recording = None
+        started = app.datetime.datetime.fromtimestamp(1000.0)
+        def ordered(self):
+            return [{"source": "them", "t0": 1001.0, "t_end": 1003.0, "text": "a < b & c", "translation": "", "speaker": None}]
+        def label(self, r):
+            return "Them"
+    vtt = app.export_bytes(S(), "vtt").decode()
+    assert vtt.startswith("WEBVTT") and "a &lt; b &amp; c" in vtt and "00:00:01.000 --> 00:00:03.000" in vtt
+
+
+def test_translation_is_cut_like_the_original(app):
+    parts = app._split_like("one two three four five six seven eight nine ten", [30, 10])
+    assert len(parts) == 2 and len(parts[0].split()) > len(parts[1].split()) and " ".join(parts).split() == \
+        "one two three four five six seven eight nine ten".split()
+    p2 = app._split_like("first part here, and the second part is here", [17, 26])
+    assert p2[0].endswith(",")                                   # a comma near the cut is used
+    assert app._split_like("a b", 3) == ["a b", "", ""] and app._split_like("", [1, 1]) == ["", ""]
+
+
+def test_helper_works_while_a_link_is_downloading(app):
+    a = app.App()
+    try:
+        job = app.LinkJob(a, "http://127.0.0.1:1/x")
+        a.recording = job
+        assert a.helper() is a.review                            # no crash: a link has no engine yet
+    finally:
+        a.recording = None
+        a.closing.set()
+
+
+def test_whisper_cpp_model_file_is_offered_and_counts_as_an_engine(app, tmp_path):
+    import os
+    base = str(tmp_path)
+    srv = os.path.join(base, "whisper-server")
+    open(srv, "w").write("x")
+    d = os.path.join(base, "m")
+    os.makedirs(d)
+    open(os.path.join(d, "ggml-small-q5_1.bin"), "wb").write(b"lmgg" + b"\0" * 64)
+    open(os.path.join(d, "notes.bin"), "wb").write(b"hello")
+    old = os.environ.get("MA_WHISPER_SERVER")
+    os.environ["MA_WHISPER_SERVER"] = srv
+    a = app.App()
+    try:
+        r = a.api_browse(d, "model")
+        assert [f["name"] for f in r["files"]] == ["ggml-small-q5_1.bin"]
+        assert app.model_folder(os.path.join(d, "ggml-small-q5_1.bin"))[0].endswith("ggml-small-q5_1.bin")
+        assert app.LOCAL.info()["engine"] is True                    # whisper.cpp alone is enough to run a model
+    finally:
+        a.closing.set()
+        if old is None:
+            os.environ.pop("MA_WHISPER_SERVER", None)
+        else:
+            os.environ["MA_WHISPER_SERVER"] = old
+
+
+def test_meeting_sound_keeps_silence_while_paused_and_never_blocks(app, tmp_path):
+    import os, time, wave
+    np = app.np
+    rec = app.MeetingAudio(os.path.join(str(tmp_path), "meeting_p.md"))
+    rec.write("them", np.full(16000, 0.5, np.float32), 16000)
+    rec.paused = True
+    rec.write("them", np.full(16000, 0.5, np.float32), 16000)
+    t = time.time()
+    rec.write("them", np.full(16000, 0.5, np.float32), 16000)
+    assert time.time() - t < 0.05                                  # the capture thread only queues
+    rec.close()
+    part = app.load_audio_index(os.path.join(str(tmp_path), "meeting_p.audio.json"))[0]
+    fp = os.path.join(str(tmp_path), part["file"])
+    if fp.endswith(".wav"):
+        with wave.open(fp) as w:
+            y = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+        assert np.abs(y[:16000]).mean() > 10000 and np.abs(y[16000:]).max() == 0

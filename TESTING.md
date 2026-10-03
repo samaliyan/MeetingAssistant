@@ -36,6 +36,12 @@ Ways of checking:
 | Microphone and computer sound (WASAPI) | – | – | yes | – | devices, sleep / wake, Bluetooth |
 | Screen reading | logic only | – | yes | – | real screenshots and services |
 | Windows shortcut, single instance, paths with Persian letters | – | – | yes | – | Program Files, OneDrive |
+| Fast file mode (local model, batched, skips silence) | yes (fake model) | – | yes | – | real faster-whisper batched speed and text on CPU / NVIDIA |
+| Speakers in a recording (voice model, grouping) | yes (made-up voice prints, fbank) | – | yes | – | real voices: how well people are told apart |
+| whisper.cpp engine (Vulkan) | yes (fake server); real Linux server with the tiny test model, by hand | – | yes | build job | Vulkan on Intel / AMD, speed, the first run of the exe |
+| Subtitles (.srt / .vtt) | yes (long lines, long words, escaping, no overlap) | – | yes | – | how they look in a real video player |
+| Link to text (yt-dlp) | yes (a page on this computer) | – | yes | – | real YouTube (needs its scripts and quickjs) |
+| Keep the sound, ▶ on a line | yes (WAV here) | yes (play, switch lines, stop at line end) | yes | – | Opus files (soundfile on Windows), 3-hour meetings |
 | Build (exe) and release | – | – | yes | build job | first run of the exe on a clean PC |
 
 Setup › Services › **Check this computer** tests the Windows parts on the user's own machine and can copy a report.

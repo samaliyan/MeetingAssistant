@@ -17,6 +17,7 @@ import collections
 import datetime
 import difflib
 import hashlib
+import importlib.util
 import io
 import itertools
 import json
@@ -63,7 +64,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.13"
+VERSION = "6.14"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -250,6 +251,7 @@ DEFAULTS = {
     "glossary": "",              # technical words (one per line or separated by commas)
     "meeting_mode": "general",   # general | tech | hr | work | lecture
     "diarize": False,            # tell the other side's speakers apart (live service only)
+    "save_audio": False,         # keep the sound of each meeting (small .ogg files next to the meeting file) to replay lines
     "hide_from_share": False,    # the window is hidden from screen sharing and recordings (Windows)
     "screen_provider": "",       # who reads a screenshot: "" = the service that writes answers
     "screen_model": "",          # "" = chosen automatically from the service's model list
@@ -1211,6 +1213,140 @@ def describe_device(d):
             f"out {d['maxOutputChannels']} ch, {int(d['defaultSampleRate'])} Hz]")
 
 
+class MeetingAudio:
+    """Keeps the sound of a meeting: one small file per side (the other side, you), at 16 kHz mono (Opus in .ogg,
+    about 7 MB an hour; FLAC or WAV when Opus is not available). Gaps (a device change) are filled with silence,
+    so a time in the meeting is the same time in the file. An index file says where each part starts."""
+
+    def __init__(self, meeting_path):
+        self.base = os.path.splitext(meeting_path)[0]
+        self.lock = threading.Lock()
+        self.files = {}               # source -> {"f", "path", "t0", "n"}
+        self.index = self.base + ".audio.json"
+        self.parts = load_audio_index(self.index)
+        self.paused = False           # while the meeting is paused, silence is kept instead of the sound
+        self.q = queue.Queue(maxsize=3000)        # the capture threads never wait for the disk or the encoder
+        self.writer = threading.Thread(target=self._drain, daemon=True, name="meeting-sound")
+        self.writer.start()
+
+    def _open(self, source, t0):
+        k = 1 + sum(1 for p_ in self.parts if p_["source"] == source)
+        stem = f"{self.base}.{source}" + ("" if k == 1 else f".{k}")
+        if sf is not None:
+            for ext, fmt, sub in ((".ogg", "OGG", "OPUS"), (".flac", "FLAC", "PCM_16")):
+                try:
+                    f = sf.SoundFile(stem + ext, "w", samplerate=16000, channels=1, format=fmt, subtype=sub)
+                    return {"f": f, "path": stem + ext, "t0": t0, "n": 0, "kind": "sf"}
+                except Exception:
+                    try:
+                        os.remove(stem + ext)
+                    except OSError:
+                        pass
+        w = wave.open(stem + ".wav", "wb")
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000)
+        return {"f": w, "path": stem + ".wav", "t0": t0, "n": 0, "kind": "wav"}
+
+    def write(self, source, x, rate):
+        """Called by the capture threads: only queues the piece (with its time); the writer thread does the rest."""
+        if self.files is None:
+            return                                            # closed (the meeting ended)
+        x = np.array(x, dtype=np.float32)                     # a copy: the caller may reuse its buffer
+        if self.paused:
+            x[:] = 0.0
+        try:
+            self.q.put_nowait((source, x, rate, time.time()))
+        except queue.Full:
+            pass                                              # the disk is far behind: this piece becomes a gap
+
+    def _drain(self):
+        while True:
+            item = self.q.get()
+            if item is None:
+                return
+            try:
+                self._write_now(*item)
+            except Exception as e:
+                log("meeting sound:", short(e), level="warn")
+
+    def _write_now(self, source, x, rate, now):
+        y = resample16k(x, rate)
+        with self.lock:
+            if self.files is None:
+                return
+            st = self.files.get(source)
+            if st is None:
+                st = self.files[source] = self._open(source, now - len(y) / 16000)
+            gap = (now - len(y) / 16000) - (st["t0"] + st["n"] / 16000)
+            if gap > 1.0:                                     # the device was away: silence keeps the times right
+                left = int(min(gap, 4 * 3600) * 16000)
+                quiet = np.zeros(16000 * 10, np.float32)
+                while left > 0:                               # in 10-second pieces, never one huge block
+                    self._put(st, quiet[:min(left, len(quiet))])
+                    left -= len(quiet)
+            self._put(st, y)
+
+    @staticmethod
+    def _put(st, y):
+        if st["kind"] == "wav":
+            st["f"].writeframes((np.clip(y, -1, 1) * 32767).astype(np.int16).tobytes())
+        else:
+            st["f"].write(y)
+        st["n"] += len(y)
+
+    def close(self):
+        if self.writer.is_alive():
+            try:
+                self.q.put(None, timeout=5)
+            except queue.Full:
+                pass
+            self.writer.join(timeout=60)                      # what was queued is written first
+        with self.lock:
+            files, self.files = self.files, None
+            for source, st in (files or {}).items():
+                try:
+                    st["f"].close()
+                except Exception:
+                    pass
+                self.parts.append({"source": source, "file": os.path.basename(st["path"]), "t0": st["t0"],
+                                   "dur": round(st["n"] / 16000, 2)})
+            if files:
+                try:
+                    tmp = self.index + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump({"parts": self.parts}, f)
+                    os.replace(tmp, self.index)
+                except OSError as e:
+                    log("the meeting sound index could not be written:", short(e), level="warn")
+
+
+def load_audio_index(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        parts = d.get("parts") if isinstance(d, dict) else None
+        return [p_ for p_ in (parts if isinstance(parts, list) else []) if isinstance(p_, dict) and p_.get("source") in ("me", "them")
+                and isinstance(p_.get("file"), str) and re.match(r"^[^\\/:]+\.(ogg|flac|wav)$", p_["file"])
+                and isinstance(p_.get("t0"), (int, float)) and isinstance(p_.get("dur"), (int, float))]
+    except (OSError, ValueError):
+        return []
+
+
+def audio_for_line(session, e):
+    """(file, start s, end s) to replay one line, or None. A recording plays from its own file."""
+    if not e or not e.get("t_end"):
+        return None
+    if session.recording:
+        base = datetime.datetime.combine(session.started.date(), datetime.time()).timestamp()
+        return (session.recording, max(0.0, e["t0"] - base - 0.2), e["t_end"] - base + 0.3) if os.path.isfile(session.recording) else None
+    folder = os.path.dirname(session.path)
+    for p_ in load_audio_index(os.path.splitext(session.path)[0] + ".audio.json"):
+        if p_["source"] == e["source"] and p_["t0"] - 1 <= e["t0"] <= p_["t0"] + p_["dur"]:
+            fp = os.path.join(folder, p_["file"])
+            if os.path.isfile(fp):
+                return fp, max(0.0, e["t0"] - p_["t0"] - 0.3), min(p_["dur"], e["t_end"] - p_["t0"] + 0.4)
+    return None
+
+
 class AudioCapture(threading.Thread):
     """Reads one device (your microphone or the system-sound loopback)."""
 
@@ -1231,6 +1367,7 @@ class AudioCapture(threading.Thread):
         self.reported_health = False
         self.first_sound = False
         self.tap = None               # live service: gets every audio frame
+        self.saver = None             # keeps the sound of the meeting (option)
         self.preview_every = 0.0
         self.preview_min = 1.2
         self.soft_errors = set()
@@ -1259,6 +1396,12 @@ class AudioCapture(threading.Thread):
             self.seg.feed(x)
         except Exception as e:
             self._soft_error("segment", e)
+        sv = self.saver
+        if sv is not None and len(x):
+            try:
+                sv(self.source, x, rate)
+            except Exception as e:
+                self._soft_error("save sound", e)
         tap = self.tap
         if tap is not None:
             if self.source == "me" and len(x):
@@ -2600,6 +2743,17 @@ LOCAL_CATALOG = [
     {"id": "large-v3-turbo", "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "mb": 1620,
      "note": "Most accurate; needs a strong processor or an NVIDIA graphics card"},
 ]
+# whisper.cpp models (one file each): they run on ANY graphics card (Intel, AMD, NVIDIA) through Vulkan
+CPP_CATALOG = [
+    {"id": "cpp-base", "repo": "ggerganov/whisper.cpp", "file": "ggml-base-q5_1.bin", "mb": 60, "ui": "stt", "engine": "cpp",
+     "note": "whisper.cpp · very fast on any graphics card; fine for clear English"},
+    {"id": "cpp-small", "repo": "ggerganov/whisper.cpp", "file": "ggml-small-q5_1.bin", "mb": 190, "ui": "stt", "engine": "cpp",
+     "note": "whisper.cpp · recommended for laptops with Intel or AMD graphics"},
+    {"id": "cpp-large-v3-turbo", "repo": "ggerganov/whisper.cpp", "file": "ggml-large-v3-turbo-q5_0.bin", "mb": 574, "ui": "stt",
+     "engine": "cpp", "note": "whisper.cpp · most accurate; needs a graphics card with 2 GB or more"},
+]
+
+
 # ---- finding newer downloadable models (Hugging Face) ---------------------------------------
 def system_info():
     """Memory, processor threads and free disk of this computer (0 when unknown)."""
@@ -3100,10 +3254,15 @@ def model_folder(path):
         if name.endswith(".pt"):
             return "", ("This model is for the 'openai-whisper' program (.pt file). This program needs a "
                         "faster-whisper model: a folder with model.bin, config.json and tokenizer.json.")
+        if name.endswith(".bin") and name != "model.bin" and is_ggml(p):
+            if cpp_server_path():
+                return os.path.abspath(p), ""                  # a whisper.cpp model: run by the whisper.cpp engine
+            return "", ("This is a whisper.cpp model (ggml). The whisper.cpp engine is not in this copy of the program "
+                        "(it is in the Windows exe from the release page). Or use a faster-whisper model: a folder with "
+                        "model.bin, config.json and tokenizer.json.")
         if name.endswith(".gguf") or name.startswith("ggml") or (name.endswith(".bin") and name != "model.bin"):
-            return "", ("This is a whisper.cpp model (ggml). This program needs a faster-whisper model: "
-                        "a folder with model.bin, config.json and tokenizer.json — use Download here, or download "
-                        "a model whose name starts with 'faster-whisper'.")
+            return "", ("This file is not a speech model this program can run. Use a faster-whisper model folder "
+                        "(model.bin, config.json, tokenizer.json) or a whisper.cpp model (ggml-....bin).")
         folder = os.path.dirname(p)
     else:
         folder = p
@@ -3116,7 +3275,19 @@ def model_folder(path):
     return os.path.abspath(folder), ""
 
 
+def is_ggml(path):
+    """A whisper.cpp model file starts with the bytes 'lmgg' (ggml) or 'GGUF'."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4)
+        return head in (b"lmgg", b"ggml", b"GGUF") or int.from_bytes(head, "little") == 0x67676d6c
+    except OSError:
+        return False
+
+
 def model_label(folder):
+    if os.path.isfile(folder):                        # a whisper.cpp model file
+        return os.path.splitext(os.path.basename(folder))[0].replace("ggml-", "") + " (whisper.cpp)"
     parts = os.path.normpath(folder).split(os.sep)
     name = parts[-1]
     for part in reversed(parts):                      # Hugging Face cache: models--Systran--faster-whisper-small
@@ -3128,6 +3299,11 @@ def model_label(folder):
 
 
 def folder_mb(folder):
+    if os.path.isfile(folder):
+        try:
+            return round(os.path.getsize(folder) / 1_000_000)
+        except OSError:
+            return 0
     total = 0
     try:
         for f in os.listdir(folder):
@@ -3151,12 +3327,15 @@ def find_models(extra=""):
         if key in seen:
             return
         seen.add(key)
-        found.append({"path": f, "name": model_label(f), "mb": folder_mb(f), "source": source,
-                      "removable": os.path.normcase(os.path.dirname(f)) == os.path.normcase(os.path.abspath(MODELS_DIR))})
+        home = os.path.dirname(os.path.dirname(f)) if os.path.isfile(f) else os.path.dirname(f)
+        found.append({"path": f, "name": model_label(f), "mb": folder_mb(f), "source": source, "engine": "cpp" if os.path.isfile(f) else "fw",
+                      "removable": os.path.normcase(home) == os.path.normcase(os.path.abspath(MODELS_DIR))})
     try:
         for d in sorted(os.listdir(MODELS_DIR)):
             if not d.endswith(".part"):
-                add(os.path.join(MODELS_DIR, d), "downloaded")
+                full = os.path.join(MODELS_DIR, d)
+                ggml = [f for f in (os.listdir(full) if os.path.isdir(full) else []) if f.startswith("ggml-") and f.endswith(".bin")]
+                add(os.path.join(full, ggml[0]) if ggml else full, "downloaded")
     except OSError:
         pass
     hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
@@ -3237,6 +3416,155 @@ def path_problem(e):
                                   "config.json", "invalid argument", "illegal byte"))
 
 
+def cpp_server_path():
+    """whisper.cpp's server program (built with Vulkan for Windows, inside the exe), or '' when it is not there."""
+    env = os.environ.get("MA_WHISPER_SERVER", "")
+    exe = "whisper-server.exe" if sys.platform == "win32" else "whisper-server"
+    for p in ([env] if env else []) + [os.path.join(RES_DIR, "whisper_cpp", exe), os.path.join(APP_DIR, "whisper_cpp", exe)]:
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
+def _kill_with_us(proc):
+    """Windows: the child ends when this program ends, even after a crash (a job object that kills on close)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+        k = ctypes.windll.kernel32
+        k.CreateJobObjectW.restype = wt.HANDLE
+        job = k.CreateJobObjectW(None, None)
+
+        class BASIC(ctypes.Structure):
+            _fields_ = [("a", ctypes.c_int64), ("b", ctypes.c_int64), ("LimitFlags", wt.DWORD), ("c", ctypes.c_size_t),
+                        ("d", ctypes.c_size_t), ("e", wt.DWORD), ("f", ctypes.c_size_t), ("g", wt.DWORD), ("h", wt.DWORD)]
+
+        class IO(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in ("r", "w", "o", "rb", "wb", "ob")]
+
+        class EXT(ctypes.Structure):
+            _fields_ = [("Basic", BASIC), ("Io", IO), ("p", ctypes.c_size_t), ("j", ctypes.c_size_t),
+                        ("pp", ctypes.c_size_t), ("pj", ctypes.c_size_t)]
+        info = EXT()
+        info.Basic.LimitFlags = 0x2000                             # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        k.SetInformationJobObject(wt.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info))
+        k.AssignProcessToJobObject(wt.HANDLE(job), wt.HANDLE(int(proc._handle)))
+        return job                                                 # kept open for as long as we run
+    except Exception as e:
+        log("whisper.cpp: could not tie the engine to this program:", short(e, 100), level="debug")
+        return None
+
+
+class CppServer:
+    """whisper.cpp running as a small local server: one model, one request at a time, any graphics card."""
+
+    def __init__(self, model_path, threads, gpu=True):
+        self.model_path, self.threads, self.gpu = model_path, threads, gpu
+        self.proc, self.port, self.job, self.device = None, 0, None, "processor"
+        self.log_path = os.path.join(DATA_DIR, "whisper-server.log")
+
+    def start(self, should_stop=lambda: False, timeout=240):
+        exe = cpp_server_path()
+        if not exe:
+            raise RuntimeError("the whisper.cpp engine is not in this copy of the program")
+        with socket.socket() as s_:
+            s_.bind(("127.0.0.1", 0))
+            self.port = s_.getsockname()[1]
+        cmd = [exe, "-m", short_path(self.model_path), "--host", "127.0.0.1", "--port", str(self.port), "-t", str(self.threads)]
+        if not self.gpu:
+            cmd.append("--no-gpu")
+        logf = open(self.log_path, "w", encoding="utf-8", errors="replace")
+        try:
+            self.proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                         cwd=os.path.dirname(exe), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        finally:
+            logf.close()
+        self.job = _kill_with_us(self.proc)
+        end = time.time() + timeout
+        while time.time() < end:
+            if should_stop():
+                self.stop()
+                return False
+            if self.proc.poll() is not None:
+                raise RuntimeError("whisper.cpp stopped: " + self.last_log())
+            try:
+                r = httpx.get(f"http://127.0.0.1:{self.port}/health", timeout=3, trust_env=False)
+                if r.status_code == 200 and (r.json() or {}).get("status") == "ok":
+                    self.device = self._device()
+                    return True
+            except (httpx.HTTPError, ValueError):
+                pass
+            time.sleep(0.4)
+        self.stop()
+        raise RuntimeError("whisper.cpp did not get ready in time: " + self.last_log())
+
+    def last_log(self, n=3):
+        try:
+            with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+            return short(" | ".join(lines[-n:]), 240) or "no message"
+        except OSError:
+            return "no message"
+
+    def _device(self):
+        try:
+            with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
+                t = f.read()
+        except OSError:
+            return "processor"
+        m = re.search(r"ggml_vulkan: \d+ = ([^|\n]+)", t)
+        if self.gpu and m:
+            name = re.sub(r"\s*\([^()]*\)\s*$", "", m.group(1).strip()).replace("(R)", "").replace("(TM)", "")
+            return "graphics card (" + " ".join(name.split())[:60] + ", Vulkan)"
+        if self.gpu and re.search(r"using (CUDA|Vulkan|Metal)\d* backend", t):
+            return "graphics card"
+        return f"processor ({self.threads} threads)"
+
+    def transcribe(self, audio16k, language=None, prompt=None, timestamps=False):
+        data = {"response_format": "verbose_json", "temperature": "0.0", "language": language or "auto",
+                "no_language_probabilities": "true",          # (otherwise a second, full pass guesses the language)
+                "no_timestamps": "false" if timestamps else "true"}
+        if prompt:
+            data["prompt"] = prompt
+        r = httpx.post(f"http://127.0.0.1:{self.port}/inference", data=data,
+                       files={"file": ("a.wav", to_wav_bytes(np.asarray(audio16k, dtype=np.float32)), "audio/wav")},
+                       timeout=httpx.Timeout(max(120.0, len(audio16k) / 16000 * 6), connect=5.0), trust_env=False)
+        try:
+            j = r.json()
+        except ValueError:
+            j = {}
+        if r.status_code != 200 or "error" in j:
+            raise RuntimeError("whisper.cpp: " + short(j.get("error") or r.text or f"HTTP {r.status_code}", 160))
+        segs = [{"text": str(sg.get("text") or ""), "no_speech_prob": float(sg.get("no_speech_prob") or 0.0),
+                 "avg_logprob": float(sg.get("avg_logprob") or 0.0), "compression_ratio": 1.0,
+                 "start": float(sg.get("start") or 0.0), "end": float(sg.get("end") or 0.0)}
+                for sg in (j.get("segments") or []) if isinstance(sg, dict)]
+        return {"text": str(j.get("text") or " ".join(x["text"].strip() for x in segs)).strip(),
+                "language": str(j.get("language") or language or ""), "segments": segs}
+
+    def stop(self):
+        p = self.proc
+        if p and p.poll() is None:
+            try:
+                p.terminate()
+                p.wait(timeout=5)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+        self.proc = None
+        job, self.job = self.job, None
+        if job and sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(job))     # the handle is not kept after the end
+            except Exception:
+                pass
+
+
 class LocalWhisper:
     name = "Local model"
 
@@ -3265,12 +3593,25 @@ class LocalWhisper:
     def info(self):
         load_faster_whisper()
         return {"state": self.state, "path": self.path, "name": model_label(self.path) if self.path else "",
-                "device": self.device, "error": self.error, "engine": _fw["mod"] is not None,
+                "device": self.device, "error": self.error,
+                "engine": _fw["mod"] is not None or bool(cpp_server_path()),     # either engine can run a model
                 "engine_error": _fw["error"], "load_secs": self.load_secs,
                 "quick": round(self.quick_avg, 2) if self.quick_avg else None}
 
     def ready(self):
         return self.state == "ready" and self.model is not None
+
+    @staticmethod
+    def _drop(m):
+        """A model that is replaced or closed: whisper.cpp's server program is ended; a faster-whisper model loses
+        its batch helper (which points back at it), so its memory is really freed."""
+        if isinstance(m, CppServer):
+            m.stop()
+        elif m is not None and hasattr(m, "_ma_batched"):
+            try:
+                del m._ma_batched
+            except Exception:
+                pass
 
     def free_for_final(self):
         return self.ready() and self.waiting == 0 and self.finals == 0
@@ -3290,6 +3631,7 @@ class LocalWhisper:
                 return
             self.gen += 1
             g = self.gen
+            self._drop(self.model)
             self.model = None
             self.quick_avg = None
             if not folder:
@@ -3310,6 +3652,7 @@ class LocalWhisper:
             if self.state == "off":
                 return
             self.gen += 1
+            self._drop(self.model)
             self.model, self.state, self.path, self.error, self.want = None, "off", "", "", ("", "")
             self.done.set()
         log("Local model closed (memory freed)")
@@ -3329,7 +3672,39 @@ class LocalWhisper:
             gc.collect()                                # frees the old model before the new one is read
             self._load_now(g, folder, device)
 
+    def _load_cpp(self, g, path, device):
+        t0 = time.time()
+        pc = physical_cores()
+        threads = max(1, min(8, pc - 1 if pc >= 6 else pc))
+        srv = CppServer(path, threads, gpu=device != "cpu")
+        try:
+            if not srv.start(should_stop=lambda: g != self.gen):
+                return
+            srv.transcribe(np.zeros(16000, np.float32), "en")         # a first run loads everything on the graphics card
+        except Exception as e:
+            srv.stop()
+            with self.lock:
+                if g == self.gen:
+                    self.model, self.state, self.error = None, "error", "whisper.cpp could not start: " + short(e, 200)
+                    self.done.set()
+            log("Local model (whisper.cpp) failed:", short(e, 300), level="error")
+            self._notify()
+            return
+        with self.lock:
+            if g != self.gen:
+                srv.stop()
+                return
+            self.model, self.final_beam = srv, 1
+            self.device = srv.device
+            self.state, self.error = "ready", ""
+            self.load_secs = round(time.time() - t0, 1)
+            self.done.set()
+        log(f"Local model '{model_label(path)}' ready on the {self.device} (whisper.cpp), loaded in {self.load_secs} s")
+        self._notify()
+
     def _load_now(self, g, folder, device):
+        if os.path.isfile(folder):
+            return self._load_cpp(g, folder, device)
         t0 = time.time()
         fw = load_faster_whisper()
         err = None
@@ -3484,7 +3859,9 @@ class LocalWhisper:
             t = time.time()
             use_short = self.short_ok if short is None else short
             try:
-                if use_short and language and quick:
+                if isinstance(m, CppServer):
+                    res = m.transcribe(audio16k, language, prompt)
+                elif use_short and language and quick:
                     try:
                         res = self._run_short(m, audio16k, language, prompt)
                     except MemoryError:
@@ -3512,6 +3889,63 @@ class LocalWhisper:
                 self.quick_avg = dt if self.quick_avg is None else 0.7 * self.quick_avg + 0.3 * dt
             record_usage(self.name, 1, 0, len(audio16k) / 16000)
             return res
+        finally:
+            self.run_lock.release()
+
+    # ---- long audio (a recording) ----------------------------------------------------------
+    def long_ok(self):
+        """Can a whole stretch of a recording be given at once (faster, and silence is skipped by a voice finder)?"""
+        m = self.model
+        if isinstance(m, CppServer):
+            return True
+        if m is None:
+            return False
+        try:
+            from faster_whisper import BatchedInferencePipeline  # noqa: F401
+            import onnxruntime  # noqa: F401  (the voice finder, silero)
+            return True
+        except Exception:
+            return False
+
+    def transcribe_long(self, audio16k, language=None, prompt=None):
+        """Minutes of a recording in one go: [{start, end, text, ...}], language. Speech is found first (silero voice
+        finder), the pieces are written in batches - several times faster than sentence by sentence, no silence 'thank yous'."""
+        if not self.run_lock.acquire(timeout=600):
+            raise Transient("The local model was busy for 10 minutes.")
+        try:
+            m = self.model
+            if m is None or self.state != "ready":
+                raise ModelUnavailable("The local model is not loaded" + (f": {self.error}" if self.error else "."))
+            audio16k = np.asarray(audio16k, dtype=np.float32)
+            if isinstance(m, CppServer):
+                try:
+                    res = m.transcribe(audio16k, language, prompt, timestamps=True)
+                except MemoryError:
+                    raise ModelUnavailable("Not enough memory (RAM) for the local model — choose a smaller model.")
+                except Exception as e:                       # a slow or stopped whisper.cpp: this piece is tried again
+                    raise Transient("Local model (whisper.cpp): " + short(e))
+                return res["segments"], res.get("language") or language
+            from faster_whisper import BatchedInferencePipeline
+            bp = getattr(m, "_ma_batched", None)
+            if bp is None:
+                bp = BatchedInferencePipeline(model=m)
+                try:
+                    m._ma_batched = bp
+                except Exception:
+                    pass
+            gpu = "graphics" in (self.device or "")
+            try:
+                segs, info = bp.transcribe(audio16k, language=language, task="transcribe", batch_size=8 if gpu else 2,
+                                           beam_size=getattr(self, "final_beam", 1), initial_prompt=prompt or None,
+                                           condition_on_previous_text=False, vad_filter=True, without_timestamps=False)   # sentence times: finer lines, speakers and subtitles
+                out = [{"start": float(sg.start), "end": float(sg.end), "text": sg.text, "no_speech_prob": sg.no_speech_prob,
+                        "avg_logprob": sg.avg_logprob, "compression_ratio": sg.compression_ratio} for sg in segs]
+            except MemoryError:
+                raise ModelUnavailable("Not enough memory (RAM) for the local model — choose a smaller model.")
+            except Exception as e:
+                raise Transient("Local model: " + friendly_local_error(e))
+            record_usage(self.name, 1, 0, len(audio16k) / 16000)
+            return out, info.language
         finally:
             self.run_lock.release()
 
@@ -3871,8 +4305,8 @@ class ModelDownload:
         self.proxy = proxy
         self.on_progress = on_progress
         self.cancel = threading.Event()
-        self.kind = "llm" if item.get("file") else "stt"      # a single .gguf file, or a faster-whisper folder
-        self.state = {"id": item["id"], "kind": self.kind, "state": "starting", "done": 0,
+        self.kind = "llm" if item.get("file") else "stt"      # a single file (.gguf, ggml .bin, .onnx), or a faster-whisper folder
+        self.state = {"id": item["id"], "kind": item.get("ui") or self.kind, "state": "starting", "done": 0,
                       "total": item["mb"] * 1_000_000, "speed": 0, "error": "", "via": ""}
         self.dest = os.path.join(MODELS_DIR, item["id"])
         self.part = self.dest + ".part"
@@ -4763,7 +5197,7 @@ class Session:
         self.coach_notes = {}                       # what the coach remembers: facts you said, topics, promises, brief ...
 
     FIELDS = ("source", "t0", "t_end", "t_text", "text", "lang", "translation", "tr_state", "answer", "answer_fa",
-              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing", "speaker", "repeat", "qtype", "qhint", "qmin", "qmax")
+              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing", "speaker", "repeat", "qtype", "qhint", "qmin", "qmax", "who")
 
     def state(self):
         with self.lock:
@@ -4893,6 +5327,8 @@ class Session:
     def label(self, e):
         if e["source"] == "me":
             return self.cfg["me_label"]
+        if isinstance(e.get("who"), str) and e["who"].strip():
+            return e["who"].strip()[:40]                       # a recording whose speakers were told apart
         return speaker_label(self.cfg["them_label"], e.get("speaker"))
 
     def save_if_dirty(self, final=True):
@@ -5694,20 +6130,113 @@ def srt_time(sec):
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
+SUB_LINE = 42          # characters per subtitle line (the usual limit for readable subtitles)
+SUB_SECS = 7.0         # at most this long on screen
+
+
+def _sub_pieces(text, n_max):
+    """Splits a sentence into pieces of at most n_max characters, at sentence ends, then commas, then words."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= n_max:
+        return [text] if text else []
+    out = []
+    for part in re.split(r"(?<=[.!?؟…])\s+", text):
+        if len(part) <= n_max:
+            out.append(part)
+            continue
+        cur = ""
+        words = []
+        for w in re.split(r"(?<=[,;:،؛])\s+|\s+", part):
+            words += [w[i:i + n_max] for i in range(0, len(w), n_max)] if len(w) > n_max else [w]   # a very long word (a link) is cut
+        for w in words:
+            if cur and len(cur) + 1 + len(w) > n_max:
+                out.append(cur)
+                cur = w
+            else:
+                cur = (cur + " " + w).strip()
+        if cur:
+            out.append(cur)
+    merged = []                                         # short neighbours share one cue
+    for p in out:
+        if merged and len(merged[-1]) + 1 + len(p) <= n_max:
+            merged[-1] += " " + p
+        else:
+            merged.append(p)
+    return merged
+
+
+def _sub_lines(text):
+    """At most two lines of SUB_LINE characters, balanced."""
+    if len(text) <= SUB_LINE:
+        return text
+    words, best = text.split(), None
+    for i in range(1, len(words)):
+        a, b = " ".join(words[:i]), " ".join(words[i:])
+        cost = abs(len(a) - len(b)) + (100 if max(len(a), len(b)) > SUB_LINE else 0)
+        if best is None or cost < best[0]:
+            best = (cost, a + "\n" + b)
+    return best[1] if best else text
+
+
+def _split_like(text, sizes):
+    """The translation cut into len(sizes) parts in the same proportions as the original's pieces, at a word
+    boundary - at a punctuation mark when one is near."""
+    sizes = list(sizes) if not isinstance(sizes, int) else [1] * sizes
+    n = len(sizes)
+    words = " ".join(str(text or "").split()).split()
+    if n <= 1 or len(words) < n:
+        return [" ".join(words)] + [""] * (n - 1)
+    total, tlen = sum(sizes) or 1, sum(len(w) + 1 for w in words)
+    cuts, acc, pos = [], 0, 0
+    ends = []                                   # character position after each word
+    for w in words:
+        pos += len(w) + 1
+        ends.append(pos)
+    for k in range(n - 1):
+        acc += sizes[k]
+        goal = tlen * acc / total
+        near = [i for i in range(len(words) - 1) if abs(ends[i] - goal) < 12 and re.search(r"[.,;:!?،؛؟]$", words[i])]
+        i = min(near, key=lambda i: abs(ends[i] - goal)) if near else min(range(len(words) - 1), key=lambda i: abs(ends[i] - goal))
+        cuts.append(max(i + 1, (cuts[-1] + 1) if cuts else 1))
+    cuts = [min(c, len(words) - (n - 1 - j)) for j, c in enumerate(cuts)]
+    bounds = [0] + cuts + [len(words)]
+    return [" ".join(words[bounds[j]:bounds[j + 1]]) for j in range(n)]
+
+
 def srt_text(rows, base, label, with_translation=True):
-    """Subtitles: times are seconds from the start of the meeting (the moment Start was pressed)."""
+    """Subtitles: times are seconds from the start of the meeting (the moment Start was pressed). A long line becomes
+    several short cues (two lines of at most 42 characters, at most 7 seconds each) with times shared by length."""
     out, n = [], 0
+    speakers = {label(r) for r in rows if (r.get("text") or "").strip()}
     for r in rows:
         if not (r.get("text") or "").strip():
             continue
-        n += 1
-        a = max(0.0, r["t0"] - base)
-        b = max(r["t_end"] - base, a + 1.0)
-        blank = lambda t: re.sub(r"\n\s*\n+", "\n", t.strip())       # a blank line would end the subtitle early
-        lines = [f"{label(r)}: {blank(r['text'])}"]
-        if with_translation and (r.get("translation") or "").strip():
-            lines.append(blank(r["translation"]))
-        out.append(f"{n}\n{srt_time(a)} --> {srt_time(b)}\n" + "\n".join(lines) + "\n")
+        a0 = max(0.0, r["t0"] - base)
+        b0 = max(r["t_end"] - base, a0 + 1.0)
+        dur = b0 - a0
+        parts = _sub_pieces(r["text"], 2 * SUB_LINE)
+        while dur / max(1, len(parts)) > SUB_SECS and any(len(p) > SUB_LINE for p in parts):
+            more = [q for p in parts for q in _sub_pieces(p, max(SUB_LINE, len(p) // 2 + 1))]   # too long on screen: smaller
+            if len(more) <= len(parts) or len(more) > 200:
+                break                                       # cannot be cut further
+            parts = more
+        while len(parts) > 1 and dur / len(parts) < 0.7:     # a short line: never cues shorter than ~0.7 s
+            parts = [parts[0] + " " + parts[1]] + parts[2:] if len(parts) == 2 else \
+                [parts[i] + " " + parts[i + 1] for i in range(0, len(parts) - 1, 2)] + ([parts[-1]] if len(parts) % 2 else [])
+        trs = _split_like(r.get("translation"), [len(p) for p in parts]) \
+            if with_translation and (r.get("translation") or "").strip() else []
+        total = sum(len(p) for p in parts) or 1
+        t = a0
+        for i, p in enumerate(parts):
+            end = b0 if i == len(parts) - 1 else min(b0, t + dur * len(p) / total)
+            n += 1
+            who = f"{label(r)}: " if i == 0 and len(speakers) > 1 else ""
+            lines = [_sub_lines(who + p)]
+            if trs and trs[i]:
+                lines.append(_sub_lines(trs[i]))
+            text = "\n".join(lines).replace("-->", "->")
+            out.append(f"{n}\n{srt_time(t)} --> {srt_time(end)}\n{text}\n")
+            t = end
     return "\n".join(out)
 
 
@@ -7745,10 +8274,10 @@ def open_recording(path):
             return gen(), total
         except Exception as e:
             err = short(e, 120)
-    ff = shutil.which("ffmpeg") or next((p for p in (os.path.join(APP_DIR, "ffmpeg.exe"),) if os.path.isfile(p)), None)
+    ff = ffmpeg_path()
     if ff:
         total = None
-        probe = shutil.which("ffprobe")
+        probe = shutil.which("ffprobe") or next((p for p in (os.path.join(os.path.dirname(ff), "ffprobe.exe"),) if os.path.isfile(p)), None)
         if probe:
             try:
                 r = subprocess.run([probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
@@ -7809,14 +8338,302 @@ def open_recording(path):
                    "mp3 or wav first — or install ffmpeg (then every audio and video type works).")
 
 
+def quiet_cut(audio, look=10.0, sr=16000):
+    """Where to end a stretch of a recording: the quietest 0.1 s in its last `look` seconds (never in the middle of a word)."""
+    n = len(audio)
+    lo = max(0, n - int(look * sr))
+    hop = sr // 10
+    if n - lo < 2 * hop:
+        return n
+    tail = np.asarray(audio[lo:lo + (n - lo) // hop * hop], dtype=np.float32).reshape(-1, hop)
+    i = int(np.argmin(np.sqrt((tail * tail).mean(axis=1))))
+    return lo + i * hop + hop // 2
+
+
+class _Empty:
+    """Nothing more to read (the fast file mode has read the whole recording)."""
+    def __iter__(self):
+        return iter(())
+
+    def close(self):
+        pass
+
+
+FILE_WINDOW = 300.0     # s of a recording given to the local model at once (fast file mode)
+
+# ---- telling speakers apart in a recording (offline: a small voice-print model + clustering) ------------------
+SPK_MODEL = {"id": "speaker-wespeaker-resnet34", "repo": "csukuangfj/speaker-embedding-models",
+             "file": "wespeaker_en_voxceleb_resnet34_LM.onnx", "mb": 27, "ui": "spk"}
+SPK_SAME = 0.42          # average voice-print likeness above which two groups are one person (auto mode)
+
+
+def _mel_bank(n_mels=80, n_fft=512, sr=16000, lo=20.0, hi=None):
+    hi = hi or sr / 2
+    mel = lambda f: 1127.0 * np.log(1.0 + np.asarray(f) / 700.0)
+    lo_m, hi_m = mel(lo), mel(hi)
+    pts = np.linspace(lo_m, hi_m, n_mels + 2)
+    bins = mel(np.arange(n_fft // 2) * sr / n_fft)
+    fb = np.zeros((n_mels, n_fft // 2 + 1), np.float32)
+    for m in range(n_mels):
+        l_, c_, r_ = pts[m], pts[m + 1], pts[m + 2]
+        up = (bins - l_) / (c_ - l_)
+        down = (r_ - bins) / (r_ - c_)
+        fb[m, :n_fft // 2] = np.maximum(0.0, np.minimum(up, down))
+    return fb
+
+
+_MEL = {}
+
+
+def fbank(x, sr=16000):
+    """Kaldi-style 80-band log-mel features (25 ms frames, 10 ms step), mean-normalised - the input the voice-print
+    models were trained on."""
+    x = np.asarray(x, dtype=np.float32) * 32768.0
+    if len(x) < 400:
+        return np.zeros((0, 80), np.float32)
+    n = 1 + (len(x) - 400) // 160
+    idx = np.arange(400)[None, :] + 160 * np.arange(n)[:, None]
+    fr = x[idx].astype(np.float64)
+    fr -= fr.mean(axis=1, keepdims=True)
+    fr[:, 1:] -= 0.97 * fr[:, :-1].copy()
+    fr[:, 0] *= 1 - 0.97
+    fr *= (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(400) / 399)) ** 0.85
+    spec = np.abs(np.fft.rfft(fr, 512, axis=1)) ** 2
+    if "fb" not in _MEL:
+        _MEL["fb"] = _mel_bank()
+    feats = np.log(np.maximum(spec @ _MEL["fb"].T, 1.1920929e-07)).astype(np.float32)
+    return feats - feats.mean(axis=0, keepdims=True)
+
+
+class VoicePrints:
+    """A small ONNX model that turns a few seconds of speech into a 'voice print' (same person -> similar prints)."""
+
+    def __init__(self, model_path):
+        import onnxruntime
+        so = onnxruntime.SessionOptions()
+        so.intra_op_num_threads = max(1, min(4, os.cpu_count() or 2))
+        self.sess = onnxruntime.InferenceSession(model_path, sess_options=so, providers=["CPUExecutionProvider"])
+        self.inp = self.sess.get_inputs()[0].name
+
+    def __call__(self, audio16k):
+        f = fbank(audio16k)
+        if len(f) < 50:                                      # less than half a second
+            return None
+        e = np.asarray(self.sess.run(None, {self.inp: f[None, :, :]})[0], dtype=np.float32).reshape(-1)
+        nrm = float(np.linalg.norm(e))
+        return e / nrm if nrm > 0 else None
+
+
+def cluster_voices(embs, k=0, same=SPK_SAME):
+    """Average-linkage clustering of voice prints. k > 0: exactly k people (or fewer prints); k == 0: as many as the
+    voices say (groups are joined while they are alike enough). Returns a group number for each print."""
+    n = len(embs)
+    if n == 0:
+        return []
+    groups = [[i] for i in range(n)]
+    sim = np.asarray(embs, dtype=np.float64) @ np.asarray(embs, dtype=np.float64).T
+    gs = sim.copy()                                         # group-to-group average likeness
+    np.fill_diagonal(gs, -np.inf)
+    alive = list(range(n))
+    while len(alive) > 1:
+        sub = gs[np.ix_(alive, alive)]
+        i, j = np.unravel_index(int(np.argmax(sub)), sub.shape)
+        best = sub[i, j]
+        if k > 0 and len(alive) <= k:
+            break
+        if k <= 0 and best < same:
+            break
+        a, b = alive[i], alive[j]
+        na, nb = len(groups[a]), len(groups[b])
+        gs[a, :] = (gs[a, :] * na + gs[b, :] * nb) / (na + nb)
+        gs[:, a] = gs[a, :]
+        gs[a, a] = -np.inf
+        groups[a] += groups[b]
+        groups[b] = []
+        alive.remove(b)
+    out = [0] * n
+    for g, a in enumerate(sorted(alive, key=lambda a: min(groups[a]))):   # numbered by who speaks first
+        for i in groups[a]:
+            out[i] = g
+    return out
+
+
+def speakers_for_rows(rows, audio_iter, base, prints, k=0, cancel=None, progress=None):
+    """Voice prints of every line (from a second read of the recording), grouped into people.
+    rows: entries with t0/t_end (absolute; base = the recording's 00:00). Returns {entry id: person number}."""
+    want = sorted((r for r in rows if r.get("t_end") and r["t_end"] - r["t0"] >= 0.3), key=lambda r: r["t0"])
+    embs, ids, short_rows = [], [], []
+    buf, buf_start, qi = np.zeros(0, np.float32), 0.0, 0
+    for block in audio_iter:
+        if cancel is not None and cancel.is_set():
+            return {}
+        buf = np.concatenate([buf, np.asarray(block, dtype=np.float32)])
+        buf_end = buf_start + len(buf) / 16000
+        while qi < len(want) and want[qi]["t_end"] - base <= buf_end:
+            r = want[qi]
+            qi += 1
+            a = max(0.0, r["t0"] - base)
+            b = min(r["t_end"] - base, a + 20.0)               # 20 s are enough for a voice print
+            seg = buf[max(0, int((a - buf_start) * 16000)):max(0, int((b - buf_start) * 16000))]
+            e = prints(seg) if b - a >= 1.0 else None
+            if e is None:
+                short_rows.append(r)
+            else:
+                embs.append(e)
+                ids.append(r["id"])
+            if progress:
+                progress(qi / max(1, len(want)))
+        keep_from = (want[qi]["t0"] - base) if qi < len(want) else buf_end
+        drop = int(max(0.0, keep_from - buf_start - 1.0) * 16000)
+        if drop > 0:
+            buf, buf_start = buf[drop:], buf_start + drop / 16000
+    for r in want[qi:]:                                       # lines that end after the last sound (rounding): from what is left
+        a = max(0.0, r["t0"] - base)
+        seg = buf[max(0, int((a - buf_start) * 16000)):]
+        e = prints(seg) if len(seg) >= 16000 else None
+        if e is None:
+            short_rows.append(r)
+        else:
+            embs.append(e)
+            ids.append(r["id"])
+    if len(embs) > 1500:                                      # very long recordings: group a sample, then the rest by likeness
+        step = len(embs) / 1500
+        pick = sorted({int(i * step) for i in range(1500)})
+        lab = cluster_voices([embs[i] for i in pick], k)
+        cent = {}
+        for i, g in zip(pick, lab):
+            cent.setdefault(g, []).append(embs[i])
+        names = sorted(cent)
+        cm = np.stack([np.mean(cent[g], axis=0) for g in names])
+        labels = [names[int(np.argmax(cm @ e))] for e in embs]
+    else:
+        labels = cluster_voices(embs, k)
+    out = dict(zip(ids, labels))
+    known = [(r["t0"], r["t_end"], out[r["id"]]) for r in rows if r["id"] in out]
+    for r in short_rows:                                      # a very short line: the person whose line is nearest in time
+        near = min(known, key=lambda k: max(0.0, k[0] - r["t_end"], r["t0"] - k[1]), default=None)
+        out[r["id"]] = near[2] if near else 0
+    return out
+_file_seg_ids = itertools.count(10_000_000)
+
+
+DOWNLOADS_DIR = os.path.join(DATA_DIR, "downloads")
+
+
+def ffmpeg_path():
+    return shutil.which("ffmpeg") or next((p for p in (os.path.join(APP_DIR, "ffmpeg.exe"), os.path.join(APP_DIR, "ffmpeg", "bin", "ffmpeg.exe"))
+                                           if os.path.isfile(p)), None)
+
+
+class LinkJob:
+    """A link (YouTube or any page with audio or video) is downloaded first, then transcribed like a file."""
+
+    def __init__(self, app, url, speakers=0):
+        self.app, self.url, self.speakers = app, url, speakers
+        self.cancel = threading.Event()
+        self.blocks = None
+        self.name = url
+        self.state = {"state": "downloading", "name": url, "pos": 0.0, "total": None, "lines": 0, "error": "", "note": "Looking at the link…"}
+        self.thread = threading.Thread(target=self.run, daemon=True, name="link")
+        self._last = 0.0
+
+    def _emit(self, force=False, **kw):
+        self.state.update(kw)
+        now = time.time()
+        if force or now - self._last > 0.4:
+            self._last = now
+            self.app.hub.publish("recording", job=dict(self.state))
+
+    def _hook(self, d):
+        if self.cancel.is_set():
+            raise DownloadError("cancelled")
+        if d.get("status") == "downloading":
+            done, total = d.get("downloaded_bytes") or 0, d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            self._emit(note=f"Downloading… {round(done / 1e6)} MB" + (f" of {round(total / 1e6)} MB" if total else ""),
+                       pos=float(done), total=float(total) or None)
+
+    def run(self):
+        path, err = "", ""
+        try:
+            import yt_dlp
+            os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+            proxy = detect_proxy(self.app.cfg["proxy"])[0]
+            opts = {"format": "bestaudio/best", "noplaylist": True, "quiet": True, "no_warnings": True, "noprogress": True,
+                    "outtmpl": os.path.join(DOWNLOADS_DIR, "%(title).70B [%(id)s].%(ext)s"), "windowsfilenames": True,
+                    "progress_hooks": [self._hook], "socket_timeout": 30, "retries": 3, "max_filesize": 4_000_000_000,
+                    "logger": _YtLog()}
+            host = (urllib.parse.urlsplit(self.url).hostname or "").lower()
+            local = host in ("localhost", "::1") or re.match(r"^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)", host)
+            if proxy and not local:                            # a page on this computer or the local network: direct
+                opts["proxy"] = proxy
+            elif local:
+                opts["proxy"] = ""
+            ff = ffmpeg_path()
+            if ff:
+                opts["ffmpeg_location"] = ff
+            # YouTube needs a JavaScript runtime: Deno or Node if the computer has one, else the small QuickJS inside the exe
+            qjs = next((p for p in (os.path.join(RES_DIR, "jsrt", "qjs.exe"), os.path.join(APP_DIR, "qjs.exe")) if os.path.isfile(p)), None)
+            opts["js_runtimes"] = {"deno": {}, "node": {}, **({"quickjs": {"path": qjs}} if qjs else {})}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(self.url, download=True)
+                if info and info.get("entries"):
+                    info = next((x for x in info["entries"] if x), None)
+                if not info:
+                    raise DownloadError("nothing to download at this link")
+                self.name = str(info.get("title") or self.url)[:120]
+                path = ((info.get("requested_downloads") or [{}])[0].get("filepath")) or ydl.prepare_filename(info)
+            if not path or not os.path.isfile(path):
+                raise DownloadError("the downloaded file was not found")
+            log(f"Link downloaded: {self.name} -> {path}")
+        except ImportError:
+            err = "Links are not supported in this copy of the program (yt-dlp is missing). Use the latest release."
+        except Exception as e:
+            err = "cancelled" if self.cancel.is_set() else short(re.sub(r"\x1b\[[0-9;]*m", "", str(e)).replace("ERROR: ", ""), 200)
+        with self.app.lock:
+            if self.app.recording is self:
+                self.app.recording = None
+        if err:
+            if err != "cancelled":
+                self._emit(True, state="error", error="The link could not be downloaded: " + err)
+                self.app.hub.toast("error", "The link could not be downloaded: " + err
+                                   + (" (from Iran a proxy is usually needed: Setup › Services › proxy)" if "403" in err or "timed out" in err.lower() else ""))
+            else:
+                self._emit(True, state="cancelled")
+            self.app.publish_running()
+            return
+        if self.cancel.is_set():
+            self._emit(True, state="cancelled")
+            self.app.publish_running()
+            return
+        r = self.app.api_recording(path=path, speakers=self.speakers, name=self.name)
+        if not r.get("ok"):
+            self.app.hub.toast("error", r.get("error") if r.get("error") != "setup" else "Setup is not complete.")
+            self._emit(True, state="error", error=str(r.get("error")))
+
+
+class _YtLog:
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        log("yt-dlp:", short(msg, 200), level="debug")
+
+    def error(self, msg):
+        log("yt-dlp:", short(msg, 200), level="warn")
+
+
 class RecordingJob:
     """Feeds a recording through the same pipeline as a live meeting (sentences, speech to text,
     translation) as fast as the services allow. No answers are suggested."""
 
-    def __init__(self, app, path):
+    def __init__(self, app, path, speakers=0, name=None):
         self.app = app
         self.path = path
-        self.name = os.path.basename(path)
+        self.speakers = speakers           # 0: one voice for all lines; -1: tell people apart (as many as heard); n: n people
+        self.name = name or os.path.basename(path)
         self.cancel = threading.Event()
         self.session = Session(app.cfg, recording=path)
         self.engine = Engine(app, self.session, file_mode=True)
@@ -7833,6 +8650,107 @@ class RecordingJob:
             self.state["lines"] = len(self.session.entries)
             self.app.hub.publish("recording", job=dict(self.state))
 
+    def _tell_speakers(self, base):
+        """Who said which line: voice prints of every line, grouped. The transcript is already saved; this only adds names."""
+        model = os.path.join(MODELS_DIR, SPK_MODEL["id"], SPK_MODEL["file"])
+        try:
+            import onnxruntime  # noqa: F401
+        except Exception:
+            self.app.hub.toast("warn", "Telling speakers apart is not included in this copy of the program (onnxruntime).")
+            return
+        if not os.path.isfile(model):
+            self._emit(True, state="speakers", note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…")
+            dl = ModelDownload(SPK_MODEL, detect_proxy(self.app.cfg["proxy"])[0],
+                               lambda st: self._emit(note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
+            dl.cancel = self.cancel
+            try:
+                os.makedirs(MODELS_DIR, exist_ok=True)
+            except OSError:
+                pass
+            dl.run()
+            if self.cancel.is_set():
+                return
+            if not os.path.isfile(model):
+                self.app.hub.toast("error", "Speakers were not told apart: the voice model could not be downloaded ("
+                                   + short(dl.state.get("error") or "no answer", 120) + ").")
+                return
+        blocks = None
+        try:
+            self._emit(True, state="speakers", note="Telling the speakers apart…")
+            prints = VoicePrints(model)
+            blocks, _ = open_recording(self.path)
+            self.blocks = blocks
+            rows = self.session.ordered()
+            got = speakers_for_rows(rows, blocks, base, prints, max(0, self.speakers), self.cancel,
+                                    lambda f: self._emit(note=f"Telling the speakers apart… {round(100 * f)}%"))
+        except Exception as e:
+            log("speakers:", traceback.format_exc(), level="warn")
+            self.app.hub.toast("error", "Speakers were not told apart: " + short(e, 140))
+            return
+        finally:
+            if blocks is not None:
+                OPEN_READERS.pop(id(blocks), None)
+                try:
+                    blocks.close()                         # ffmpeg (if used) ends
+                except Exception:
+                    pass
+        if not got or self.cancel.is_set():
+            return
+        people = len(set(got.values()))
+        self.session.people = people
+        for eid, g in got.items():
+            e = self.session.update(eid, speaker=g, who=f"Speaker {g + 1}")
+            if e:
+                self.app.hub.publish("entry", entry=e)
+        self.session.dirty = True
+        self.session.save_if_dirty()
+        log(f"Recording: {people} speaker(s) told apart")
+
+    def _run_fast(self, blocks, base, pos):
+        """The local model gets ~5 minutes at a time (cut at a quiet moment); its sentences go through the same
+        path as live ones (cleaning, glossary, translation). Returns a problem text or ''."""
+        eng, c = self.engine, self.app.cfg
+        lang = fixed_lang(c)
+        prompt = eng._stt_prompt("them")
+        buf, start = np.zeros(0, np.float32), 0.0              # start: position (s) of buf[0] in the recording
+        it = iter(blocks)
+        done = False
+        while not done and not self.cancel.is_set():
+            while len(buf) < FILE_WINDOW * 16000:
+                b = next(it, None)
+                if b is None:
+                    done = True
+                    break
+                buf = np.concatenate([buf, np.asarray(b, dtype=np.float32)])
+            if not len(buf):
+                break
+            cut = len(buf) if done else quiet_cut(buf[:int(FILE_WINDOW * 16000)])
+            win, buf = buf[:cut], buf[cut:]
+            self._emit(pos=start, state="reading")
+            try:
+                segs, got = LOCAL.transcribe_long(win, lang, prompt)
+            except (Transient, ModelUnavailable, LocalLoading) as e:
+                return short(e, 160)
+            code = LANG_CODES.get(str(got or "").lower(), got if got in LANGS else None) if not lang else lang
+            if not lang and code in meeting_langs(c):
+                lang = code                                    # the language is found once, then kept
+            for sg in segs:
+                if self.cancel.is_set():
+                    break
+                text = clean_transcript({"segments": [sg]})
+                if text:
+                    a = start + max(0.0, float(sg.get("start") or 0.0))
+                    b_ = start + max(float(sg.get("end") or 0.0), float(sg.get("start") or 0.0) + 0.3)
+                    eng.accept_text("them", text, lang or "", base + a, base + b_, [next(_file_seg_ids)], {})
+                    pos[0] = b_
+                    self._emit(pos=pos[0])
+                while not self.cancel.is_set() and eng.tr_inflight >= 6:      # translations keep pace
+                    time.sleep(0.1)
+            start += cut / 16000
+            pos[0] = start
+            self._emit(pos=pos[0])
+        return ""
+
     def run(self):
         eng = self.engine
         blocks = None
@@ -7845,9 +8763,16 @@ class RecordingJob:
             _st = getattr(eng.session, "started", None) or datetime.datetime.now()
             base = datetime.datetime.combine(_st.date(), datetime.time()).timestamp()
             pos = [0.0]
+            problem = ""
+            fast = (eng.stt_targets("them") or [("", "")])[0][0] == "local" and LOCAL.ready() and LOCAL.long_ok()
+            if fast:
+                log("Recording: fast file mode (the local model gets minutes at once; silence is skipped)")
+                problem = self._run_fast(blocks, base, pos)
+                OPEN_READERS.pop(id(blocks), None)
+                blocks.close()                                 # (ffmpeg, if it was used, ends here)
+                blocks = _Empty()
             seg = Segmenter("them", 16000, self.app.cfg["sensitivity"], eng.on_audio, clock=lambda: base + pos[0])
             step = int(16000 * FRAME_SEC)
-            problem = ""
             for block in blocks:
                 for i in range(0, len(block), step):
                     fr = block[i:i + step]
@@ -7896,9 +8821,12 @@ class RecordingJob:
                 log(f"Recording only partly transcribed ({why}): {n} lines, saved to {self.session.path}", level="warn")
                 self.app.hub.toast("warn", f"The recording was only partly transcribed ({why}). {n} lines are saved.")
             else:
+                if self.speakers and n:
+                    self._tell_speakers(base)
                 self._emit(True, state="done", pos=total or pos[0])
                 log(f"Recording transcribed: {n} lines, saved to {self.session.path}")
-                self.app.hub.toast("ok", f"Recording transcribed and saved ({n} lines).")
+                self.app.hub.toast("ok", f"Recording transcribed and saved ({n} lines)." if not self.cancel.is_set()
+                                   else f"Recording transcribed and saved ({n} lines), without speaker names (stopped).")
         except APIError as e:
             self._emit(True, state="error", error=str(e))
             self.app.hub.toast("error", str(e))
@@ -7998,11 +8926,17 @@ def export_bytes(session, fmt):
     stamp = lambda t: datetime.datetime.fromtimestamp(t).strftime("%H:%M:%S")
     if fmt == "json":
         return json.dumps(session.state(), ensure_ascii=False, indent=1).encode("utf-8")
-    if fmt == "srt":
+    if fmt in ("srt", "vtt"):
         _b = session.started.timestamp()
         if getattr(session, "recording", False):
             _b = datetime.datetime.combine(session.started.date(), datetime.time()).timestamp()
-        return srt_text(rows, _b, session.label).encode("utf-8")
+        t = srt_text(rows, _b, session.label)
+        if fmt == "vtt":                                   # web video subtitles: same cues, "." before the milliseconds
+            t = re.sub(r"(?m)^(?!\d+$)(?!\d\d:\d\d:\d\d,\d{3} --> )(.*)$",
+                       lambda m_: m_.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), t)
+            t = "WEBVTT\n\n" + re.sub(r"(?m)^\d+\n(\d\d:\d\d:\d\d),(\d{3}) --> (\d\d:\d\d:\d\d),(\d{3})",
+                                     r"\1.\2 --> \3.\4", t)
+        return t.encode("utf-8")
     if fmt == "txt":
         out = [f"{'Recording' if session.recording else 'Meeting'} — {session.started:%Y-%m-%d %H:%M}", ""]
         for r in rows:
@@ -8403,6 +9337,8 @@ class App:
             if dev is not None and (src == "them" or want_mic):
                 c = AudioCapture(pa, dev, src, self.cfg["sensitivity"], sink)
                 c.set_gain(self.cfg["mic_gain"])
+                ar = getattr(self, "audio_rec", None)
+                c.saver = ar.write if ar is not None else None
                 if preview and src == "them":
                     c.preview_every, c.preview_min = self.preview_plan()
                     c.spec_final = self.spec_plan()
@@ -8485,6 +9421,9 @@ class App:
 
             def undo(msg):
                 self._stop_captures()
+                ar, self.audio_rec = getattr(self, "audio_rec", None), None
+                if ar is not None:
+                    ar.close()
                 if self.engine is not None:
                     for lv in list(getattr(self.engine, "live", {}).values()):      # an open Deepgram stream must not stay
                         try:
@@ -8523,6 +9462,7 @@ class App:
                 USAGE_ON[0] = True
                 self.engine = Engine(self, self.session)
                 self.reported.clear()
+                self.audio_rec = MeetingAudio(self.session.path) if self.cfg.get("save_audio") else None
                 problems, mic, spk = self._start_captures(self.engine.on_audio, self.cfg["transcribe_me"], preview=True)
                 self.engine.start_live(self.captures)
             except Exception as e:
@@ -8658,6 +9598,9 @@ class App:
             self.stopping = True
             log("Meeting stopped")
             self._stop_captures()                  # flushes the last sentence into the queue
+            ar, self.audio_rec = getattr(self, "audio_rec", None), None
+            if ar is not None:
+                ar.close()
             engine, session = self.engine, self.session
         self.publish_running()
 
@@ -8710,9 +9653,9 @@ class App:
         e = self.engine
         if e and not e.stop_event.is_set():
             return e
-        r = self.recording
-        if r and not r.engine.stop_event.is_set():
-            return r.engine
+        r = getattr(getattr(self, "recording", None), "engine", None)
+        if r and not r.stop_event.is_set():
+            return r
         return self.review
 
     def api_answer_now(self, entry_id=None, text=""):
@@ -9066,7 +10009,7 @@ class App:
         if not any(r["text"].strip() for r in rows):
             return {"ok": False, "error": "The meeting has no text yet."}
         fmt = str(format or "docx").lower()
-        if fmt not in ("docx", "srt", "json", "txt"):
+        if fmt not in ("docx", "srt", "vtt", "json", "txt"):
             return {"ok": False, "error": "Unknown format."}
         try:
             data = export_bytes(s, fmt)
@@ -9169,6 +10112,11 @@ class App:
         keys = [p["name"] for p in c.get("providers", []) if p.get("api_key")] + (["Groq"] if c.get("api_key") else [])
         add("Services with a key", "ok" if keys else "bad", ", ".join(keys) if keys else "none yet: Setup > Services")
         add("Proxy", "info", "set" if c.get("proxy") else "none (if the services do not answer from your country, set one)")
+        add("whisper.cpp engine (local model on any graphics card)", "ok" if cpp_server_path() else "info",
+            "included" if cpp_server_path() else "not in this copy (it is in the Windows exe from the release page)")
+        for mod, what in (("onnxruntime", "Fast file mode and telling speakers apart"), ("yt_dlp", "Links (YouTube and other sites)")):
+            ok_ = importlib.util.find_spec(mod) is not None
+            add(what, "ok" if ok_ else "info", "included" if ok_ else "not in this copy")
         add("ffmpeg (for recordings)", "ok" if shutil.which("ffmpeg") or os.path.isfile(os.path.join(APP_DIR, "ffmpeg.exe")) else "info",
             "found" if shutil.which("ffmpeg") or os.path.isfile(os.path.join(APP_DIR, "ffmpeg.exe")) else "not found: only mp3 and wav recordings can be read")
         if overlay_live and sys.platform == "win32":
@@ -9302,6 +10250,9 @@ class App:
         if not eng or not self.running:
             return {"ok": False, "error": "Start the meeting first."}
         eng.paused = (not eng.paused) if on is None else bool(on)
+        ar = getattr(self, "audio_rec", None)
+        if ar is not None:
+            ar.paused = eng.paused                     # a paused moment is not kept in the meeting sound either
         for c in list(self.captures):
             if c.seg:
                 c.seg.drop_req = True          # the sentence around the pause is not sent (not even partly)
@@ -9369,7 +10320,9 @@ class App:
                         more = True
                 elif (kind == "audio" and n.lower().endswith(AUDIO_EXT)) or \
                         (kind == "doc" and n.lower().endswith(DOC_EXT)) or \
-                        (kind == "gguf" and n.lower().endswith(".gguf") and "mmproj" not in n.lower()):
+                        (kind == "gguf" and n.lower().endswith(".gguf") and "mmproj" not in n.lower()) or \
+                        (kind == "model" and n.lower().endswith(".bin") and n.lower() != "model.bin" and cpp_server_path()
+                         and is_ggml(full)):                    # a whisper.cpp model is one file
                     if len(files) < 400:
                         files.append({"name": n, "path": full, "mb": round(os.path.getsize(full) / 1e6, 1)})
                     else:
@@ -9381,8 +10334,13 @@ class App:
                 "more": more, "places": places,
                 "is_model": kind == "model" and os.path.isfile(os.path.join(path, "model.bin"))}
 
-    def api_recording(self, path="", browse=False, cancel=False):
-        """Transcribe (and translate) an audio or video file."""
+    def api_recording(self, path="", browse=False, cancel=False, speakers=0, name=None):
+        """Transcribe (and translate) an audio or video file. speakers: 0 off, -1 tell people apart, 2-8 that many people."""
+        try:
+            speakers = int(speakers or 0)
+        except (TypeError, ValueError):
+            speakers = 0
+        speakers = speakers if speakers == -1 or 2 <= speakers <= 8 else 0
         if cancel:
             rec = self.recording
             if rec:
@@ -9426,7 +10384,7 @@ class App:
             self._stop_captures()
             self.monitor_until = 0.0
             self._set_review(None)
-            job = RecordingJob(self, path)
+            job = RecordingJob(self, path, speakers, name)
             self.recording = job
             self.last_session = job.session
             with _usage_lock:
@@ -9435,6 +10393,56 @@ class App:
         self.hub.publish("session", session_file=job.session.path, recording=job.name)
         self.publish_running()
         job.thread.start()
+        return {"ok": True, "job": job.state}
+
+    def api_line_audio(self, id=0):
+        """Where to replay one line: a short-lived address for the window's player, and the seconds to play."""
+        if self.running:
+            return {"ok": False, "error": "Lines can be replayed after the meeting (the sound would be heard by the program)."}
+        s = self.session or self.last_session or self.resumable
+        if not s:
+            return {"ok": False, "error": "There is no meeting."}
+        try:
+            e = s.get(int(id))
+        except (TypeError, ValueError):
+            e = None
+        where = audio_for_line(s, e)
+        if not where:
+            return {"ok": False, "error": "There is no sound for this line (turn on Setup › Audio › “Keep the sound of meetings”)."}
+        key = secrets.token_urlsafe(12)
+        with self.lock:
+            self.media = {k: v for k, v in getattr(self, "media", {}).items() if time.time() - v[1] < 3600}
+            self.media[key] = (where[0], time.time())
+        return {"ok": True, "url": f"/media?k={key}", "start": round(where[1], 2), "end": round(where[2], 2)}
+
+    def api_recording_link(self, url="", speakers=0, cancel=False):
+        """Transcribe a link (YouTube or any page with audio or video): it is downloaded first."""
+        if cancel:
+            return self.api_recording(cancel=True)
+        url = str(url or "").strip()
+        if not re.match(r"^https?://[^\s/$.?#][^\s]{2,2000}$", url, re.I):
+            return {"ok": False, "error": "Paste a full link that starts with https://"}
+        if importlib.util.find_spec("yt_dlp") is None:
+            return {"ok": False, "error": "Links are not supported in this copy of the program (yt-dlp is missing). Use the latest release."}
+        if not ffmpeg_path():
+            return {"ok": False, "error": "ffmpeg", "detail": "Video sites give the sound as m4a or webm, and ffmpeg is needed to read it."}
+        try:
+            speakers = int(speakers or 0)
+        except (TypeError, ValueError):
+            speakers = 0
+        with self.lock:
+            if self.running or self.stopping:
+                return {"ok": False, "error": "Stop the meeting first."}
+            if self.recording:
+                return {"ok": False, "error": "A recording is already being transcribed."}
+            missing = self.missing_tasks(("stt", "tr"))
+            if missing:
+                return {"ok": False, "error": "setup", "missing": missing}
+            job = LinkJob(self, url, speakers if speakers == -1 or 2 <= speakers <= 8 else 0)
+            self.recording = job
+        self.publish_running()
+        job.thread.start()
+        log(f"Downloading a link to transcribe: {url}")
         return {"ok": True, "job": job.state}
 
     def recording_finished(self, job):
@@ -10187,7 +11195,8 @@ class App:
 
     def local_state(self):
         return {"ok": True, "local": LOCAL.info(), "models": find_models(self.cfg["local_model"]),
-                "catalog": catalog_view(LOCAL_CATALOG, "stt"), "download": self.download.state if self.download else None,
+                "catalog": catalog_view(LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []), "stt"),
+                "cpp": bool(cpp_server_path()), "download": self.download.state if self.download else None,
                 "models_dir": MODELS_DIR, "host": platform_node()}
 
     def api_local_state(self):
@@ -10293,7 +11302,7 @@ class App:
             except ValueError as e:
                 return {"ok": False, "error": str(e)}
         else:
-            item = next((m for m in LOCAL_CATALOG if m["id"] == id), None)
+            item = next((m for m in LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []) if m["id"] == id), None)
         if not item:
             return {"ok": False, "error": "Unknown model."}
         with self.dl_lock:                                  # a double click never starts two downloads
@@ -10327,11 +11336,12 @@ class App:
         return {"ok": True, "download": self.download.state}
 
     def api_local_delete(self, path=""):
-        folder, _ = model_folder(path)
+        chosen, _ = model_folder(path)
+        folder = os.path.dirname(chosen) if chosen and os.path.isfile(chosen) else chosen   # a whisper.cpp model: its folder
         if not folder or os.path.normcase(os.path.dirname(folder)) != os.path.normcase(os.path.abspath(MODELS_DIR)):
             return {"ok": False, "error": "Only models in the program's 'models' folder can be deleted here."}
         with self.lock:
-            if os.path.normcase(folder) == os.path.normcase(self.cfg["local_model"] or ""):
+            if os.path.normcase(chosen) == os.path.normcase(self.cfg["local_model"] or ""):
                 self.cfg["local_model"], self.cfg["local_preview"], self.cfg["local_bench"] = "", False, {}
                 if self.cfg["stt_provider"] == "local":
                     self.cfg["stt_provider"] = "groq"
@@ -10472,6 +11482,10 @@ class App:
     def _tick(self, state):
         last_save, last_stats, last_sent = state["last_save"], state["last_stats"], state["last_sent"]
         now = time.time()
+        busy = bool(self.running or self.recording)
+        if state.get("awake") != busy:                      # always from this one thread: Windows ties the request to it
+            state["awake"] = busy
+            keep_awake(busy)
         caps = list(self.captures)
         if caps:
             lv = {"me": None, "them": None}
@@ -10498,7 +11512,7 @@ class App:
             with _usage_lock:
                 usage = {k: dict(v) for k, v in USAGE.items()}
             rec = self.recording
-            eng = self.engine or (rec.engine if rec else None)
+            eng = self.engine or getattr(rec, "engine", None)
             try:
                 quota = eng.quota_info() if eng else None
             except Exception:
@@ -10593,10 +11607,14 @@ class App:
             if self.download:
                 self.download.cancel.set()
             self.overlay.stop(restore=False)
+            ar, self.audio_rec = getattr(self, "audio_rec", None), None
+            if ar is not None:
+                ar.close()
             rec = self.recording
             if rec:
                 rec.cancel.set()
-                rec.session.save_if_dirty()
+                if getattr(rec, "session", None):
+                    rec.session.save_if_dirty()
         except Exception:
             log("shutdown error:", traceback.format_exc())
         self.closing.set()
@@ -10674,6 +11692,49 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    MEDIA_TYPES = {".ogg": "audio/ogg", ".opus": "audio/ogg", ".flac": "audio/flac", ".wav": "audio/wav", ".mp3": "audio/mpeg",
+                   ".m4a": "audio/mp4", ".mp4": "video/mp4", ".webm": "audio/webm", ".aac": "audio/aac", ".mov": "video/quicktime"}
+
+    def _file(self, fp):
+        """A sound file for the player, in pieces (Range) so it can jump to a line."""
+        size = os.path.getsize(fp)
+        a, b = 0, size - 1
+        rng = self.headers.get("Range") or ""
+        m = re.match(r"^bytes=(\d*)-(\d*)$", rng.strip())
+        partial = bool(m and (m.group(1) or m.group(2)))
+        if partial:
+            if m.group(1):
+                a = int(m.group(1))
+                b = min(size - 1, int(m.group(2))) if m.group(2) else size - 1
+            else:
+                a = max(0, size - int(m.group(2)))
+            if a >= size or a > b:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", self.MEDIA_TYPES.get(os.path.splitext(fp)[1].lower(), "application/octet-stream"))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(b - a + 1))
+        if partial:
+            self.send_header("Content-Range", f"bytes {a}-{b}/{size}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            with open(fp, "rb") as f:
+                f.seek(a)
+                left = b - a + 1
+                while left > 0:
+                    chunk = f.read(min(1 << 16, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (ConnectionError, OSError):
+            pass                                            # the player stopped reading (it jumped elsewhere)
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, "{}")
@@ -10715,6 +11776,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             return self._send(404, "{}")
+        if path == "/media":
+            if not token_ok(key, app.token):
+                return self._send(403, "{}")
+            hit = getattr(app, "media", {}).get(params.get("k", [""])[0])
+            if not hit or time.time() - hit[1] > 3600 or not os.path.isfile(hit[0]):
+                return self._send(404, "{}")
+            return self._file(hit[0])
         if path == "/ping" and self.headers.get("X-Ping") == "1":
             return self._send(200, json.dumps({"app": "meeting-assistant"}))
         return self._send(404, "{}")
@@ -11646,6 +12714,19 @@ class Overlay:
             time.sleep(0.04)
         for i in list(names) + list(arrows):
             u.UnregisterHotKey(None, i)
+
+
+def keep_awake(on):
+    """While a meeting or a recording runs, Windows must not sleep or turn the screen off (that stops the sound
+    capture in the middle of an interview). Harmless elsewhere."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x1, 0x2
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED if on else 0))
+    except Exception:
+        pass
 
 
 def message_box(text):

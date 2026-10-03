@@ -1,4 +1,13 @@
-# Meeting Assistant — User Guide (version 6.13)
+# Meeting Assistant — User Guide (version 6.14)
+
+## Version 6.14: files, speakers, links, subtitles, sound
+
+- **Faster files with the local model**: silent parts are skipped and many pieces are read at once.
+- **Who said what**: in the "Transcribe a file…" window choose **Tell the speakers apart** (or 2–5 people). Lines are labelled Speaker 1, Speaker 2 …
+- **Intel and AMD graphics**: Setup › Services › Local model › download **cpp-small** (whisper.cpp engine).
+- **Better subtitles**: short cues of two lines; the translation is cut at the same places.
+- **A link to text**: paste a YouTube link in the "Transcribe a file…" window and press **Transcribe the link** (needs ffmpeg).
+- **Hear a line again**: Setup › Audio › **Keep the sound of meetings**; after the meeting press ▶ on a line.
 
 ## Version 6.13: find new models
 

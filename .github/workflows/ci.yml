@@ -40,7 +40,7 @@ jobs:
   build:
     name: Build Windows exe
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -63,6 +63,48 @@ jobs:
           python -c "import llama_cpp" || { echo "::warning::local AI engine does not import - left out"; python -m pip uninstall -y -q llama-cpp-python; }
           python -m pip install --quiet "pywebview>=5,<7" || echo "::warning::pywebview not installed - the exe is built without the hidden window"
           python -c "import webview" || { echo "::warning::pywebview does not import - left out"; python -m pip uninstall -y -q pywebview; }
+          python -m pip install --quiet "onnxruntime>=1.17,<2" || echo "::warning::onnxruntime not installed - no fast file mode, no speaker separation"
+          python -c "import onnxruntime" || { echo "::warning::onnxruntime does not import - left out"; python -m pip uninstall -y -q onnxruntime; }
+          python -m pip install --quiet "yt-dlp[default]>=2025.11.12" || echo "::warning::yt-dlp not installed - links cannot be transcribed"
+          python -c "import yt_dlp" || { echo "::warning::yt-dlp does not import - left out"; python -m pip uninstall -y -q yt-dlp; }
+
+      - name: Install the Vulkan SDK (to build whisper.cpp for any graphics card)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ver = '1.4.313.2'
+          curl.exe -f -o "$env:RUNNER_TEMP/VulkanSDK-Installer.exe" -L "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe"
+          & "$env:RUNNER_TEMP/VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$ver"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$ver\bin"
+
+      - name: Build whisper.cpp (Vulkan)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.8.6 https://github.com/ggml-org/whisper.cpp.git wcpp
+          cmake -S wcpp -B wcpp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_VULKAN=1 -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build wcpp/build -j --config Release --target whisper-server
+          mkdir -p whisper_cpp
+          cp wcpp/build/bin/Release/whisper-server.exe whisper_cpp/
+          # the Vulkan loader goes next to it: on a PC without a Vulkan driver the engine still starts (on the processor)
+          sdk="${VULKAN_SDK:-}"; [ -n "$sdk" ] && sdk="$(cygpath -u "$sdk")/Bin"
+          for d in $sdk /c/Windows/System32; do
+            if [ -f "$d/vulkan-1.dll" ]; then cp "$d/vulkan-1.dll" whisper_cpp/; break; fi
+          done
+          ./whisper_cpp/whisper-server.exe --help > /dev/null 2>&1 && echo "whisper-server starts" || echo "::warning::whisper-server.exe does not start on the build machine"
+          ls -la whisper_cpp
+
+      - name: Get quickjs (YouTube links need a JavaScript program)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p jsrt
+          curl -fsSL -o jsrt/qjs.exe https://github.com/quickjs-ng/quickjs/releases/download/v0.17.0/qjs-windows-x86_64.exe
+          ./jsrt/qjs.exe -e "print('quickjs ok')"
 
       - name: Build
         run: python tools/build.py

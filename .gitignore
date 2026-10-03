@@ -19,3 +19,8 @@ dist/
 *.spec
 pip_log.txt
 build_log.txt
+
+# built by the workflow (whisper.cpp engine)
+wcpp/
+whisper_cpp/
+jsrt/

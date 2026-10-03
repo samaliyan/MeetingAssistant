@@ -2,6 +2,27 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.14]
+
+Six ideas from the open-source program Buzz, built into this program.
+
+- **Recorded files are much faster with the local model.** When a file is transcribed with the local model (faster-whisper), the program skips the silent parts and works on many pieces at once (batched mode), so it is several times faster, most of all on an NVIDIA graphics card. The language is found once for the whole file.
+- **Who said what in a recording.** In the "Transcribe a file…" window choose **Tell the speakers apart** (or the number of people). After the text is ready, each line is labelled Speaker 1, Speaker 2 … The voice model (27 MB) is downloaded the first time.
+- **whisper.cpp engine for Intel and AMD graphics.** Three new models in Setup › Services › Local model: cpp-base, cpp-small and cpp-large-v3-turbo. They run on any graphics card that supports Vulkan (Intel Iris / Arc, AMD Radeon, NVIDIA) and on the processor otherwise. A ggml-….bin file you downloaded yourself can be chosen too.
+- **Better subtitles (.srt / .vtt).** A long sentence becomes several short subtitles: at most two lines of 42 characters and 7 seconds each; the translation is cut in the same places, at a comma when there is one. The speaker name is shown only when there is more than one speaker.
+- **A link to text.** Paste a YouTube link (or any page with audio or video) in the "Transcribe a file…" window and press **Transcribe the link**. It is downloaded into the "downloads" folder, then transcribed and translated like a file. Needs ffmpeg (the window tells you how to install it).
+- **Hear a line again.** Setup › Audio › **Keep the sound of meetings** (off by default) keeps the sound next to the meeting file. After the meeting (and for every recorded file) the ▶ button on a line plays exactly that part.
+- Fixes from an independent review of these parts: very long words (links) no longer stop the subtitle export; subtitles never overlap; a cancelled download no longer shows an error; reopening a recording keeps the speaker names; the sound link expires after an hour; keeping the sound never slows the microphone (it is written by its own thread); while the meeting is paused, silence is kept instead of the sound; a slow whisper.cpp no longer ends a recording with an error (what was read is kept).
+- 116 automated tests.
+
+## [6.13.1]
+
+Two small things learned from the open-source program Buzz:
+
+- **The computer stays awake** while a meeting or a recording runs: Windows no longer sleeps or turns the screen off in the middle of a long interview where you only listen (that used to stop the sound capture).
+- **Web subtitles (.vtt)** in Export, next to .srt.
+- 104 automated tests.
+
 ## [6.13]
 
 **New models** (Setup › Services › New models): the program looks in three public lists, with no key needed — models.dev (models sold by OpenAI, Google, Mistral, Groq, xAI, DeepSeek, Azure and many others, with prices and release dates), OpenRouter (hundreds of models behind one key, many of them free) and Hugging Face (new speech-to-text models).
