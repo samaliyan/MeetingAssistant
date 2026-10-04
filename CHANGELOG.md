@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.20]
+
+**A test fixed, nothing in the program changed.** One of the 141 automated tests for "Hide from screen sharing" wrongly assumed the Windows version number is always 0 (true only when the test runs outside Windows). On the GitHub check that runs on a real Windows machine, the version number is real (for example 26100), so the test failed there even though the program itself was correct. The test now checks the real number on Windows and the placeholder number everywhere else. 141 automated tests.
+
 ## [6.19]
 
 **Eight new helpers for meetings.** Each one has its own switch in Setup › Features.

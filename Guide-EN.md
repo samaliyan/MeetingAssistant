@@ -1,4 +1,4 @@
-# Meeting Assistant — User Guide (version 6.19)
+# Meeting Assistant — User Guide (version 6.20)
 
 ## Version 6.19: eight new helpers
 

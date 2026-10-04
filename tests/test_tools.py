@@ -2512,13 +2512,19 @@ def test_new_parts_are_off_for_someone_without_the_answers_service(app):
 
 # ---- 6.19: "is it really hidden from screen sharing?" (version detection + self-test judge) ----
 def test_hide_capture_support_and_build(app):
-    import ctypes
-    assert app.windows_build() == 0 and app.capture_hide_supported() is False      # not Windows here
+    import sys
     assert app.WIN_HIDE_BUILD == 19041
+    b = app.windows_build()
+    if sys.platform != "win32":
+        assert b == 0 and app.capture_hide_supported() is False                    # not Windows: no build, no hiding
+    else:
+        assert b > 0 and app.capture_hide_supported() is (b >= app.WIN_HIDE_BUILD)  # the real build decides
+    assert app.windows_build() == b                                                 # cached, stable
     pub = app.App()
     try:
         c = pub.public_config()
-        assert c["hide_capture_supported"] is False and c["win_build"] == 0 and c["hide_possible"] is False
+        assert c["win_build"] == b and c["hide_capture_supported"] == (b >= app.WIN_HIDE_BUILD)
+        assert isinstance(c["hide_possible"], bool)
     finally:
         pub.closing.set()
 
