@@ -116,3 +116,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: dist/MeetingAssistant.exe
+
+  startup:
+    name: Startup on Windows
+    # starts the new exe and the last release on a real Windows machine: how fast the program and its window
+    # are up, the overlay, and a clean quit when the window is closed. Fails only when the new exe is broken.
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: WebView2 runtime (the window that can hide from screen sharing)
+        continue-on-error: true
+        run: choco install webview2-runtime -y --no-progress
+
+      - name: Get the new exe
+        uses: actions/download-artifact@v4
+        with:
+          name: MeetingAssistant-${{ github.sha }}-Windows-x64
+          path: new
+
+      - name: Get the last release (to compare)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir old
+
+      - name: Start them and measure
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_startup_check.py new/MeetingAssistant.exe old/MeetingAssistant.exe | Tee-Object -FilePath startup-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-report
+          path: startup-report.txt
+          if-no-files-found: ignore
+          retention-days: 14

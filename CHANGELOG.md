@@ -2,6 +2,14 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.24]
+
+**Faster start, and the overlay opens at once.** The program is one .exe file, so at every start Windows first unpacks the whole program (about 100 MB since 6.14) into a temporary folder. The hidden window (Hide from screen sharing) and the see-through window (overlay) started the program a second time, and each unpacked everything again. They now use the copy that is already unpacked. Measured on a Windows machine: the window is open after 5.1 s instead of 6.7 s, and the overlay opens in 1.8 s instead of 5.3 s. On a computer with an antivirus that checks every unpacked file, the gain is larger. The program still quits cleanly and removes its temporary folder.
+
+**Model messages corrected.** The 6.23 messages pointed to "Setup › Audio", which has no model setting: both model boxes are in **Setup › Services** (**Local model** for speech to text, **Local AI model** for translation and answers). And a Whisper model in `.gguf` form cannot be used at all: the speech engine in the program (whisper.cpp) reads only `ggml-….bin` files, so 6.23 was wrong to accept it. It is now refused with a clear message: download a speech model from the list in Setup › Services › Local model instead.
+
+**A new check on every change:** GitHub now starts the new exe and the last release on a real Windows machine and compares how fast each starts, opens the overlay, and quits. 144 automated tests.
+
 ## [6.23]
 
 **A clear message when a model is in the wrong place, and .gguf speech models now work.** A downloaded Whisper model (a `.gguf` file) put in **Local AI model** failed with the unhelpful *"Failed to load model from file"*. That box is for a chat model (translation and answers), such as gemma3-4b; a Whisper model is for speech to text. Now the program reads what is inside the `.gguf` file and knows which kind it is: a Whisper model placed under Local AI model is refused with a message pointing to **Setup › Audio**, and a chat model placed under speech to text is pointed back to **Local AI model**. The speech-to-text box also accepts a Whisper model in `.gguf` form now, not only the older `ggml-….bin` files. 143 automated tests.
