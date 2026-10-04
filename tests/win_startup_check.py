@@ -143,6 +143,13 @@ def run_once(exe):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def note(line):
+    """Also shown on the GitHub page of the run (an annotation), where it can be read without the log."""
+    print(line, flush=True)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print("::notice title=Startup::" + line.replace("%", "%25").replace("\n", " "), flush=True)
+
+
 def fmt(v, unit="s"):
     return "-" if v is None else (f"{v:.1f} {unit}" if isinstance(v, float) else f"{v}")
 
@@ -164,14 +171,14 @@ def main():
         for label, exe in exes:
             r = run_once(exe)
             results[label].append(r)
-            print(f"run {i + 1} {label}: running after {fmt(r['port'])}, window after {fmt(r['window'])}, "
+            note(f"run {i + 1} {label}: running after {fmt(r['port'])}, window after {fmt(r['window'])}, "
                   f"unpacked {fmt(r['unpacked'], '')}x, overlay {fmt(r['overlay'])}, quit {fmt(r['exit'])} after "
                   f"closing, temp folders left {fmt(r['left_temp'], '')}" + (f"  !! {r['error']}" if r["error"] else ""),
-                  flush=True)
+                 )
     print("\nmedian of the runs:")
     for label, _ in exes:
         rs = results[label]
-        print(f"  {label}: running {fmt(med(rs, 'port'))} · window {fmt(med(rs, 'window'))} · "
+        note(f"{label} median: running {fmt(med(rs, 'port'))} · window {fmt(med(rs, 'window'))} · "
               f"unpacked {fmt(med(rs, 'unpacked'), '')}x · overlay {fmt(med(rs, 'overlay'))}")
     fails = []
     new = results["NEW"]
@@ -188,7 +195,7 @@ def main():
         fails.append("the overlay opened with the old exe but not with the new one")
     if old and med(new, "window") and med(old, "window") and med(new, "window") > med(old, "window") * 1.15:
         print("WARNING: the new exe opened its window more slowly than the old one")
-    print("\nRESULT: " + ("OK" if not fails else "FAILED - " + "; ".join(fails)))
+    note("RESULT: " + ("OK" if not fails else "FAILED - " + "; ".join(fails)))
     return 1 if fails else 0
 
 
