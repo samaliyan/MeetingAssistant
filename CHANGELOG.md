@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.22]
+
+**No translation for a meeting in your own language.** When the meeting language (Setup › Meeting) is only your own language (Setup › Meeting › My language), nothing is translated any more — also not the live translation shown while someone is still speaking, which before was still sent (it used the service's limits for nothing and could show the same sentence twice). Finished lines in your language were already left untranslated. To turn translation off completely, use Setup › Features › Translation. 142 automated tests.
+
 ## [6.21]
 
 **"Test it now" fixed.** The **Test it now** button for "Hide from screen sharing" said *"The hidden window could not be found"* even when the window was open and really hidden. The exe (and the Python version started from `venv`) runs the hidden window in a second, inner process, and the test was looking for the window in the outer one, which has no window. The hidden window now reports which process it really is, and the test looks there. Hiding itself was not affected — only the test. 141 automated tests.

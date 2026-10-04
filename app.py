@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.21"
+VERSION = "6.22"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
