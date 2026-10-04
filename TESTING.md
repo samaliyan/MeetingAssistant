@@ -30,7 +30,7 @@ Ways of checking:
 | Web page: transcript, answer panel, settings, tools | – | yes | yes | – | WebView2 differences, fonts |
 | Long meetings (thousands of lines) | – | yes (1500 lines) | yes | – | 3-hour real meeting |
 | See-through window: open, click-through, alpha, position | logic only | page only | yes | yes | Teams / Zoom / Meet |
-| Hidden from screen sharing | – | – | yes | yes (affinity flag) | seeing it from the other side of a call |
+| Hidden from screen sharing (6.19: Windows version read with RtlGetVersion; black-box fallback stated in advance; "Test it now" self-test) | yes (the self-test judge with made-up pixels; version detection; action guards) | yes (the setup screen, the three-choice message, the black-box warning) | yes | yes (affinity flag) | real Windows capture with BitBlt / PrintWindow, seeing it from the other side of a call, old Windows (before 2004) |
 | Move / resize with mouse and keys | – | – | yes | yes (best effort) | different DPI, several monitors |
 | Global keys (Ctrl+Alt …) | – | – | yes | yes (best effort) | keyboard layouts with AltGr |
 | Microphone and computer sound (WASAPI) | – | – | yes | – | devices, sleep / wake, Bluetooth |
@@ -71,3 +71,5 @@ Setup › Services › **Check this computer** tests the Windows parts on the us
 - 6.19 meeting reminder: Teams in a web browser and meetings whose window title has no "Meeting" or "Call" are not noticed.
 - 6.19 say mode: with a live service (Deepgram) your speech is still sent to it while say mode is on (it is not shown).
 - 6.19 say mode: there is no echo check on the say piece; use headphones.
+- 6.19 "Test it now" for hiding: the pixel capture half (BitBlt + PrintWindow) is logic-reviewed only; it has not been run on a real Windows screen share. The decision logic (judge_hide) is unit-tested. The flag Windows itself reports (GetWindowDisplayAffinity) is always the authoritative signal.
+- Hiding the mouse cursor from the other side only (while the user still sees it) is not possible on Windows and was not added.

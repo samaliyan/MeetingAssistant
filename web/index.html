@@ -767,7 +767,9 @@ kbd{opacity:1}
 /* ---------- narrow windows ---------- */
 @media (max-width:1180px){ .card-head .legend{display:none} }
 body:not(.capturing) .card-head .legend{display:none}
-@media (max-width:1400px){ .card-head .btn.sm:not(.keep-label) .hide-sm{display:none} .card-head .btn.sm:not(.keep-label){width:32px;padding:0} }
+@media (max-width:1400px){ .card-head .btn.sm:not(.keep-label) .hide-sm{display:none}
+.hide-test{display:flex;align-items:center;gap:10px;margin:8px 0 2px;flex-wrap:wrap}
+.hide-test .help.ok{color:var(--ok)} .hide-test .help.err{color:var(--danger)} .card-head .btn.sm:not(.keep-label){width:32px;padding:0} }
 @media (max-width:1350px){ #sbDelay{display:none} }
 body.capturing #sbDelay,body.capturing #sbUsage{display:none}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -1315,6 +1317,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <span class="label">Screen sharing</span>
         <label class="toggle"><input type="checkbox" id="hideToggle"><span class="switch"></span><span class="tt"><b>Hide this window from screen sharing</b><span>Zoom, Teams, Meet and screen recordings will not show it. Applies after you close the program and open it again.</span></span></label>
         <div class="help" id="hideStatus"></div>
+        <div class="hide-test" id="hideTestRow" hidden><button class="btn sm ghost" id="hideTestBtn"><span data-icon="eye"></span>Test it now</button><span class="help" id="hideTestResult"></span></div>
         <div class="warn-box"><span data-icon="alert"></span><span><b>Please read.</b> Some companies and interviewers forbid the use of an assistant during interviews and may treat it as cheating. Hiding the window does not make its use allowed. Use it only where it is permitted, and follow the rules of the company or school.</span></div>
       </div>
       <div class="field">
@@ -1427,7 +1430,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <div class="tool-body">
       <p><b>Some companies and interviewers forbid the use of an assistant in interviews</b> and may treat it as cheating. Hiding this window from screen sharing does not make the use allowed.</p>
       <p>You are responsible for following the rules of the company, school or exam. Use this only where it is permitted.</p>
-      <p class="help">Windows only removes this window from screen capture — it does not remove the taskbar button, and it cannot be checked from here. Test it once with a private share.</p>
+      <p class="help" id="hidePreNote">Windows only removes this window from screen capture — it does not remove the taskbar button. After you turn it on and restart, use “Test it now” to check it on this computer. A phone photo of the screen, or a hardware capture card, can still show it.</p>
     </div>
     <div class="modal-note" style="justify-content:flex-end;gap:8px"><button class="btn" id="hideNo">Cancel</button><button class="btn primary" id="hideYes">I understand — hide it</button></div>
   </div>
@@ -1491,7 +1494,7 @@ const S = {
 };
 
 // actions that really take long (they run tests or wait for services); everything else answers quickly
-const SLOW_API = {glossary_suggest: 120, recording_link: 60, model_news: 90, selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
+const SLOW_API = {hide_test: 30, glossary_suggest: 120, recording_link: 60, model_news: 90, selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
                   audio_check: 90, test_proxy: 60, test_connection: 60, local_delete: 60, stop: 60, start: 60,
                   say: 75, search_meetings: 75, export: 60, about_file: 60};
 async function api(name, body={}){
@@ -4526,24 +4529,51 @@ function renderScreenRow(){
 function renderHide(){
   const c = S.cfg; if(!c) return;
   const st = S.hide, wanted = !!c.hide_from_share, pill = $("#hidePill");
+  const oldWin = c.hide_possible && c.hide_capture_supported === false;    // Windows older than version 2004
   if(!S.hideAsk) $("#hideToggle").checked = wanted;
   let cls = "", txt = "", detail = "";
-  if(st && st.active){ cls = "hid"; txt = "Hidden from screen sharing"; detail = st.mode === "black"
-      ? "The window is hidden from screen sharing (older Windows shows it as a black window to others)."
-      : "The window is hidden from screen sharing. Windows only sets this flag: test it once with a private share to a friend."; }
+  const blackNote = "On this Windows (older than version 2004) the window cannot be made invisible — the other side sees a BLACK box where it is. "
+    + "You can: keep it like this, or turn it off so there is no black box, or share only a single window in Teams or Zoom instead of the whole screen.";
+  if(st && st.active){ cls = st.mode === "black" ? "problem" : "hid"; txt = st.mode === "black" ? "Hidden as a black box" : "Hidden from screen sharing";
+    detail = st.mode === "black" ? blackNote
+      : "The window is hidden from screen sharing. Press “Test it now” below to check it on this computer."; }
   else if(wanted && st && st.error){ cls = "problem"; txt = "NOT hidden"; detail = "Not hidden: " + st.error + " A normal window is shown — everyone in a screen share can see it."; }
-  else if(wanted){ cls = "busy"; txt = "Hidden after restart"; detail = "Close this window and open the program again to apply it."; }
+  else if(wanted){ cls = "busy"; txt = "Hidden after restart"; detail = oldWin ? blackNote : "Close this window and open the program again to apply it."; }
   else if(st && st.active){ cls = "hid"; txt = "Still hidden (until restart)"; detail = "Hiding is off, but this window stays hidden until you restart the program."; }
   pill.hidden = !cls; pill.className = "pill " + cls; pill.innerHTML = `<span class="dot"></span>${esc(txt)}`; pill.title = detail;
   const stt = $("#hideStatus");
   stt.className = "help"; stt.textContent = detail;
   if(!c.hide_possible){ stt.textContent = "Not available in this copy of the program (it needs Windows and the “pywebview” package — use the ready-made exe from the release page, or run install.bat again)."; }
+  else if(oldWin && !detail){ stt.textContent = blackNote; }
   $("#hideToggle").disabled = !c.hide_possible && !wanted;
+  const row = $("#hideTestRow"); if(row){ row.hidden = !(st && st.active); if(row.hidden) $("#hideTestResult").textContent = ""; }
+}
+async function runHideTest(){
+  const b = $("#hideTestBtn"), out = $("#hideTestResult");
+  b.disabled = true; out.className = "help"; out.innerHTML = `<span class="spinner"></span>Checking…`;
+  const r = await api("hide_test");
+  b.disabled = false;
+  if(!r.ok){ out.className = "help err"; out.textContent = r.error || "The test could not run."; return; }
+  const map = {
+    hidden: ["ok", "✓ Works: in a screen share this window is invisible to the other side. (A phone photo of the screen can still show it.)"],
+    black: ["err", "⚠ The other side would see a BLACK box where this window is — this Windows is older than version 2004. Share a single window instead of the whole screen, or turn hiding off."],
+    visible: ["err", "✗ The other side WOULD see this window. Hiding is not working on this computer right now."],
+    unknown: ["", "Could not tell for sure. Try once with a real private share to a friend."]
+  };
+  const m = map[r.result] || map.unknown;
+  out.className = "help " + (m[0] === "ok" ? "ok" : m[0] === "err" ? "err" : "");
+  out.textContent = m[1];
 }
 $("#hidePill").onclick = () => openDrawer("display");
+$("#hideTestBtn").onclick = runHideTest;
 $("#hideToggle").onchange = () => {
   if(!S.cfg) return;
-  if($("#hideToggle").checked){ S.hideAsk = true; $("#hideModal").hidden = false; setTimeout(() => $("#hideYes").focus(), 0); }
+  if($("#hideToggle").checked){
+    const note = $("#hidePreNote");
+    if(S.cfg.hide_capture_supported === false) note.innerHTML = `<b>Your Windows is older than version 2004.</b> This window cannot be made invisible — the other side will see a <b>black box</b> where it is. You can share a single window instead of the whole screen, or use a newer Windows.`;
+    else note.textContent = "Windows only removes this window from screen capture — it does not remove the taskbar button. After you turn it on and restart, use “Test it now” to check it on this computer. A phone photo of the screen, or a hardware capture card, can still show it.";
+    S.hideAsk = true; $("#hideModal").hidden = false; setTimeout(() => $("#hideYes").focus(), 0);
+  }
   else { S.cfg.hide_from_share = false; queueSave({hide_from_share: false}); renderHide(); }
 };
 function closeHideAsk(on){

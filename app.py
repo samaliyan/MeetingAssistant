@@ -10219,6 +10219,8 @@ class App:
         c["langs"] = LANGS
         c["about_info"] = about_info(self.cfg)
         c["hide_possible"] = hidden_window_possible()
+        c["hide_capture_supported"] = capture_hide_supported()      # false on old Windows: hiding only makes it a black box
+        c["win_build"] = windows_build()
         c["modes"] = {k: v["name"] for k, v in MODES.items()}
         c["tasks"] = self.task_status()
         need = self.needed_tasks()
@@ -11422,6 +11424,29 @@ class App:
         self._reveal(path, select=True)
         return {"ok": True, "path": path, "name": os.path.basename(path)}
 
+    def api_hide_test(self):
+        """Checks on THIS computer whether 'hide from screen sharing' really works: it captures the hidden window the
+        way a screen share would and reports if the other side would see it, a black box, or nothing."""
+        if sys.platform != "win32":
+            return {"ok": False, "error": "This test only runs on Windows."}
+        st = read_hide_status()
+        if not st or not st.get("active"):
+            return {"ok": False, "error": "The hidden window is not on. Turn on hiding, restart the program, then test."}
+        p = HIDDEN_PROC[-1] if HIDDEN_PROC else None
+        if p is None or p.poll() is not None:
+            return {"ok": False, "error": "The hidden window is not running. Restart the program and test again."}
+        try:
+            r = _hide_capture_test(p.pid)
+        except Exception as e:
+            log("hide test failed:", traceback.format_exc(), level="warn")
+            return {"ok": False, "error": "The test could not run: " + short(e, 140)}
+        r["build"] = windows_build()
+        r["supported"] = capture_hide_supported()
+        if r.get("ok"):
+            log(f"Hide self-test: result={r.get('result')} affinity={r.get('affinity')} "
+                f"match={r.get('match')} black={r.get('black')} build={r['build']}")
+        return r
+
     def api_overlay(self, on=None):
         """The see-through, click-through window with the question and the answer (also the global key Ctrl+Alt+O)."""
         want = (not self.overlay.on) if on is None else bool(on)
@@ -11544,8 +11569,10 @@ class App:
                     st = read_hide_status(OVERLAY_STATUS_PATH) or {}
                     add("Overlay opens", "ok" if took < 8 else "warn", f"in {took:.1f} s" + ("" if took < 8 else " (slow: antivirus scanning the program?)"))
                     mode = st.get("mode")
-                    add("Hidden from screen sharing", "ok" if mode == "hidden" else "warn",
-                        {"hidden": "yes: Windows hides the window from a shared screen", "shown": "no: " + (st.get("error") or "the window is visible to others")}.get(mode, "not known (the simple window is used: it is visible)"))
+                    add("Hidden from screen sharing", "ok" if mode == "exclude" else "warn",
+                        {"exclude": "yes: Windows removes the window from a shared screen",
+                         "black": "partly: this Windows is older than version 2004, so the window shows as a black box to others",
+                         "shown": "no: " + (st.get("error") or "the window is visible to others")}.get(mode, "not known (the simple window is used: it is visible)"))
                     time.sleep(3)
                     self.overlay.stop()
         elif overlay_live:
@@ -13457,6 +13484,39 @@ def trim_window_profile():
 HIDE_STATUS_PATH = os.path.join(DATA_DIR, ".hide.json")
 HIDDEN_STORAGE = os.path.join(DATA_DIR, ".window_hidden")
 WDA_MONITOR, WDA_EXCLUDEFROMCAPTURE = 0x1, 0x11
+WIN_HIDE_BUILD = 19041            # Windows 10 version 2004: the first that can truly remove a window from capture
+_WIN_BUILD = []
+
+
+def windows_build():
+    """The real Windows build number (e.g. 19041 = version 2004), or 0 off Windows / on failure.
+    RtlGetVersion is used on purpose: unlike GetVersionEx it is not changed by compatibility settings."""
+    if sys.platform != "win32":
+        return 0
+    if _WIN_BUILD:
+        return _WIN_BUILD[0]
+    b = 0
+    try:
+        import ctypes
+
+        class OSVERSIONINFOW(ctypes.Structure):
+            _fields_ = [("dwOSVersionInfoSize", ctypes.c_ulong), ("dwMajorVersion", ctypes.c_ulong),
+                        ("dwMinorVersion", ctypes.c_ulong), ("dwBuildNumber", ctypes.c_ulong),
+                        ("dwPlatformId", ctypes.c_ulong), ("szCSDVersion", ctypes.c_wchar * 128)]
+        info = OSVERSIONINFOW()
+        info.dwOSVersionInfoSize = ctypes.sizeof(info)
+        if ctypes.windll.ntdll.RtlGetVersion(ctypes.byref(info)) == 0:
+            b = int(info.dwBuildNumber)
+    except Exception:
+        b = 0
+    _WIN_BUILD.append(b)
+    return b
+
+
+def capture_hide_supported():
+    """True when this Windows can really make a window invisible in screen sharing (build 19041 / version 2004 or newer).
+    Below that, only the old mode exists: the window shows as a black rectangle to the other side."""
+    return windows_build() >= WIN_HIDE_BUILD
 
 
 def hide_wanted():
@@ -13586,7 +13646,138 @@ def _win_window_tools(pid):
     def get_aff(hwnd):
         v = wt.DWORD()
         return v.value if u.GetWindowDisplayAffinity(hwnd, ctypes.byref(v)) else None
-    return find, set_aff, get_aff
+
+    def rect_of(hwnd):
+        r = wt.RECT()
+        if hwnd and u.GetWindowRect(hwnd, ctypes.byref(r)):
+            return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        return None
+    return find, set_aff, get_aff, rect_of
+
+
+def judge_hide(share, truth):
+    """The heart of the 'is it really hidden?' test, kept separate so it can be tested without Windows.
+    share  = sample pixels of the window area as a SCREEN SHARE would capture them (BitBlt, honours the hide flag);
+    truth  = the SAME points taken from the window itself (PrintWindow, ignores the flag) — what the window shows.
+    Each is a list of (r, g, b). Returns (result, match_fraction, black_fraction):
+      'visible' the share shows the window (NOT hidden) · 'black' a black rectangle (old Windows) · 'hidden' the share
+      shows the background instead (truly hidden) · 'unknown' no pixels."""
+    n = min(len(share), len(truth))
+    if n == 0:
+        return "unknown", 0.0, 0.0
+    close = lambda a, b: abs(a[0] - b[0]) <= 26 and abs(a[1] - b[1]) <= 26 and abs(a[2] - b[2]) <= 26
+    dark = lambda a: a[0] <= 24 and a[1] <= 24 and a[2] <= 24
+    match = sum(1 for i in range(n) if close(share[i], truth[i])) / n
+    blk = sum(1 for i in range(n) if dark(share[i])) / n
+    truth_dark = sum(1 for i in range(n) if dark(truth[i])) / n
+    if match >= 0.55:
+        return "visible", match, blk                   # the share and the window look the same: it is visible
+    if blk >= 0.6 and truth_dark < 0.6:
+        return "black", match, blk                     # the share is a black box but the window is not: old mode
+    return "hidden", match, blk                        # the share shows something else (the background): hidden
+
+
+def _hide_capture_test(pid):
+    """Captures the hidden window the way a screen share does (GDI BitBlt, which honours the hide flag) and also
+    directly (PrintWindow, which does not), then compares them. Windows only. Returns a dict for the window."""
+    import ctypes
+    from ctypes import wintypes as wt
+    u, g = ctypes.windll.user32, ctypes.windll.gdi32
+    find, set_aff, get_aff, rect_of = _win_window_tools(pid)
+    u.GetDC.argtypes = [wt.HWND]; u.GetDC.restype = wt.HDC
+    u.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
+    u.PrintWindow.argtypes = [wt.HWND, wt.HDC, wt.UINT]; u.PrintWindow.restype = wt.BOOL
+    g.CreateCompatibleDC.argtypes = [wt.HDC]; g.CreateCompatibleDC.restype = wt.HDC
+    g.CreateCompatibleBitmap.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int]; g.CreateCompatibleBitmap.restype = wt.HBITMAP
+    g.SelectObject.argtypes = [wt.HDC, wt.HGDIOBJ]; g.SelectObject.restype = wt.HGDIOBJ
+    g.BitBlt.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.HDC,
+                         ctypes.c_int, ctypes.c_int, wt.DWORD]
+    g.GetDIBits.argtypes = [wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
+    g.DeleteObject.argtypes = [wt.HGDIOBJ]; g.DeleteDC.argtypes = [wt.HDC]
+
+    class BMIH(ctypes.Structure):
+        _fields_ = [("biSize", wt.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                    ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                    ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", ctypes.c_long), ("biYPelsPerMeter", ctypes.c_long),
+                    ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+    def dib(draw):
+        """draw(mdc, w, h) fills a memory DC; returns sample pixels (a grid), inset from the edges (borders differ)."""
+        hdc = u.GetDC(None)
+        mdc = g.CreateCompatibleDC(hdc)
+        bmp = g.CreateCompatibleBitmap(hdc, w, h)
+        old = g.SelectObject(mdc, bmp)
+        pts = []
+        try:
+            if not draw(mdc):
+                return None
+            g.SelectObject(mdc, old)                       # GetDIBits needs the bitmap NOT selected into any DC
+            old = None
+            bi = BMIH()
+            bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(BMIH), w, -h, 1, 32
+            buf = ctypes.create_string_buffer(w * h * 4)
+            if not g.GetDIBits(hdc, bmp, 0, h, buf, ctypes.byref(bi), 0):
+                return None
+            raw = buf.raw
+            for gy in range(1, 8):
+                for gx in range(1, 8):
+                    px, py = w * gx // 8, h * gy // 8
+                    o = (py * w + px) * 4
+                    pts.append((raw[o + 2], raw[o + 1], raw[o]))       # BGRA -> RGB
+            return pts
+        finally:
+            if old:
+                g.SelectObject(mdc, old)
+            g.DeleteObject(bmp)
+            g.DeleteDC(mdc)
+            u.ReleaseDC(None, hdc)
+
+    old_ctx = None
+    try:
+        u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        old_ctx = u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))   # real pixels on a scaled screen
+    except (AttributeError, OSError):
+        pass
+    try:
+        hwnd = find()
+        if not hwnd:
+            return {"ok": False, "error": "The hidden window could not be found. Make sure it is open."}
+        rc = rect_of(hwnd)
+        if not rc or rc[2] <= 0 or rc[3] <= 0:
+            return {"ok": False, "error": "The hidden window has no size yet. Try again in a moment."}
+        x, y, w, h = rc
+        if w * h > 40_000_000:
+            return {"ok": False, "error": "The window is too large to test."}
+        aff = get_aff(hwnd)
+        aff_name = "exclude" if aff == WDA_EXCLUDEFROMCAPTURE else "black" if aff == WDA_MONITOR else "none"
+
+        def blit_share(mdc):
+            sdc = u.GetDC(None)
+            try:
+                return bool(g.BitBlt(mdc, 0, 0, w, h, sdc, x, y, 0x00CC0020 | 0x40000000))   # SRCCOPY | CAPTUREBLT
+            finally:
+                u.ReleaseDC(None, sdc)
+        share = dib(blit_share)
+        truth = dib(lambda mdc: bool(u.PrintWindow(hwnd, mdc, 2)))     # 2 = PW_RENDERFULLCONTENT
+        if not share or not truth:
+            # a capture failed: fall back to the flag Windows reports, which is authoritative anyway
+            result = "hidden" if aff == WDA_EXCLUDEFROMCAPTURE else "black" if aff == WDA_MONITOR else "visible"
+            return {"ok": True, "result": result, "affinity": aff_name, "measured": False}
+        result, match, blk = judge_hide(share, truth)
+        # the flag Windows reports is the stronger signal; the picture only confirms the capture path obeys it
+        if aff == WDA_EXCLUDEFROMCAPTURE and result in ("black", "visible"):
+            result = "hidden"                              # Windows is excluding it: trust the flag over a lookalike background
+        if aff not in (WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR) and result == "hidden":
+            result = "visible"
+        return {"ok": True, "result": result, "affinity": aff_name, "measured": bool(share),
+                "match": round(match, 2), "black": round(blk, 2)}
+    finally:
+        if old_ctx:
+            try:
+                u.SetThreadDpiAwarenessContext(ctypes.c_void_p(old_ctx))
+            except OSError:
+                pass
 
 
 def run_window_helper(argv):
@@ -13603,7 +13794,7 @@ def run_window_helper(argv):
         return 3
     stop = threading.Event()
     closed_normally = False
-    find, set_aff, get_aff = _win_window_tools(os.getpid())
+    find, set_aff, get_aff, _rect_of = _win_window_tools(os.getpid())
     write = lambda a, m, e: write_hide_status(status, a, m, e)
 
     def worker():
@@ -13723,7 +13914,7 @@ def run_overlay_helper(argv):
         pass
     st = {"x": x, "y": y, "w": w, "h": h, "move": False}
     stop = threading.Event()
-    find, set_aff, get_aff = _win_window_tools(os.getpid())
+    find, set_aff, get_aff, _rect_of = _win_window_tools(os.getpid())
 
     def settings():
         try:
@@ -13787,9 +13978,12 @@ def run_overlay_helper(argv):
                 return
             alpha, hide = settings()
             apply(hwnd, alpha, hide, place=True)
-            mode_ok = (not hide) or get_aff(hwnd) in (WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR)
-            write_hide_status(status, True, "hidden" if hide and mode_ok else "shown",
-                              "" if mode_ok else "Windows would not hide the see-through window from screen sharing: it is visible.")
+            aff = get_aff(hwnd)
+            mode = ("shown" if not hide else "exclude" if aff == WDA_EXCLUDEFROMCAPTURE
+                    else "black" if aff == WDA_MONITOR else "shown")
+            write_hide_status(status, True, mode,
+                              "" if mode != "shown" or not hide else
+                              "Windows would not hide the see-through window from screen sharing: it is visible.")
             keys = {}
             for i, (vk, mod) in enumerate([(0x4D, 0x2 | 0x1 | 0x4000), (0x25, 0x2 | 0x1 | 0x4), (0x27, 0x2 | 0x1 | 0x4),
                                            (0x26, 0x2 | 0x1 | 0x4), (0x28, 0x2 | 0x1 | 0x4),
@@ -13886,6 +14080,9 @@ def note_hide_failure(msg):
         app.hub.toast("error", "The window could NOT be hidden from screen sharing — it is visible now. " + msg)
 
 
+HIDDEN_PROC = []            # the running hidden-window process, so the self-test can find its window
+
+
 def open_hidden_window(url):
     """True when the hidden window is up and its hiding is on."""
     if not hidden_window_possible():
@@ -13908,6 +14105,7 @@ def open_hidden_window(url):
         if st is not None:
             if st["active"]:
                 log(f"Window hidden from screen sharing ({st['mode']})")
+                HIDDEN_PROC[:] = [p]
                 return True
             try:
                 p.terminate()
@@ -14115,6 +14313,9 @@ class Overlay:
                     self.on = True
                     if st.get("error"):
                         self.app.hub.toast("warn", st["error"])
+                    elif st.get("mode") == "black":
+                        self.app.hub.toast("warn", "The see-through window is hidden, but this Windows is older than "
+                                           "version 2004, so others in a screen share see a black box where it is.")
                     return None
                 self._kill_proc()
                 return st["error"] or "the helper window did not start."

@@ -15,7 +15,8 @@ All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [G
 - **Speaker names**: click "Person 1" on a line and type a name (for example Interviewer or John); every line, the summary and the export use it.
 - **How did I do?** lists the filler words you used ("um", "you know", "like," …) per minute and says if your pace was slow, easy to follow or fast.
 - Someone who used the program without the answers service (answers and "after the meeting" off) keeps it that way: the two new parts that need it start off.
-- 138 automated tests.
+- **Hide from screen sharing — now honest and checkable.** The program reads the real Windows version (RtlGetVersion); on Windows older than version 2004, where the window can only be shown as a black box, it says so in advance instead of surprising you mid-meeting, and offers the three choices (keep it, turn it off, or share a single window). A **Test it now** button checks on your own computer whether the window is really invisible, a black box, or visible — by capturing it the way a screen share would and comparing. The overlay reports the black-box case too. (A phone photo of the screen or a hardware capture card can still show it — this is a Windows limit, not something any program can remove.)
+- 141 automated tests.
 
 ## [6.18]
 

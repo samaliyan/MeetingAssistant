@@ -2508,3 +2508,39 @@ def test_new_parts_are_off_for_someone_without_the_answers_service(app):
     with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:              # a 6.19 file is taken as it is
         _j.dump({"config_version": 6, "api_key": "gsk_x", "features": {"answers": False, "after": False}}, f)
     assert app.feat(app.load_config(), "say")
+
+
+# ---- 6.19: "is it really hidden from screen sharing?" (version detection + self-test judge) ----
+def test_hide_capture_support_and_build(app):
+    import ctypes
+    assert app.windows_build() == 0 and app.capture_hide_supported() is False      # not Windows here
+    assert app.WIN_HIDE_BUILD == 19041
+    pub = app.App()
+    try:
+        c = pub.public_config()
+        assert c["hide_capture_supported"] is False and c["win_build"] == 0 and c["hide_possible"] is False
+    finally:
+        pub.closing.set()
+
+
+def test_judge_hide(app):
+    bg = [(210, 210, 210)] * 49       # the background behind the window (bright)
+    win = [(20, 110, 240)] * 49       # the window's own look
+    black = [(0, 0, 0)] * 49
+    assert app.judge_hide(win, win)[0] == "visible"        # the share shows the window
+    assert app.judge_hide(bg, win)[0] == "hidden"          # the share shows the background instead
+    assert app.judge_hide(black, win)[0] == "black"        # the share is a black box, the window is not
+    assert app.judge_hide(bg, black)[0] == "hidden"        # a dark window is not mistaken for the black-box mode
+    assert app.judge_hide(black, black)[0] != "black"      # (both dark: cannot claim the black-box mode)
+    assert app.judge_hide([], [])[0] == "unknown"
+    r, match, blk = app.judge_hide(bg, win)
+    assert 0.0 <= match <= 1.0 and blk == 0.0
+
+
+def test_hide_test_action_guards(app):
+    a = app.App()
+    try:
+        r = a.api_hide_test()
+        assert r["ok"] is False and ("Windows" in r["error"] or "hidden window" in r["error"])
+    finally:
+        a.closing.set()

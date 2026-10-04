@@ -12,6 +12,13 @@
 - **How did I do?**: filler words and speaking pace.
 - Every one can be turned off in Setup › Features.
 
+### Hide from screen sharing — check it works
+
+- Setup › Display › **Hide this window from screen sharing**.
+- On Windows older than version 2004 the window cannot be made invisible — the other side sees a black box. The program tells you this in advance.
+- After you turn it on and restart, press **Test it now** to check on your own computer whether it is really invisible.
+- A photo of the screen with a phone, or a hardware capture card, can still show it. No program can prevent that.
+
 ## Version 6.18: use only what you need
 
 - **Setup › Features**: turn parts off (translation, answers, coach, overlay, screen reading, interview prep, after the meeting, files). What is off is hidden, sends nothing and needs no service.
