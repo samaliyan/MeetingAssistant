@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.23]
+
+**A clear message when a model is in the wrong place, and .gguf speech models now work.** A downloaded Whisper model (a `.gguf` file) put in **Local AI model** failed with the unhelpful *"Failed to load model from file"*. That box is for a chat model (translation and answers), such as gemma3-4b; a Whisper model is for speech to text. Now the program reads what is inside the `.gguf` file and knows which kind it is: a Whisper model placed under Local AI model is refused with a message pointing to **Setup › Audio**, and a chat model placed under speech to text is pointed back to **Local AI model**. The speech-to-text box also accepts a Whisper model in `.gguf` form now, not only the older `ggml-….bin` files. 143 automated tests.
+
 ## [6.22]
 
 **No translation for a meeting in your own language.** When the meeting language (Setup › Meeting) is only your own language (Setup › Meeting › My language), nothing is translated any more — also not the live translation shown while someone is still speaking, which before was still sent (it used the service's limits for nothing and could show the same sentence twice). Finished lines in your language were already left untranslated. To turn translation off completely, use Setup › Features › Translation. 142 automated tests.
