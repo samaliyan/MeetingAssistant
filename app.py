@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.21"
+VERSION = "6.22"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -7830,6 +7830,8 @@ class Engine:
             return
         if not feat(self.cfg, "translate"):
             return
+        if fixed_lang(self.cfg) == self.cfg["my_language"]:
+            return          # the meeting is only in my language: the finished line is not translated, so neither is this
         if self.cfg["tr_provider"] == "llm":
             return          # the local AI model translates finished sentences only (it is too slow for more)
         n = len(text.split())
