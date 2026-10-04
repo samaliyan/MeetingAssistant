@@ -3446,10 +3446,15 @@ def model_folder(path):
         if name.endswith(".pt"):
             return "", ("This model is for the 'openai-whisper' program (.pt file). This program needs a "
                         "faster-whisper model: a folder with model.bin, config.json and tokenizer.json.")
-        if name.endswith(".bin") and name != "model.bin" and is_ggml(p):
+        cpp_like = name != "model.bin" and is_ggml(p) and (
+            name.endswith(".bin") or name.endswith(".gguf") or name.startswith("ggml"))
+        if cpp_like:
+            wrong = wrong_slot_message(p, "stt")
+            if wrong:
+                return "", wrong                               # a chat model (gemma, llama, ...) chosen here by mistake
             if cpp_server_path():
-                return os.path.abspath(p), ""                  # a whisper.cpp model: run by the whisper.cpp engine
-            return "", ("This is a whisper.cpp model (ggml). The whisper.cpp engine is not in this copy of the program "
+                return os.path.abspath(p), ""                  # a whisper.cpp model (ggml .bin or .gguf): the whisper.cpp engine runs it
+            return "", ("This is a whisper.cpp model. The whisper.cpp engine is not in this copy of the program "
                         "(it is in the Windows exe from the release page). Or use a faster-whisper model: a folder with "
                         "model.bin, config.json and tokenizer.json.")
         if name.endswith(".gguf") or name.startswith("ggml") or (name.endswith(".bin") and name != "model.bin"):
@@ -3482,6 +3487,63 @@ def is_ggml(path):
         return head in (b"lmgg", b"ggml", b"GGUF") or int.from_bytes(head, "little") == 0x67676d6c
     except OSError:
         return False
+
+
+def gguf_arch(path):
+    """The 'general.architecture' written inside a .gguf file ('whisper', 'gemma', 'llama', ...), lower-case,
+    or '' when the file is not a readable .gguf. A speech model (Whisper) and a chat model are both .gguf, so
+    this is how we tell them apart and send each to the right place."""
+    import struct
+    size = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}   # value type -> bytes
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"GGUF":
+                return ""
+            f.read(4)                                                 # format version
+            f.read(8)                                                 # number of tensors
+            n_kv = struct.unpack("<Q", f.read(8))[0]                  # number of key/value pairs
+
+            def skip(t):
+                if t == 8:                                            # string
+                    f.seek(struct.unpack("<Q", f.read(8))[0], 1)
+                elif t == 9:                                          # array
+                    et = struct.unpack("<I", f.read(4))[0]
+                    ln = struct.unpack("<Q", f.read(8))[0]
+                    if et == 8:
+                        for _ in range(ln):
+                            f.seek(struct.unpack("<Q", f.read(8))[0], 1)
+                    else:
+                        f.seek(size.get(et, 0) * ln, 1)
+                else:
+                    f.seek(size.get(t, 0), 1)
+
+            for _ in range(min(n_kv, 2000)):
+                klen = struct.unpack("<Q", f.read(8))[0]
+                key = f.read(klen)
+                t = struct.unpack("<I", f.read(4))[0]
+                if key == b"general.architecture":
+                    if t != 8:
+                        return ""
+                    vlen = struct.unpack("<Q", f.read(8))[0]
+                    return f.read(vlen).decode("ascii", "replace").strip().lower()
+                skip(t)
+    except (OSError, struct.error):
+        pass
+    return ""
+
+
+def wrong_slot_message(path, want):
+    """One clear sentence when a .gguf is chosen in the wrong place, or '' when it fits.
+    want='llm'  -> the Local AI model slot, which needs a chat / instruct model;
+    want='stt'  -> the speech-to-text slot, which needs a speech (Whisper) model."""
+    arch = gguf_arch(path)
+    if want == "llm" and arch == "whisper":
+        return ("This is a speech model (Whisper), not a chat model. Use it under Setup -> Audio for speech to text. "
+                "The Local AI model needs a chat / instruct model such as gemma3-4b.")
+    if want == "stt" and arch and arch != "whisper":
+        return (f"This is an AI chat model ({arch}), not a speech model. Use it under Setup -> Services -> Local AI model. "
+                "For speech to text use a faster-whisper folder or a whisper.cpp model.")
+    return ""
 
 
 def model_label(folder):
@@ -5020,6 +5082,9 @@ class LocalChat:
                 return
             import gc
             gc.collect()
+            wrong = wrong_slot_message(path, "llm")
+            if wrong:
+                raise RuntimeError(wrong)                        # a Whisper file left in the Local AI model slot
             pc = physical_cores()
             threads = max(1, min(8, pc - 1 if pc >= 6 else pc))
             m = mod.Llama(model_path=short_path(path), n_ctx=LLM_CTX, n_threads=threads, n_batch=256,
@@ -12487,6 +12552,9 @@ class App:
         if "mmproj" in os.path.basename(path).lower():
             return {**self.llm_state(), "ok": False,
                     "error": "That file is only the image part of a model — choose the main .gguf file."}
+        wrong = wrong_slot_message(path, "llm")
+        if wrong:
+            return {**self.llm_state(), "ok": False, "error": wrong}
         with self.lock:
             self.cfg["llm_model"] = path
             save_config(self.cfg)
