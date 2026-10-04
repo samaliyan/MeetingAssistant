@@ -694,6 +694,26 @@ def _engine(app):
     return eng, sess, calls
 
 
+def test_no_live_translation_when_the_meeting_is_in_my_language(app):
+    eng, sess, calls = _engine(app)
+    sent = []
+    eng.pv_pool.submit = lambda fn, *a: sent.append(a)
+    try:
+        eng.cfg["tr_provider"] = "groq"
+        eng.cfg["my_language"] = "fa"
+        eng.cfg["languages"] = ["fa"]                           # a Persian-only meeting, my language Persian
+        eng._preview_translate("k1", "them", "سلام این یک جمله‌ی نیمه‌تمام است", min_new=1)
+        assert sent == []                                       # nothing is sent to be translated
+        eng.cfg["languages"] = ["en"]                           # an English meeting: the live translation still runs
+        eng._preview_translate("k2", "them", "this is an unfinished sentence", min_new=1)
+        assert len(sent) == 1
+        eng.cfg["languages"] = ["en", "fa"]                     # two languages: the language is not known yet, so it runs
+        eng._preview_translate("k3", "them", "this is another unfinished sentence", min_new=1)
+        assert len(sent) == 2
+    finally:
+        eng.stop_event.set()
+
+
 def _say(app, eng, text, when=None):
     now = when or __import__("time").time()
     eng.accept_text("them", text, "en", now - 2, now - 0.1, [next(app._seg_counter)],

@@ -7830,6 +7830,8 @@ class Engine:
             return
         if not feat(self.cfg, "translate"):
             return
+        if fixed_lang(self.cfg) == self.cfg["my_language"]:
+            return          # the meeting is only in my language: the finished line is not translated, so neither is this
         if self.cfg["tr_provider"] == "llm":
             return          # the local AI model translates finished sentences only (it is too slow for more)
         n = len(text.split())
