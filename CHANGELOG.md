@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.18]
+
+**Use only what you need: Setup › Features.** Eight switches, one per part of the program:
+
+- **Translation**, **Suggested answers**, **Coach**, **Overlay**, **Screen reading**, **Interview prep** (job advert, practice), **After the meeting** (summary, How did I do?), **Files and links**. Speech to text is always on.
+- A part that is off is **hidden** (its buttons, its menu items, its panel — with answers and coach off, the transcript takes the whole width), **sends nothing**, and **needs no service**: Start only asks for the services of the parts that are on.
+- Three ready choices: **Text only**, **Text + translation**, **Full interview help** (everything, as before — the default).
+- Under each switch: which service it uses, or "Needs a service for …" with a **Set it up** button. A key for a part that is off (F2, F3, F4, Ctrl+Alt+O …) says "… is turned off. Turn it on in Setup › Features." Turning the overlay off closes it.
+- Services shows a task only the switched-off parts need as "not used".
+- 128 automated tests.
+
 ## [6.17]
 
 A full independent check of the whole program (seven reviewers: threads, error paths, security, network, the window, settings and build, and the look and the buttons), and the fixes.

@@ -1,4 +1,9 @@
-# Meeting Assistant — User Guide (version 6.17)
+# Meeting Assistant — User Guide (version 6.18)
+
+## Version 6.18: use only what you need
+
+- **Setup › Features**: turn parts off (translation, answers, coach, overlay, screen reading, interview prep, after the meeting, files). What is off is hidden, sends nothing and needs no service.
+- Ready choices: **Text only**, **Text + translation**, **Full interview help**.
 
 ## Version 6.16: NVIDIA graphics card with one button
 

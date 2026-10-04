@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.17"
+VERSION = "6.18"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -253,6 +253,7 @@ DEFAULTS = {
     "meeting_mode": "general",   # general | tech | hr | work | lecture
     "diarize": False,            # tell the other side's speakers apart (live service only)
     "save_audio": False,         # keep the sound of each meeting (small .ogg files next to the meeting file) to replay lines
+    "features": {},              # parts turned off by the user, e.g. {"answers": False}; missing = on
     "hide_from_share": False,    # the window is hidden from screen sharing and recordings (Windows)
     "screen_provider": "",       # who reads a screenshot: "" = the service that writes answers
     "screen_model": "",          # "" = chosen automatically from the service's model list
@@ -278,6 +279,28 @@ PRESETS = {
     "custom":     {"name": "My service", "base_url": "", "use_proxy": True},
 }
 TASKS = {"stt": "Speech to text", "tr": "Translation", "ans": "Answers"}
+# Parts of the program that can be turned off (Setup › Features): off = hidden, nothing sent, no service needed.
+FEATURES = {"translate": "Translation", "answers": "Suggested answers", "coach": "Coach", "overlay": "Overlay",
+            "screen": "Screen reading", "prep": "Interview prep", "after": "After the meeting", "files": "Files and links"}
+FEATURE_TASKS = {"translate": ("tr",), "answers": ("ans",), "coach": ("ans",), "screen": ("ans",), "prep": ("ans",),
+                 "after": ("ans",), "files": ("stt",), "overlay": ()}
+
+
+def feat(cfg, name):
+    """Is this part of the program turned on? (Everything is on unless the user turned it off.)"""
+    return bool((cfg.get("features") or {}).get(name, True))
+
+
+def coach_on(cfg):
+    return bool(cfg.get("coach")) and feat(cfg, "coach")
+
+
+def feature_off(cfg, name):
+    """None when the part is on; otherwise the answer every action of that part gives (also to the global keys)."""
+    if feat(cfg, name):
+        return None
+    return {"ok": False, "feature": name,
+            "error": f"{FEATURES[name]} is turned off. Turn it on in Setup › Features."}
 KEEP_FROM_OLD = ("api_key", "proxy", "language", "languages", "context", "answer_style", "about_me",
                  "translate_me", "me_label", "them_label")
 MODES = {
@@ -639,6 +662,9 @@ def sanitize(cfg):
     out["screen_model"] = out["screen_model"].strip()[:120]
     out["config_version"] = CONFIG_VERSION
     out["api_key"] = clean_key(out["api_key"])
+    f = cfg.get("features") if isinstance(cfg.get("features"), dict) else {}
+    out["features"] = {k: bool(f[k]) if not isinstance(f[k], str) else f[k].strip().lower() in ("1", "true", "yes", "on")
+                       for k in FEATURES if k in f}          # only the known parts; anything else is dropped
     return out
 
 
@@ -7252,6 +7278,8 @@ class Engine:
 
     def _check_reply(self):
         """After a line of the user: numbers and notes about the reply to the latest question."""
+        if not (coach_on(self.cfg) or feat(self.cfg, "answers")):
+            return                                         # nobody shows it
         rows = self.session.ordered()
         q = next((r for r in reversed(rows) if r["source"] == "them"
                   and len(re.findall(r"\w+", r.get("text") or "")) >= 5), None)
@@ -7270,7 +7298,7 @@ class Engine:
         while not self.stop_event.wait(5):
             try:
                 now = time.time()
-                if not self.cfg["coach"] or self.paused or now < getattr(self.app, "practice_until", 0.0):
+                if not coach_on(self.cfg) or self.paused or now < getattr(self.app, "practice_until", 0.0):
                     continue
                 _sit, stuck, qid = self.coach_situation()
                 stuck_now = stuck and qid is not None and qid != self.coach_stuck_q and now - self.coach_last >= 8
@@ -7362,7 +7390,7 @@ class Engine:
     def coach_brief(self):
         """At the start: a short preparation card (key messages, strengths, risks, questions to ask) from the background."""
         c = self.cfg
-        if not c["coach"] or self.notes.get("brief") or self.stop_event.is_set():
+        if not coach_on(c) or self.notes.get("brief") or self.stop_event.is_set():
             return
         if not (about_text(c) or c["context"]):
             return                                             # nothing to prepare from
@@ -7682,6 +7710,8 @@ class Engine:
     def _preview_translate(self, key, source, text, min_new=3):
         """Translation of the unfinished sentence - refreshed whenever a few new words arrived."""
         if source != "them" and not (self.cfg["translate_me"] or self.cfg["answer_me"]):
+            return
+        if not feat(self.cfg, "translate"):
             return
         if self.cfg["tr_provider"] == "llm":
             return          # the local AI model translates finished sentences only (it is too slow for more)
@@ -8077,10 +8107,10 @@ class Engine:
         self.coach_dirty = True
         if source == "me" and not self.file_mode:
             self._check_reply_later()
-        tr_on = source == "them" or c["translate_me"] or c["answer_me"]     # test mode: my lines are the questions
+        tr_on = (source == "them" or c["translate_me"] or c["answer_me"]) and feat(c, "translate")   # (test mode: my lines are the questions)
         if lang and lang == c["my_language"]:
             tr_on = False                                   # already in my language: nothing to translate
-        ans_on = (source == "them" or c["answer_me"]) and not self.file_mode
+        ans_on = (source == "them" or c["answer_me"]) and not self.file_mode and feat(c, "answers")
         e = self.session.update(e["id"], tr_state="pending" if tr_on else "off",
                                 ans_state="thinking" if ans_on else "off", timing=timing)
         self.hub.publish("entry", entry=e)
@@ -8423,7 +8453,7 @@ class Engine:
         earlier = self.session.answered_before(e["t0"], ANSWERED_EARLIER if force else 6, exclude=eid)
         done = "\n".join(f"- Q: {short(q, 220)}\n  A: {short(a, 320)}" for q, a in earlier)
         # everything that changes stays at the END, so the long system text is reused from Groq's cache
-        memory = self.notes_text() if c["coach"] else ""
+        memory = self.notes_text() if coach_on(c) else ""
         again = ""
         if reps and prev_e is not None:
             again = (f"REPEATED QUESTION: the other side has now asked this same question {reps + 1} times. "
@@ -8592,7 +8622,7 @@ class Engine:
                 last[0] = now
                 self._publish(eid, explain=t.strip(), ex_state="streaming")
         try:
-            out = self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+            out = self.run_chat(self.chat_targets("ans" if feat(self.cfg, "answers") else "tr"), [{"role": "system", "content": system},
                                                            {"role": "user", "content": user}], 400, 0.3, on_text)
             self._publish(eid, explain=out.strip(), ex_state="done")
         except Exception as ex:
@@ -8606,7 +8636,7 @@ class Engine:
         text = re.sub(r"\s+", " ", text or "").strip()
         if not e or not text or text == e["text"]:
             return False
-        tr_on = e["tr_state"] != "off"
+        tr_on = e["tr_state"] != "off" and feat(self.cfg, "translate")      # (a part turned off sends nothing)
         e = self.session.update(eid, text=text, edited=True, t_text=time.time(), translation="",
                                 tr_state="pending" if tr_on else "off",
                                 explain="", explain_q="", ex_state="none")
@@ -8614,7 +8644,7 @@ class Engine:
         log(f"Line corrected by hand: \"{short(text, 80)}\"")
         if tr_on:
             self._submit_tr(eid)
-        if e["answer"] or e["ans_state"] in ("done", "error"):
+        if (e["answer"] or e["ans_state"] in ("done", "error")) and feat(self.cfg, "answers"):
             self._submit(self._answer, eid, True, None)          # the answer followed the old words
         return True
 
@@ -9942,7 +9972,10 @@ class App:
         c["hide_possible"] = hidden_window_possible()
         c["modes"] = {k: v["name"] for k, v in MODES.items()}
         c["tasks"] = self.task_status()
-        c["ready"] = all(v["ok"] for v in c["tasks"].values())
+        need = self.needed_tasks()
+        for t, v in c["tasks"].items():
+            v["used"] = t in need                       # a task only a part that is off needs: shown as "not used"
+        c["ready"] = all(v["ok"] for t, v in c["tasks"].items() if t in need)
         c["proxy"] = mask_proxy(c.get("proxy") or "")   # a proxy password is never sent to the window (screen sharing)
         return c
 
@@ -10025,6 +10058,11 @@ class App:
     def api_state(self):
         return {"ok": True, **self.hello()}
 
+    def _apply_features(self):
+        """A part just turned off stops at once (the overlay closes)."""
+        if not feat(self.cfg, "overlay") and getattr(self, "overlay", None) and self.overlay.on:
+            threading.Thread(target=self.overlay.stop, daemon=True).start()
+
     def api_save_config(self, **values):
         with self.lock:
             new = dict(self.cfg)
@@ -10059,6 +10097,7 @@ class App:
             except OSError as e:
                 failed = e
         self.sync_local()
+        self._apply_features()
         self.apply_preview()
         self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
         eng = self.engine
@@ -10150,6 +10189,16 @@ class App:
                       "backup": ok and pid != "groq" and c["use_backup"] and bool(c["api_key"])}
         return out
 
+    def needed_tasks(self, for_file=False):
+        """The tasks the parts turned on need: speech to text always; translation and answers only when used."""
+        c = self.cfg
+        need = ["stt"]
+        if feat(c, "translate"):
+            need.append("tr")
+        if not for_file and (feat(c, "answers") or coach_on(c) or feat(c, "prep") or feat(c, "after") or feat(c, "screen")):
+            need.append("ans")                         # (screen reading uses the answers service unless another is set)
+        return tuple(need)
+
     def missing_tasks(self, tasks=TASKS):
         st = self.task_status()
         return [st[t]["label"] + (f" ({st[t]['why']})" if st[t]["why"] else "") for t in tasks if not st[t]["ok"]]
@@ -10157,7 +10206,7 @@ class App:
     def used_services(self):
         c = self.cfg
         used = []
-        for t in TASKS:
+        for t in self.needed_tasks():                       # (a part that is turned off needs no service)
             pid = c[f"{t}_provider"]
             if (self.provider(pid) or {}).get("kind") in ("live", "local", "llm"):
                 continue
@@ -10291,7 +10340,7 @@ class App:
 
     def api_start(self, resume=False):
         """resume=True: go on with the last meeting (same file, same transcript) instead of a new one."""
-        if not self.running and not self.stopping and not self.missing_tasks():
+        if not self.running and not self.stopping and not self.missing_tasks(self.needed_tasks()):
             bad = self.preflight()
             if bad:
                 return {"ok": False, "error": bad}
@@ -10299,7 +10348,7 @@ class App:
             if self.running:
                 return {"ok": True}
             c = self.cfg
-            missing = self.missing_tasks()
+            missing = self.missing_tasks(self.needed_tasks())
             if missing:
                 return {"ok": False, "error": "setup", "missing": missing}
             if pyaudio is None:
@@ -10563,6 +10612,9 @@ class App:
         return self.review
 
     def api_answer_now(self, entry_id=None, text=""):
+        off = feature_off(self.cfg, "answers")
+        if off:
+            return off
         eng = self.helper()
         if not eng:
             return {"ok": False, "error": "Start the meeting first."}
@@ -10571,6 +10623,8 @@ class App:
         return {"ok": True}
 
     def api_explain(self, entry_id=None, text=""):
+        if not (feat(self.cfg, "translate") or feat(self.cfg, "answers")):
+            return feature_off(self.cfg, "translate")
         eng = self.helper()
         if not eng or entry_id is None:
             return {"ok": False, "error": "There is no transcript yet."}
@@ -10585,6 +10639,9 @@ class App:
         return {"ok": True, "changed": bool(eng.edit(entry_id, text))}
 
     def api_summary(self):
+        off = feature_off(self.cfg, "after")
+        if off:
+            return off
         eng = self.helper()
         if not eng:
             return {"ok": False, "error": "There is no meeting to summarize yet."}
@@ -10802,6 +10859,9 @@ class App:
         return pid, model
 
     def api_screen(self):
+        off = feature_off(self.cfg, "screen")
+        if off:
+            return off
         if not SCREEN_CAPTURE:
             return {"ok": False, "error": "Reading the screen works on Windows only."}
         with self.lock:
@@ -10845,6 +10905,9 @@ class App:
             self.screen_busy = False
 
     def api_feedback(self):
+        off = feature_off(self.cfg, "after")
+        if off:
+            return off
         eng = self.helper()
         if not eng:
             return {"ok": False, "error": "There is no meeting to review yet."}
@@ -10856,11 +10919,14 @@ class App:
         return {"ok": True}
 
     def api_coach_help(self, text=""):
+        off = feature_off(self.cfg, "coach")
+        if off:
+            return off
         eng = self.engine
         if not eng or eng.stop_event.is_set():
             return {"ok": False, "error": "Start the meeting first."}
         text = str(text or "").strip()[:400]
-        if not eng.cfg["coach"]:
+        if not coach_on(eng.cfg):
             return {"ok": False, "error": "The coach is off (Settings)."}
         if not eng._help_lock.acquire(blocking=False):
             return {"ok": False, "error": "The coach is still answering. One moment."}
@@ -10875,6 +10941,9 @@ class App:
         return {"ok": True, "text": out} if out else {"ok": False, "error": "The coach had no answer. Try again."}
 
     def api_say(self, text="", lang="", tone="natural"):
+        off = feature_off(self.cfg, "answers")
+        if off:
+            return off
         text = str(text or "").strip()[:800]
         if not text:
             return {"ok": False, "error": "Write what you want to say first."}
@@ -10898,7 +10967,9 @@ class App:
             return {"ok": False, "error": "Write a word or a question to look for."}
         hits, checked = search_meetings(MEETINGS_DIR, query, days)
         out = {"ok": True, "matches": hits, "checked": checked, "days": days, "answer": ""}
-        if ask and hits:
+        if ask and hits and not feat(self.cfg, "answers"):
+            out["answer_error"] = "Suggested answers are turned off (Setup › Features): only the matches are shown."
+        elif ask and hits:
             try:
                 out["answer"] = (self.helper() or self.tool_engine()).ask_past(query, hits)
             except APIError as e:
@@ -10938,6 +11009,10 @@ class App:
     def api_overlay(self, on=None):
         """The see-through, click-through window with the question and the answer (also the global key Ctrl+Alt+O)."""
         want = (not self.overlay.on) if on is None else bool(on)
+        if want and not feat(self.cfg, "overlay"):
+            off = feature_off(self.cfg, "overlay")
+            self.hub.toast("warn", off["error"])            # (also when started by its key, Ctrl+Alt+O)
+            return off
         err = self.overlay.start() if want else self.overlay.stop()
         return {"ok": not err, "on": self.overlay.on, **({"error": err} if err else {})}
 
@@ -11066,6 +11141,9 @@ class App:
         return {"ok": True, "items": items, "worst": worst, "report": report}
 
     def api_job_prep(self, ad=""):
+        off = feature_off(self.cfg, "prep")
+        if off:
+            return off
         ad = str(ad or "").strip() or str(self.cfg.get("job_ad") or "").strip()
         if len(ad) < 40:
             return {"ok": False, "error": "Paste the job advert first (at least a few lines)."}
@@ -11095,6 +11173,9 @@ class App:
         return {"ok": True}
 
     def api_practice_questions(self, kind="general", n=5):
+        off = feature_off(self.cfg, "prep")
+        if off:
+            return off
         kind = kind if isinstance(kind, str) and kind in PRACTICE_KINDS else "general"
         try:
             qs = self._practice_engine().practice_questions(kind, int(n or 5))
@@ -11122,6 +11203,9 @@ class App:
         return {"ok": True, "text": " ".join(r["text"].strip() for r in rows)[:4000], "secs": round(secs, 1), "running": True}
 
     def api_practice_grade(self, question="", answer="", kind="general", secs=0):
+        off = feature_off(self.cfg, "prep")
+        if off:
+            return off
         question = str(question or "").strip()[:400]
         if not question:
             return {"ok": False, "error": "There is no question."}
@@ -11273,13 +11357,16 @@ class App:
                 if isinstance(m, CppServer) and LOCAL.run_lock.locked():
                     m.interrupt()                         # a long whisper.cpp request ends now, not in minutes
             return {"ok": True}
+        off = feature_off(self.cfg, "files")
+        if off:
+            return off
         with self.lock:
             if self.running or self.stopping:
                 return {"ok": False, "error": "Stop the meeting first."}
             if self.recording and self.recording is not _from:    # (a link that was downloaded hands over to its file)
                 return {"ok": False, "error": "A recording is already being transcribed."}
             c = self.cfg
-            missing = self.missing_tasks(("stt", "tr"))
+            missing = self.missing_tasks(self.needed_tasks(for_file=True))
             if missing:
                 return {"ok": False, "error": "setup", "missing": missing}
         if browse:
@@ -11361,6 +11448,9 @@ class App:
         """Transcribe a link (YouTube or any page with audio or video): it is downloaded first."""
         if cancel:
             return self.api_recording(cancel=True)
+        off = feature_off(self.cfg, "files")
+        if off:
+            return off
         url = str(url or "").strip()
         if not re.match(r"^https?://[^\s/$.?#][^\s]{2,2000}$", url, re.I):
             return {"ok": False, "error": "Paste a full link that starts with https://"}
@@ -11377,7 +11467,7 @@ class App:
                 return {"ok": False, "error": "Stop the meeting first."}
             if self.recording:
                 return {"ok": False, "error": "A recording is already being transcribed."}
-            missing = self.missing_tasks(("stt", "tr"))
+            missing = self.missing_tasks(self.needed_tasks(for_file=True))
             if missing:
                 return {"ok": False, "error": "setup", "missing": missing}
             job = LinkJob(self, url, speakers if speakers == -1 or 2 <= speakers <= 8 else 0)

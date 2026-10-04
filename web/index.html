@@ -447,6 +447,26 @@ textarea.input{resize:vertical;min-height:76px}
 details.inline-more{display:inline}
 details.inline-more summary{display:inline;cursor:pointer;color:var(--accent);font-weight:600}
 details.inline-more[open]{display:block;margin-top:4px}
+.presets{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.presets .btn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft,var(--surface-2))}
+.feat-list{display:grid;gap:2px}
+.feat{display:flex;gap:12px;align-items:flex-start;padding:10px 4px;border-bottom:1px solid var(--border)}
+.feat .ft{flex:1;min-width:0}
+.feat .ft b{display:block;font-size:.92rem}
+.feat .ft span{display:block;font-size:.82rem;color:var(--muted);line-height:1.45}
+.feat .need{font-size:.78rem;margin-top:3px}
+.feat .need.ok{color:var(--ok)} .feat .need.bad{color:var(--danger)}
+.feat .need button{font-size:.78rem;padding:1px 6px;margin-inline-start:6px}
+body.f-panel-off .answer-card{display:none}
+body.f-panel-off .layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)!important}
+body:not(.ov).f-answers-off .answer-body,body.f-answers-off .answer-foot,body.f-answers-off #copyBtn,body.f-answers-off .size-ctl,
+body.f-answers-off #thinking,body.f-answers-off .entry .act,body.f-answers-off .ans-row{display:none!important}
+body.f-coach-off #coach{display:none!important}
+@media (max-width:980px){body.f-answers-off:not(.f-panel-off) .layout{grid-template-rows:minmax(0,1fr) auto} body.f-answers-off .answer-card{order:0}}
+.coach-title{display:none} body.f-answers-off .ans-title{display:none} body.f-answers-off .coach-title{display:inline}
+body.f-overlay-off #ovBtn,body.f-files-off #recBtn,body.f-after-off #summaryBtn{display:none!important}
+body.f-screen-off [data-tool="screen"],body.f-prep-off [data-tool="jobprep"],body.f-prep-off [data-tool="practice"],
+body.f-coach-off [data-tool="coach"],body.f-prep-off #jobPrepBtn,body.f-answers-off [data-tool="say"],body.f-after-off [data-tool="feedback"]{display:none!important}
 .more-checks{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
 .more-checks summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:.84rem;padding:6px 4px;list-style:none}
 .more-checks summary::-webkit-details-marker{display:none}
@@ -835,7 +855,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
 
     <aside class="card answer-card">
       <div class="card-head">
-        <h2><span data-icon="sparkles"></span>Suggested answer</h2>
+        <h2><span data-icon="sparkles"></span><span class="ans-title">Suggested answer</span><span class="coach-title">Coach</span></h2>
         <span class="thinking" id="thinking" hidden><span class="spinner"></span>Writing…</span>
         <span class="spacer"></span>
         <div class="size-ctl" title="Answer text size">
@@ -887,6 +907,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <button class="btn icon ghost" id="closeDrawer" aria-label="Close"><span data-icon="x"></span></button>
   </div>
   <nav class="tabs" id="tabs">
+    <button class="tab" data-tab="features">Features</button>
     <button class="tab" data-tab="meeting">Meeting</button>
     <button class="tab" data-tab="answers">Answers</button>
     <button class="tab" data-tab="audio">Audio</button>
@@ -896,6 +917,15 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   </nav>
   <div class="drawer-body">
     <!-- MEETING -->
+    <section class="pane" data-pane="features">
+      <div class="help" style="margin-bottom:10px">Turn on only what you use. A part that is off is hidden, sends nothing and needs no service. <b>Speech to text</b> is always on.</div>
+      <div class="presets" role="group" aria-label="Ready choices">
+        <button class="btn sm" data-preset="text"><span data-icon="text"></span><span>Text only</span></button>
+        <button class="btn sm" data-preset="translate"><span data-icon="globe"></span><span>Text + translation</span></button>
+        <button class="btn sm" data-preset="all"><span data-icon="sparkles"></span><span>Full interview help</span></button>
+      </div>
+      <div class="feat-list" id="featList"></div>
+    </section>
     <section class="pane" data-pane="meeting">
       <div class="field">
         <label for="fContext">What is this meeting about?</label>
@@ -1355,6 +1385,7 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 /* ---------- icons ---------- */
 const ICONS = {
   plus:'<path d="M12 5v14M5 12h14"/>',
+  minus:'<path d="M5 12h14"/>',
   cpu:'<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
   gauge:'<path d="M12 14l4-4"/><path d="M3.5 18a9 9 0 1 1 17 0"/>',
   globe:'<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
@@ -1547,8 +1578,59 @@ function myLang(){
 }
 function trAttr(){ const m = myLang(); return `dir="${m.rtl?"rtl":"ltr"}" lang="${m.code}"`; }
 function langName(code){ const L = ((S.cfg||{}).langs || {})[code]; return L ? L[0] : String(code||"").toUpperCase(); }
+/* ---------- features: turn parts of the program on and off ---------- */
+const FEATS = [
+  ["translate", "Translation", "Each line in your language, and the meaning of words you select.", ["tr"]],
+  ["answers", "Suggested answers", "An answer to say when you are asked something; Answer now (F2); Help me say.", ["ans"]],
+  ["coach", "Coach", "Short tips during the meeting: how to start, when to stop, the words to say.", ["ans"]],
+  ["overlay", "Overlay", "The see-through window over the meeting (Ctrl+Alt+O), hidden from screen sharing.", []],
+  ["screen", "Screen reading", "Read my screen (F3): answers a question or code on your screen.", ["ans"]],
+  ["prep", "Interview prep", "Prepare for the job (from the advert) and Practice interview.", ["ans"]],
+  ["after", "After the meeting", "Summary, and How did I do? (a review with tips).", ["ans"]],
+  ["files", "Files and links", "Transcribe a recorded file or a YouTube link.", ["stt"]],
+];
+const PRESETS = {text: {files: true}, translate: {translate: true, files: true}, all: null};   // null = everything on
+const featOn = k => !S.cfg || !S.cfg.features || S.cfg.features[k] !== false;
+function featNeed(tasks){                                    // the services a part needs, as one short line
+  const st = (S.cfg && S.cfg.tasks) || {};
+  const bad = tasks.filter(t => st[t] && !st[t].ok);
+  if(!tasks.length) return `<div class="need ok">No service needed.</div>`;
+  if(!bad.length) return `<div class="need ok">${icon("check")} Uses: ${esc(tasks.map(t => (st[t] && st[t].service) || t).join(", "))}</div>`;
+  const names = {stt: "Speech to text", tr: "Translation", ans: "Answers"};
+  return `<div class="need bad">${icon("alert")} Needs a service for ${esc(bad.map(t => names[t]).join(" and "))}<button class="btn sm ghost" data-goto="connection">Set it up</button></div>`;
+}
+function renderFeatures(){
+  const box = $("#featList"); if(!box || !S.cfg) return;
+  box.innerHTML = FEATS.map(([k, name, what, tasks]) => `<label class="feat"><span class="ft"><b>${esc(name)}</b><span>${esc(what)}</span>${featOn(k) ? featNeed(tasks) : ""}</span>
+    <span class="toggle"><input type="checkbox" data-feat="${k}" ${featOn(k) ? "checked" : ""}><span class="switch"></span></span></label>`).join("");
+  paintIcons();
+  box.querySelectorAll("[data-feat]").forEach(cb => cb.onchange = () => setFeatures({[cb.dataset.feat]: cb.checked}));
+  box.querySelectorAll("[data-goto]").forEach(b => b.onclick = ev => { ev.preventDefault(); selectTab(b.dataset.goto); });
+  const cur = FEATS.map(([k]) => featOn(k));
+  $$("[data-preset]").forEach(b => { const p = PRESETS[b.dataset.preset];
+    b.classList.toggle("on", FEATS.every(([k], i) => cur[i] === (p === null ? true : !!p[k]))); });
+}
+function setFeatures(change){
+  const f = Object.assign({}, S.cfg.features || {}, change);
+  for(const k of Object.keys(f)) if(f[k] === true) delete f[k];            // on is the default: only "off" is kept
+  S.cfg.features = f;
+  const extra = change.coach === true && S.cfg.coach === false ? {coach: true} : {};   // turning Coach on here means: use it
+  Object.assign(S.cfg, extra);
+  applyFeatures(); renderFeatures(); queueSave(Object.assign({features: f}, extra));
+}
+$$("[data-preset]").forEach(b => b.onclick = () => {
+  const p = PRESETS[b.dataset.preset], change = {};
+  FEATS.forEach(([k]) => { change[k] = p === null ? true : !!p[k]; });
+  setFeatures(change);
+  toast("ok", b.textContent.trim() + ": done. You can change single parts below.");
+});
+function applyFeatures(){
+  for(const [k] of FEATS) document.body.classList.toggle("f-" + k + "-off", !featOn(k));
+  document.body.classList.toggle("f-panel-off", !featOn("answers") && !(featOn("coach") && S.cfg?.coach));
+}
 function applyConfig(){
   const c = S.cfg; if(!c) return;
+  applyFeatures();
   const ml = myLang();
   $$(".myl").forEach(x => { x.textContent = ml.name; });
   document.documentElement.style.setProperty("--font-tr", ml.rtl ? "var(--font-fa)" : "var(--font)");
@@ -1872,7 +1954,7 @@ function upsertEntry(e, silent, batch){
   if(added && e.source === "them" && /\b(on (the|my|your) screen|look at (this|the|my)|share (my|your|the) screen|sharing (my|the) screen|this (code|diagram|schema|query|table|slide)|can you see (my|the|this)|see (this|the) (code|screen|diagram))\b/i.test(e.text || "")
      && Date.now() - (S.scrTip || 0) > 60000 && S.running && !silent){
     S.scrTip = Date.now();
-    if(S.cfg && S.cfg.auto_screen && !OVERLAY && !S.scrBusy && !TM.kind){ toast("info", "They mention the screen. Reading it…"); readScreen(); }
+    if(S.cfg && S.cfg.auto_screen && featOn("screen") && !OVERLAY && !S.scrBusy && !TM.kind){ toast("info", "They mention the screen. Reading it…"); readScreen(); }
     else toast("info", "They mention the screen. Press F3 and the program reads it and suggests the answer.");
   }
   // the newest answer goes to the answer panel automatically
@@ -1968,7 +2050,7 @@ function coachLive(){
 function setH(el, html){ if(el._h !== html){ el._h = html; el.innerHTML = html; } }
 function renderCoach(){
   const box = $("#coach"); if(!box) return;
-  const on = S.cfg && S.cfg.coach !== false && S.running;
+  const on = S.cfg && S.cfg.coach !== false && featOn("coach") && S.running;   // (also the overlay's coach line)
   box.hidden = !on; if(!on) return;
   const folded = coFolded();
   box.classList.toggle("fold", folded); $("#coFold").setAttribute("aria-expanded", folded ? "false" : "true");
@@ -2059,6 +2141,7 @@ function splitSay(t){                                               // "advice .
 async function askCoach(text){
   if(!S.running){ toast("info", "Start the meeting first."); return; }
   if(S.cfg && S.cfg.coach === false){ toast("info", "The coach is off (Settings)."); return; }
+  if(!featOn("coach")){ toast("info", "Coach is turned off. Turn it on in Setup › Features."); return; }
   if(S.coHelp && S.coHelp.busy){ toast("info", "The coach is still answering."); return; }
   const tok = S.coTok = (S.coTok || 0) + 1;
   S.coHelp = {busy: true}; setCoFold(false); renderCoach();
@@ -2128,7 +2211,7 @@ function markLatest(){
   if(best && best.translation && !S.tipShown){
     let seen = false; try{ seen = localStorage.getItem("ma.tip.select") === "1"; }catch{}
     S.tipShown = true;
-    if(!seen) setTimeout(() => toast("info", "Tip: select words in a line to get their meaning in " + myLang().name + " or an answer about them." + (S.running ? " Press F8 to pause." : "")), 800);
+    if(!seen && (featOn("translate") || featOn("answers"))) setTimeout(() => toast("info", "Tip: select words in a line to get " + (featOn("translate") || featOn("answers") ? "their meaning in " + myLang().name + (featOn("answers") ? " or an answer about them." : ".") : "") + (S.running ? " Press F8 to pause." : "")), 800);
     try{ localStorage.setItem("ma.tip.select", "1"); }catch{}
   }
 }
@@ -2149,7 +2232,7 @@ function renderEmpty(){
   }
   if(S.running){
     box.innerHTML = `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
-      <h3>Listening…</h3><p>Lines appear here as soon as someone finishes a sentence. The ${esc(myLang().name)} translation follows right away, and suggested answers appear in the panel.</p></div>`;
+      <h3>Listening…</h3><p>Lines appear here as soon as someone finishes a sentence.${featOn("translate") ? ` The ${esc(myLang().name)} translation follows right away.` : ""}${featOn("answers") ? " Suggested answers appear in the panel." : ""}</p></div>`;
     return;
   }
   const c = S.cfg || {};
@@ -2158,7 +2241,7 @@ function renderEmpty(){
   box.innerHTML = `<div class="empty-card">
     <div class="empty-icon">${icon("wave")}</div>
     <h3>Ready when your meeting starts</h3>
-    <p>Press <b>Start</b>. What the other side says appears here with a ${esc(myLang().name)} translation. When you are asked a question, a suggested answer appears on the right.</p>
+    <p>Press <b>Start</b>. What the other side says appears here${featOn("translate") ? ` with a ${esc(myLang().name)} translation` : ""}.${featOn("answers") ? " When you are asked a question, a suggested answer appears on the right." : ""}</p>
     <ul class="checklist">
       <li><span class="ck-icon ${keyOk?"done":""}">${icon(keyOk?"check":"key")}</span><span class="ck-body"><div class="ck-title">Services</div><div class="ck-sub">${keyOk ? esc(svcLine(c)) : "Needed to start — Groq is free, or use any other service"}</div></span><button class="btn sm ${keyOk?"ghost":"primary"}" data-go="connection">${keyOk?"Change":"Set up"}</button></li>
       <li><span class="ck-icon ${c.context?"done":""}">${icon(c.context?"check":"text")}</span><span class="ck-body"><div class="ck-title">Meeting topic</div><div class="ck-sub">${c.context?esc(c.context):"Optional — improves answers"}</div></span><button class="btn sm ghost" data-go="meeting">${c.context?"Edit":"Add"}</button></li>
@@ -2174,8 +2257,9 @@ function renderEmpty(){
 
 /* ---------- answer panel ---------- */
 function svcLine(c){
-  const T = c.tasks || {}, n = [...new Set(["stt", "tr", "ans"].map(t => (T[t] || {}).service).filter(Boolean))];
-  return n.length === 1 ? n[0] + " does everything" : ["stt", "tr", "ans"].map(t => `${(T[t] || {}).label}: ${(T[t] || {}).service}`).join(" · ");
+  const T = c.tasks || {}, used = ["stt", "tr", "ans"].filter(t => T[t] && T[t].used !== false);   // only what the parts turned on use
+  const n = [...new Set(used.map(t => T[t].service).filter(Boolean))];
+  return n.length === 1 && used.length > 1 ? n[0] + " does everything" : used.map(t => `${T[t].label}: ${T[t].service}`).join(" · ");
 }
 function setAnswerText(el, t){          // first sentence bold: the user can start speaking after one glance
   t = String(t || "");
@@ -2264,6 +2348,7 @@ function renderThinking(){
   $("#thinking").hidden = !show;
 }
 async function answerNow(entryId){
+  if(!featOn("answers")) return toast("info", FEATS.find(f => f[0] === "answers")[1] + " is turned off. Turn it on in Setup › Features.");
   const now = Date.now(), k = String(entryId);
   if(S.lastAsk && S.lastAsk.k === k && now - S.lastAsk.t < 1500) return;      // double click
   S.lastAsk = {k, t: now};
@@ -2306,6 +2391,9 @@ function checkSel(){
   if(!art || art.classList.contains("pending") || !list.contains(art) || art.dataset.editing){ hideSel(); return; }
   S.sel = {id: +art.id.slice(1), text: txt.slice(0, 600)};
   const r = range.getBoundingClientRect();
+  selPop.querySelector('[data-a="answer"]').hidden = !featOn("answers");
+  selPop.querySelector('[data-a="explain"]').hidden = !featOn("translate") && !featOn("answers");
+  if(!featOn("answers") && !featOn("translate")){ hideSel(); return; }       // nothing to offer
   selPop.hidden = false;
   const w = selPop.offsetWidth, h = selPop.offsetHeight;
   const x = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
@@ -2410,6 +2498,7 @@ async function makeSummary(){
   if(!r.ok){ S.sumState = "error"; $("#sumNote").innerHTML = `${icon("alert")}${esc(r.error || "Could not start.")}`; $("#sumAgain").disabled = false; }
 }
 $("#summaryBtn").onclick = () => {
+  if(!featOn("after")) return toast("info", "After the meeting is turned off. Turn it on in Setup › Features.");
   if(["working", "streaming"].includes(S.sumState)) return showSummary();
   if(S.summary && !S.running){ $("#sumBody").innerHTML = mdLite(S.summary); $("#sumNote").innerHTML = ""; $("#sumAgain").disabled = false; return showSummary(); }
   makeSummary();
@@ -2634,6 +2723,7 @@ function selectTab(name){
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   $$(".pane").forEach(p => p.classList.toggle("active", p.dataset.pane === name));
   if(name === "audio") loadDevices();
+  if(name === "features") renderFeatures();
   if(name === "log"){ $("#logDot").hidden = true; const b = $("#logBox"); setTimeout(() => b.scrollTop = b.scrollHeight, 0); }
 }
 $$(".tab").forEach(t => t.onclick = () => selectTab(t.dataset.tab));
@@ -2698,7 +2788,7 @@ function queueSave(obj){
     const body = pendingSave; pendingSave = {}; inflightSave = Object.assign({}, inflightSave, body);
     const r = await api("save_config", body);
     for(const k of Object.keys(body)) if(inflightSave[k] === body[k]) delete inflightSave[k];
-    if(r.ok){ saveFails = 0; S.cfg = Object.assign(r.config, pendingSave); applyConfig(); renderGroq(); renderOverview(); $("#savedState").className = "saved show"; $("#savedState").innerHTML = icon("check")+"Saved"; }
+    if(r.ok){ saveFails = 0; S.cfg = Object.assign(r.config, pendingSave); applyConfig(); renderGroq(); renderOverview(); if(S.lastTab === "features") renderFeatures(); $("#savedState").className = "saved show"; $("#savedState").innerHTML = icon("check")+"Saved"; }
     else {
       // keep what was typed (newer changes win) and try again, so nothing is silently lost
       pendingSave = Object.assign({}, body, pendingSave);
@@ -2938,11 +3028,12 @@ function renderServices(){
 }
 function renderOverview(){
   const c = S.cfg, T = c.tasks || {}, box = $("#svcOverview");
-  const rows = ["stt", "tr", "ans"].map(t => T[t]).filter(Boolean);
+  const unused = ["stt", "tr", "ans"].map(t => T[t]).filter(r => r && r.used === false);   // only parts that are off need it
+  const rows = ["stt", "tr", "ans"].map(t => T[t]).filter(r => r && r.used !== false);
   const bad = rows.filter(r => !r.ok);
   let h = bad.length ? `<div class="ov-head bad">${icon("alert")}Not ready yet — ${bad.length === 1 ? "one task needs" : bad.length + " tasks need"} a service<span class="sub">Groq (free) or any other service</span></div>`
-                     : `<div class="ov-head ok">${icon("check")}Ready — every task has a service</div>`;
-  const one = rows.length === 3 && rows.every(r => r.ok && !r.fallback && r.service === rows[0].service && !r.model);
+                     : `<div class="ov-head ok">${icon("check")}Ready — every part you use has a service</div>`;
+  const one = rows.length >= 2 && rows.every(r => r.ok && !r.fallback && r.service === rows[0].service && !r.model);
   if(one){
     h += `<div class="ov-row ok">${icon("check")}<span class="t">All tasks</span><span class="s"><b>${esc(rows[0].service)}</b> <small>· automatic</small></span>${rows[0].backup ? `<span class="schip">+ Groq backup</span>` : ""}</div>`;
     rows.length = 0;
@@ -2953,6 +3044,7 @@ function renderOverview(){
     const note = r.fallback ? `<span class="schip warn" title="${esc(r.why)}">Groq fills in</span>` : r.backup ? `<span class="schip" title="If it fails, Groq continues">+ Groq backup</span>` : "";
     h += `<div class="ov-row ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "check" : "alert")}<span class="t">${esc(r.label)}</span><span class="s">${who}</span>${note}</div>`;
   });
+  unused.forEach(r => { h += `<div class="ov-row off">${icon("minus")}<span class="t">${esc(r.label)}</span><span class="s"><small>not used — turned off in Features</small></span></div>`; });
   box.innerHTML = h;
   $$(".astat").forEach(el => { const r = T[el.dataset.stat] || {}; el.className = "astat " + (r.ok ? "ok" : "bad"); el.innerHTML = icon(r.ok ? "check" : "alert"); el.title = r.ok ? "" : r.why || ""; });
   const bk = $("#backupRow"), inp = bk.querySelector("input");
@@ -3679,6 +3771,7 @@ function renderToolBtns(){
 
 /* read my screen (F3) */
 async function readScreen(){
+  if(!featOn("screen")) return toast("info", FEATS.find(f => f[0] === "screen")[1] + " is turned off. Turn it on in Setup › Features.");
   if(S.scrBusy){ if(TM.kind !== "screen") showScreen({state: "working", note: "Reading the screen…", text: S.scrText || ""}); return; }
   S.scrBusy = true; S.scrText = "";
   showScreen({state: "working", note: "Starting…"});
@@ -3724,6 +3817,7 @@ function statTiles(st){
   return `<div class="stat-tiles" dir="ltr">${tiles.map(t => `<div class="stat-tile"><b>${esc(t[0])}</b><span>${esc(t[1])}</span></div>`).join("")}</div><div class="help" dir="ltr" style="margin:-4px 0 8px">*Speech-to-text often leaves out “um” and “uh”, so this is a minimum.</div>`;
 }
 async function openFeedback(again){
+  if(!featOn("after")) return toast("info", FEATS.find(f => f[0] === "after")[1] + " is turned off. Turn it on in Setup › Features.");
   if(!again && S.feedback && !S.fbBusy){ showFeedback({state: "done", text: S.feedback}); return; }
   if(S.fbBusy){ showFeedback(S.fbLast || {state: "working", note: "Working…"}); return; }
   S.fbBusy = true; S.fbLast = null;
@@ -3778,6 +3872,7 @@ function scoreBox(sc){
 
 /* prepare for the job (from the advert) */
 function openJobPrep(){
+  if(!featOn("prep")) return toast("info", FEATS.find(f => f[0] === "prep")[1] + " is turned off. Turn it on in Setup › Features.");
   openTool("jobprep", "Prepare for the job", "list");
   $("#toolBody").innerHTML = `<div class="field"><label for="jpAd">Paste the job advert</label>
     <textarea class="input" id="jpAd" rows="7" maxlength="8000" placeholder="Job title, tasks, requirements …"></textarea>
@@ -3817,6 +3912,7 @@ function practiceLeave(){
 }
 function prNote(html){ $("#toolNote").innerHTML = html || ""; }
 async function openPractice(){
+  if(!featOn("prep")) return toast("info", FEATS.find(f => f[0] === "prep")[1] + " is turned off. Turn it on in Setup › Features.");
   openTool("practice", "Practice interview", "play");
   if(S.pr && ["ask", "result"].includes(S.pr.phase) && Array.isArray(S.pr.qs) && S.pr.qs.length){ return S.pr.phase === "ask" ? prAsk(true) : prResult(); }
   S.pr = {phase: "setup"}; prSetup();
@@ -3971,6 +4067,7 @@ async function prFinish(){
 /* help me say */
 const TONES = [["natural", "Natural"], ["formal", "Formal"], ["short", "Short"], ["friendly", "Friendly"], ["confident", "Confident"]];
 function openSay(){
+  if(!featOn("answers")) return toast("info", FEATS.find(f => f[0] === "answers")[1] + " is turned off. Turn it on in Setup › Features.");
   const c = S.cfg || {}, codes = [...new Set([c.answer_language !== "same" ? c.answer_language : null, ...(c.languages || [])].filter(Boolean))];
   openTool("say", "Help me say", "edit");
   $("#toolBody").innerHTML = `<div class="field"><label for="sayText">What do you want to say? Write it roughly, in any language.</label>

@@ -1031,6 +1031,7 @@ def test_help_key_is_single_flight(app):
     class A: pass
     a = app.App.__new__(app.App)
     a.engine = eng
+    a.cfg = eng.cfg                                              # (the app's settings: the Features switches live there)
     eng.cfg["coach"] = True
     assert eng._help_lock.acquire(blocking=False)
     r = a.api_coach_help("x")
@@ -2154,3 +2155,50 @@ def test_audit_616_settings_reset_links_and_dropped_engine(app):
         assert a.api_local_delete(path=r"\\server\share\model")["ok"] is False
     finally:
         a.closing.set()
+
+
+def test_features_can_be_turned_off(app):
+    c = app.sanitize({"features": {"answers": False, "coach": "false", "bogus": False, "translate": True}})
+    assert c["features"] == {"answers": False, "coach": False, "translate": True}
+    assert not app.feat(c, "answers") and app.feat(c, "screen") and not app.coach_on(dict(c, coach=True))
+    a = app.App()
+    try:
+        a.cfg["features"] = {"translate": False, "answers": False, "coach": False}
+        assert a.needed_tasks() == ("stt", "ans")                   # prep, summary and screen reading still use answers
+        a.cfg["features"] = {"translate": False, "answers": False, "coach": False, "prep": False, "after": False, "screen": False}
+        assert a.needed_tasks() == ("stt",)                         # only speech to text needs a service
+        assert a.needed_tasks(for_file=True) == ("stt",)
+        a.cfg["features"] = {}
+        assert a.needed_tasks() == ("stt", "tr", "ans")
+        a.cfg["features"] = {"answers": False, "screen": False, "after": False, "prep": False, "files": False,
+                             "overlay": False, "coach": False}
+        for name, kw in (("answer_now", {}), ("screen", {}), ("summary", {}), ("feedback", {}), ("job_prep", {"ad": "x" * 60}),
+                         ("practice_questions", {}), ("say", {"text": "hello"}), ("recording", {"path": "x.mp3"}),
+                         ("recording_link", {"url": "https://example.com/v"}), ("overlay", {"on": True})):
+            r = a.call(name, kw)
+            assert r["ok"] is False and r.get("feature") and "Setup › Features" in r["error"], (name, r)
+        assert a.call("recording", {"cancel": True})["ok"] is True          # stopping always works
+        pub = a.public_config()
+        assert pub["tasks"]["ans"]["used"] is False and pub["tasks"]["tr"]["used"] is True
+    finally:
+        a.closing.set()
+
+
+def test_lines_follow_the_feature_switches(app):
+    import time
+    eng, sess, calls = _engine(app)
+    tr = []
+    eng._submit_tr = lambda eid: tr.append(eid) or True
+    try:
+        eng.cfg["features"] = {"translate": False, "answers": False}
+        _say(app, eng, "How would you design a backup strategy for a very large database?")
+        time.sleep(1.5)
+        e = sess.ordered()[-1]
+        assert e["tr_state"] == "off" and e["ans_state"] == "off" and not tr and not calls   # nothing sent
+        eng.cfg["features"] = {}
+        _say(app, eng, "And how would you test that the backups really work?")
+        time.sleep(1.8)
+        e = sess.ordered()[-1]
+        assert e["tr_state"] != "off" and tr and calls                                     # on again: both run
+    finally:
+        eng.stop_event.set()
