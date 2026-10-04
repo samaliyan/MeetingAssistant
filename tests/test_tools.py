@@ -734,9 +734,36 @@ def test_gguf_arch_tells_speech_from_chat_and_routes_each(app, tmp_path):
     # a chat model does not belong in the speech-to-text slot
     assert "chat model" in app.wrong_slot_message(gem, "stt").lower()
     assert app.wrong_slot_message(wh, "stt") == ""
-    # the speech picker now points a chat model to the right place instead of "not a speech model"
-    _, err = app.model_folder(gem)
-    assert "Local AI model" in err
+    # the speech picker points a chat model to the right place instead of "not a speech model"
+    folder, err = app.model_folder(gem)
+    assert folder == "" and "Local AI model" in err
+    # whisper.cpp in the exe reads only ggml files, so a Whisper .gguf is refused with a clear way forward
+    folder, err = app.model_folder(wh)
+    assert folder == "" and ".gguf" in err and "Setup › Services › Local model" in err
+    # the messages name places that really exist (Setup has no "Audio" place for models)
+    for msg in (app.wrong_slot_message(wh, "llm"), app.wrong_slot_message(gem, "stt"), app.WHISPER_GGUF_NOTE):
+        assert "Setup › Services ›" in msg and "Audio" not in msg
+
+
+def test_helper_windows_reuse_the_unpacked_program(app, monkeypatch):
+    import inspect, subprocess, sys
+    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+    assert "PYINSTALLER_RESET_ENVIRONMENT" not in app.helper_env(False)     # reuses: starts at once
+    assert app.helper_env(True)["PYINSTALLER_RESET_ENVIRONMENT"] == "1"      # outlives us: its own copy
+    # a second start only shows the running program and quits: its window must be independent
+    src = inspect.getsource(app.main)
+    assert src.count("open_window(existing, independent=True)") == 2
+    assert "open_window(app.url)" in src and "end_helpers()" in src
+    # the helpers are ended before the program exits
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    app.HIDDEN_PROC[:] = [p]
+    try:
+        app.end_helpers()
+        assert p.poll() is not None
+    finally:
+        app.HIDDEN_PROC[:] = []
+        if p.poll() is None:
+            p.kill()
 
 
 def _say(app, eng, text, when=None):

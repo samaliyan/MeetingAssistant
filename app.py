@@ -3446,18 +3446,16 @@ def model_folder(path):
         if name.endswith(".pt"):
             return "", ("This model is for the 'openai-whisper' program (.pt file). This program needs a "
                         "faster-whisper model: a folder with model.bin, config.json and tokenizer.json.")
-        cpp_like = name != "model.bin" and is_ggml(p) and (
-            name.endswith(".bin") or name.endswith(".gguf") or name.startswith("ggml"))
-        if cpp_like:
-            wrong = wrong_slot_message(p, "stt")
-            if wrong:
-                return "", wrong                               # a chat model (gemma, llama, ...) chosen here by mistake
+        if name.endswith(".gguf"):
+            # whisper.cpp (v1.8.6, in the exe) reads only the older ggml files ("ggml-....bin"), not .gguf
+            return "", wrong_slot_message(p, "stt") or WHISPER_GGUF_NOTE
+        if name.endswith(".bin") and name != "model.bin" and is_ggml(p):
             if cpp_server_path():
-                return os.path.abspath(p), ""                  # a whisper.cpp model (ggml .bin or .gguf): the whisper.cpp engine runs it
-            return "", ("This is a whisper.cpp model. The whisper.cpp engine is not in this copy of the program "
+                return os.path.abspath(p), ""                  # a whisper.cpp model: run by the whisper.cpp engine
+            return "", ("This is a whisper.cpp model (ggml). The whisper.cpp engine is not in this copy of the program "
                         "(it is in the Windows exe from the release page). Or use a faster-whisper model: a folder with "
                         "model.bin, config.json and tokenizer.json.")
-        if name.endswith(".gguf") or name.startswith("ggml") or (name.endswith(".bin") and name != "model.bin"):
+        if name.startswith("ggml") or (name.endswith(".bin") and name != "model.bin"):
             return "", ("This file is not a speech model this program can run. Use a faster-whisper model folder "
                         "(model.bin, config.json, tokenizer.json) or a whisper.cpp model (ggml-....bin).")
         folder = os.path.dirname(p)
@@ -3532,17 +3530,23 @@ def gguf_arch(path):
     return ""
 
 
+WHISPER_GGUF_NOTE = ("This is a Whisper speech model in .gguf form. The speech engine of this program cannot read "
+                     ".gguf files. Download a model from the list in Setup › Services › Local model instead "
+                     "(for example small, or cpp-small for Intel / AMD graphics).")
+
+
 def wrong_slot_message(path, want):
-    """One clear sentence when a .gguf is chosen in the wrong place, or '' when it fits.
-    want='llm'  -> the Local AI model slot, which needs a chat / instruct model;
-    want='stt'  -> the speech-to-text slot, which needs a speech (Whisper) model."""
+    """One clear message when a .gguf is chosen in the wrong place, or '' when it fits.
+    want='llm'  -> the Local AI model box (translation and answers), which needs a chat / instruct model;
+    want='stt'  -> the Local model box (speech to text), which needs a speech model."""
     arch = gguf_arch(path)
     if want == "llm" and arch == "whisper":
-        return ("This is a speech model (Whisper), not a chat model. Use it under Setup -> Audio for speech to text. "
-                "The Local AI model needs a chat / instruct model such as gemma3-4b.")
+        return ("This is a Whisper speech model, not a chat model, so it cannot be used for translation and answers. "
+                "Here, use a chat model such as gemma3-4b (Download, below). For speech to text, download a model "
+                "from the list in Setup › Services › Local model (this program cannot read Whisper in .gguf form).")
     if want == "stt" and arch and arch != "whisper":
-        return (f"This is an AI chat model ({arch}), not a speech model. Use it under Setup -> Services -> Local AI model. "
-                "For speech to text use a faster-whisper folder or a whisper.cpp model.")
+        return (f"This is an AI chat model ({arch}), not a speech model. "
+                "Choose it in Setup › Services › Local AI model instead.")
     return ""
 
 
@@ -14161,8 +14165,38 @@ def note_hide_failure(msg):
 HIDDEN_PROC = []            # the running hidden-window process, so the self-test can find its window
 
 
-def open_hidden_window(url):
-    """True when the hidden window is up and its hiding is on."""
+def helper_env(independent):
+    """The environment for a helper window started from this same exe.
+    The exe is one file: at every start Windows unpacks the whole program (about 100 MB) into a temporary folder.
+    A helper that ends before this process (the hidden window of this run, the overlay) reuses the folder this
+    process already unpacked, so it starts at once instead of unpacking everything a second time.
+    A helper that must outlive this process (independent=True: a second start that only opens the window and then
+    quits) gets its own unpacked copy, because this process's copy is deleted when it exits."""
+    env = dict(os.environ)
+    if independent:
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    else:
+        env.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+    return env
+
+
+def end_helpers():
+    """Ends the hidden window before this process exits: it uses this process's unpacked files, which are deleted
+    right after we exit (a helper still holding them would make Windows warn that they could not be removed)."""
+    for p in list(HIDDEN_PROC):
+        try:
+            if p.poll() is None:
+                p.terminate()
+                p.wait(3)
+        except Exception:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+
+def open_hidden_window(url, independent=False):
+    """True when the hidden window is up and its hiding is on. independent=True: the window outlives this process."""
     if not hidden_window_possible():
         note_hide_failure("This copy of the program has no hidden-window support (the 'pywebview' package is missing).")
         return False
@@ -14173,7 +14207,7 @@ def open_hidden_window(url):
     cmd = ([sys.executable] if FROZEN else [sys.executable, os.path.abspath(__file__)]) + \
         ["--window", url, "--storage", HIDDEN_STORAGE, "--status", HIDE_STATUS_PATH]
     try:
-        p = subprocess.Popen(cmd, env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"), close_fds=True)
+        p = subprocess.Popen(cmd, env=helper_env(independent), close_fds=True)
     except OSError as e:
         note_hide_failure("The hidden window could not be started: " + short(e, 100))
         return False
@@ -14204,10 +14238,11 @@ def open_hidden_window(url):
     return False
 
 
-def open_window(url):
+def open_window(url, independent=False):
+    """independent=True: this process quits right after (a second start that only shows the running program)."""
     if os.environ.get("MA_NO_BROWSER"):
         return
-    if hide_wanted() and open_hidden_window(url):
+    if hide_wanted() and open_hidden_window(url, independent):
         return
     try:
         trim_window_profile()
@@ -14377,7 +14412,7 @@ class Overlay:
             ["--overlay", self.app.url + "&overlay=1", "--storage", HIDDEN_STORAGE, "--status", OVERLAY_STATUS_PATH,
              "--geom", f"{x},{y},{w},{h}", "--data", DATA_DIR, "--parent", str(os.getpid())]
         try:
-            self.proc = subprocess.Popen(cmd, env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"), close_fds=True)
+            self.proc = subprocess.Popen(cmd, env=helper_env(False), close_fds=True)   # ended by stop() / shutdown
         except OSError as e:
             return short(e, 100)
         end = time.time() + 40
@@ -14785,14 +14820,14 @@ def main():
     make_dpi_aware()
     existing = running_url()
     if existing:                                  # already running -> just show its window
-        open_window(existing)
+        open_window(existing, independent=True)   # (this process quits now: the window must not use its files)
         return
     if not single_instance():
         for _ in range(80):                       # the other copy is still starting: wait for it, then show it
             time.sleep(0.5)
             existing = running_url()
             if existing:
-                open_window(existing)
+                open_window(existing, independent=True)
                 return
         message_box("Meeting Assistant is already running.")
         return
@@ -14831,6 +14866,7 @@ def main():
     except KeyboardInterrupt:
         app.shutdown()
     server.shutdown()
+    end_helpers()                                       # before our unpacked files are deleted
     log_flush()                                         # the last log lines reach the file
     try:
         sys.stdout and sys.stdout.flush()
@@ -14845,4 +14881,11 @@ if __name__ == "__main__":
         main()
     except Exception:
         message_box("Meeting Assistant could not start:\n\n" + traceback.format_exc()[-1500:])
+        try:
+            end_helpers()
+            a = getattr(Handler, "app", None)
+            if a is not None:
+                a.overlay._kill_proc()
+        except Exception:
+            pass
         sys.exit(1)
