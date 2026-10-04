@@ -422,7 +422,7 @@ def test_hide_status_file(app, tmp_path):
     p = os.path.join(str(tmp_path), "hide.json")
     assert app.read_hide_status(p) is None
     app.write_hide_status(p, True, "exclude", "")
-    assert app.read_hide_status(p) == {"active": True, "mode": "exclude", "error": ""}
+    assert app.read_hide_status(p) == {"active": True, "mode": "exclude", "error": "", "pid": os.getpid()}
     open(p, "w").write("{broken")
     assert app.read_hide_status(p) is None
     open(p, "w").write("[1]")

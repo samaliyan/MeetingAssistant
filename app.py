@@ -11436,7 +11436,10 @@ class App:
         if p is None or p.poll() is not None:
             return {"ok": False, "error": "The hidden window is not running. Restart the program and test again."}
         try:
-            r = _hide_capture_test(p.pid)
+            # The window belongs to the process that wrote the status file. That is NOT p.pid when the program is
+            # the one-file exe (PyInstaller starts a second, child process that runs the code) or runs from a venv
+            # (venv\Scripts\python.exe is a launcher that starts the real python.exe as a child).
+            r = _hide_capture_test(st.get("pid") or p.pid)
         except Exception as e:
             log("hide test failed:", traceback.format_exc(), level="warn")
             return {"ok": False, "error": "The test could not run: " + short(e, 140)}
@@ -13548,7 +13551,8 @@ def write_hide_status(path, active, mode="", error=""):
     try:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"active": bool(active), "mode": mode, "error": error, "t": time.time()}, f)
+            json.dump({"active": bool(active), "mode": mode, "error": error, "t": time.time(),
+                       "pid": os.getpid()}, f)   # the process that really owns the window (see api_hide_test)
         os.replace(tmp, path)
     except OSError:
         pass
@@ -13562,8 +13566,12 @@ def read_hide_status(path=None):
             stale = time.time() - float(d.get("t") or 0) > 90 and d.get("active") is True
             if stale:
                 return {"active": False, "mode": "", "error": "The hidden window stopped answering."}
+            try:
+                pid = int(d.get("pid") or 0)
+            except (TypeError, ValueError):
+                pid = 0
             return {"active": d.get("active") is True, "mode": str(d.get("mode") or "")[:20],
-                    "error": str(d.get("error") or "")[:300]}
+                    "error": str(d.get("error") or "")[:300], "pid": pid}
     except (OSError, ValueError):
         pass
     return None
