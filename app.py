@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.18"
+VERSION = "6.19"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -195,7 +195,7 @@ TRANSLATE_HISTORY = 2
 # settings only the program's own actions change (they check them first) - never taken from "save settings"
 INTERNAL_KEYS = ("config_version", "providers", "local_model", "llm_model", "local_bench", "last_recording_dir",
                  "about_file")
-CONFIG_VERSION = 5                 # settings format; older files are converted when they are read
+CONFIG_VERSION = 6                 # settings format; older files are converted when they are read
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
     "api_key": "",
@@ -281,9 +281,11 @@ PRESETS = {
 TASKS = {"stt": "Speech to text", "tr": "Translation", "ans": "Answers"}
 # Parts of the program that can be turned off (Setup › Features): off = hidden, nothing sent, no service needed.
 FEATURES = {"translate": "Translation", "answers": "Suggested answers", "coach": "Coach", "overlay": "Overlay",
-            "screen": "Screen reading", "prep": "Interview prep", "after": "After the meeting", "files": "Files and links"}
+            "screen": "Screen reading", "prep": "Interview prep", "after": "After the meeting", "files": "Files and links",
+            "say": "Say it in my language", "marks": "Mark moments", "notes": "My notes", "detect": "Meeting reminder"}
 FEATURE_TASKS = {"translate": ("tr",), "answers": ("ans",), "coach": ("ans",), "screen": ("ans",), "prep": ("ans",),
-                 "after": ("ans",), "files": ("stt",), "overlay": ()}
+                 "after": ("ans",), "files": ("stt",), "overlay": (), "say": ("ans",), "marks": (), "notes": ("ans",),
+                 "detect": ()}
 
 
 def feat(cfg, name):
@@ -571,6 +573,10 @@ def load_config():
     for k, v in saved.items():
         if k in DEFAULTS:
             cfg[k] = v
+    f_old = cfg.get("features")
+    if ver < 6 and isinstance(f_old, dict) and f_old.get("answers") is False and f_old.get("after") is False:
+        # 6.19 added parts that need the answers service: someone who used the program without one keeps it that way
+        cfg["features"] = {**f_old, "say": False, "notes": False}
     if "languages" not in saved and saved.get("language") in LANGS:
         cfg["languages"] = [saved["language"]]          # earlier versions: one "language" (or "auto")
     for key in ("local_model", "llm_model"):
@@ -5749,6 +5755,28 @@ def glossary_note(cfg):
     return ("\nTechnical words that may be spoken (spell them exactly like this): " + ", ".join(terms)) if terms else ""
 
 
+def merge_glossary(old, terms):
+    """The glossary with new terms added at the end (no repeats, the limit of terms kept). -> (text, added terms)"""
+    have = glossary_terms({"glossary": old})
+    low = {t.lower() for t in have}
+    base = str(old or "").rstrip()
+    if len(base) > 2600:                                # long or untidy text: rebuilt one term per line (it must fit 3000)
+        base = "\n".join(have)
+    added, size = [], len(base)
+    for t in terms:
+        t = re.sub(r"[\s,;،؛]+", " ", str(t)).strip()
+        if not t or len(t) > GLOSSARY_MAX_LEN or t.lower() in low:
+            continue
+        if len(have) + len(added) >= GLOSSARY_MAX_TERMS or size + len(t) + 1 > 3000:
+            break                                       # the list is full
+        low.add(t.lower())
+        added.append(t)
+        size += len(t) + 1
+    if not added:
+        return str(old or ""), []
+    return (base + "\n" if base else "") + "\n".join(added), added
+
+
 def apply_glossary(text, terms):
     """Fixes the spelling of terms that have capitals or digits (OSPF, RMAN, k8s). Plain words are left alone."""
     for t in terms:
@@ -5970,6 +5998,25 @@ def save_alert(kind, msg):
         pass
 
 
+def speaker_key(e):
+    """Which speaker a line belongs to, for the names the user gives (the other side only)."""
+    if e.get("source") == "me":
+        return "me"
+    if isinstance(e.get("who"), str) and e["who"].strip():
+        return "who:" + e["who"].strip()[:40]
+    return f"them:{e.get('speaker') or 0}"
+
+
+def clean_names(d):
+    if not isinstance(d, dict):
+        return {}
+    out = {}
+    for k, v in list(d.items())[:40]:
+        if isinstance(k, str) and isinstance(v, str) and v.strip() and re.fullmatch(r"them:\d{1,3}|who:.{1,40}", k):
+            out[k] = " ".join(v.split())[:40]
+    return out
+
+
 class Session:
     def __init__(self, cfg, recording=""):
         self.cfg = cfg
@@ -5996,9 +6043,13 @@ class Session:
         self.screens = []                           # notes from 'Read my screen': {t, text}
         self.scores = {}                            # readiness scores of the review
         self.coach_notes = {}                       # what the coach remembers: facts you said, topics, promises, brief ...
+        self.my_notes = ""                          # what the user typed during the meeting (short notes)
+        self.notes_full = ""                        # those notes made complete from the transcript, after the meeting
+        self.names = {}                             # names the user gave the speakers: {"them:1": "John", "who:Person 2": "Sara"}
 
     FIELDS = ("source", "t0", "t_end", "t_text", "text", "lang", "translation", "tr_state", "answer", "answer_fa",
-              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing", "speaker", "repeat", "qtype", "qhint", "qmin", "qmax", "who")
+              "ans_state", "forced", "question", "explain", "explain_q", "ex_state", "edited", "timing", "speaker", "repeat", "qtype", "qhint", "qmin", "qmax", "who",
+              "marked")
 
     def state(self):
         with self.lock:
@@ -6006,6 +6057,7 @@ class Session:
             return {"path": self.path, "started": self.started.timestamp(), "summary": self.summary,
                     "resumes": list(self.resumes), "feedback": self.feedback, "screens": list(self.screens),
                     "coach_notes": dict(self.coach_notes), "scores": dict(self.scores),
+                    "my_notes": self.my_notes, "notes_full": self.notes_full, "names": dict(self.names),
                     "entries": rows}
 
     @classmethod
@@ -6029,6 +6081,9 @@ class Session:
             s.feedback = d.get("feedback") if isinstance(d.get("feedback"), str) else ""
             s.coach_notes = clean_notes(d.get("coach_notes"))
             s.scores = clean_scores(d.get("scores"))
+            s.my_notes = d.get("my_notes")[:20000] if isinstance(d.get("my_notes"), str) else ""
+            s.notes_full = d.get("notes_full")[:40000] if isinstance(d.get("notes_full"), str) else ""
+            s.names = clean_names(d.get("names"))
             s.screens = [{"t": float(x["t"]), "text": x["text"]} for x in (d.get("screens") if isinstance(d.get("screens"), list) else [])
                          if isinstance(x, dict) and num(x.get("t")) and isinstance(x.get("text"), str)][:30]
             s.resumes = [float(x) for x in (d.get("resumes") if isinstance(d.get("resumes"), list) else []) if num(x)]
@@ -6040,6 +6095,7 @@ class Session:
                 e = {**{k: row.get(k) for k in cls.FIELDS}, "id": eid, "seg_ids": []}
                 e["t_end"] = e["t_end"] if num(e["t_end"]) else e["t0"]
                 e["t_text"] = e["t_text"] if num(e["t_text"]) else e["t0"]
+                e["marked"] = e.get("marked") is True
                 for k in ("tr_state", "ans_state", "ex_state"):     # anything unfinished stays unfinished
                     if e[k] in ("pending", "streaming", "thinking"):
                         e[k] = "error" if k == "tr_state" else "none"
@@ -6060,7 +6116,7 @@ class Session:
                  "translation": "", "tr_state": "pending",
                  "answer": "", "answer_fa": "", "ans_state": "none", "forced": False, "question": "",
                  "explain": "", "explain_q": "", "ex_state": "none", "edited": False, "repeat": 0,
-                 "qtype": "", "qhint": "", "qmin": 0, "qmax": 0,
+                 "qtype": "", "qhint": "", "qmin": 0, "qmax": 0, "marked": False,
                  "speaker": speaker if isinstance(speaker, int) and speaker > 0 else None}
             self.entries[eid] = e
             self.dirty = True
@@ -6093,6 +6149,48 @@ class Session:
         with self.lock:
             self.summary = text
             self.dirty = True
+
+    def set_notes(self, mine=None, full=None):
+        with self.lock:
+            if mine is not None:
+                self.my_notes = str(mine)[:20000]
+            if full is not None:
+                self.notes_full = str(full)[:40000]
+            self.dirty = True
+
+    def set_name(self, key, name):
+        """A name for one speaker of the other side (empty = back to Person 1 / the speaker's label)."""
+        key = str(key or "")[:44]
+        name = " ".join(str(name or "").split())[:40]
+        if not re.fullmatch(r"them:\d{1,3}|who:.{1,40}", key):
+            return False
+        with self.lock:
+            if name:
+                if key not in self.names and len(self.names) >= 40:
+                    return False
+                self.names[key] = name
+            else:
+                self.names.pop(key, None)
+            self.dirty = True
+            return True
+
+    def mark(self, eid=None, on=None):
+        """Marks a line as an important moment. eid None = the newest line (marked, never unmarked)."""
+        with self.lock:
+            if eid is None:
+                rows = [e for e in self.entries.values() if (e.get("text") or "").strip()]
+                if not rows:
+                    return None
+                e = max(rows, key=lambda r: r["t0"])
+                on = True
+            else:
+                e = self.entries.get(eid)
+                if not e:
+                    return None
+                on = (not e.get("marked")) if on is None else bool(on)
+            e["marked"] = on
+            self.dirty = True
+            return dict(e)
 
     def update(self, eid, **fields):
         with self.lock:
@@ -6128,6 +6226,9 @@ class Session:
     def label(self, e):
         if e["source"] == "me":
             return self.cfg["me_label"]
+        given = self.names.get(speaker_key(e))
+        if given:
+            return given                                       # a name the user gave this speaker
         if isinstance(e.get("who"), str) and e["who"].strip():
             return e["who"].strip()[:40]                       # a recording whose speakers were told apart
         return speaker_label(self.cfg["them_label"], e.get("speaker"))
@@ -6164,7 +6265,7 @@ class Session:
             while marks and e["t0"] >= marks[0]:
                 out += [f"*— continued at {datetime.datetime.fromtimestamp(marks.pop(0)):%H:%M} —*", ""]
             t = datetime.datetime.fromtimestamp(e["t0"]).strftime("%H:%M:%S")
-            out.append(f"**[{t}] {self.label(e)}:** {e['text']}")
+            out.append(f"**[{t}]{' ★' if e.get('marked') else ''} {self.label(e)}:** {e['text']}")
             if e["translation"]:
                 out += ["", f"> {e['translation']}"]
             if e["answer"]:
@@ -6174,6 +6275,15 @@ class Session:
             if e.get("explain"):
                 out += ["", f"> ❓ «{e.get('explain_q', '')}»: {e['explain']}"]
             out.append("")
+        marked = [e for e in rows if e.get("marked")]
+        if marked:
+            out += ["---", "", "## Marked moments / لحظه‌های علامت‌خورده", ""]
+            out += [f"- ★ [{datetime.datetime.fromtimestamp(e['t0']):%H:%M:%S}] {self.label(e)}: {e['text']}" for e in marked]
+            out.append("")
+        if self.my_notes.strip():
+            out += ["---", "", "## My notes / یادداشت‌های من", "", self.my_notes.strip(), ""]
+        if self.notes_full.strip():
+            out += ["---", "", "## Full notes / یادداشت کامل", "", self.notes_full.strip(), ""]
         if self.summary:
             out += ["---", "", "## Summary / خلاصه", "", self.summary, ""]
         if self.feedback:
@@ -6221,8 +6331,9 @@ class Session:
 # ----------------------------------------------------------------------------
 # 6.2 tools: talk statistics, screen picture, search in old meetings, export
 # ----------------------------------------------------------------------------
-SPEECH_FILLERS = ("um", "uh", "er", "erm", "hmm", "äh", "ähm", "you know", "i mean", "basically",
-                  "sort of", "kind of", "sozusagen", "quasi")
+SPEECH_FILLERS = ("um", "uh", "er", "erm", "hmm", "äh", "ähm", "you know", "i mean", "basically", "actually",
+                  "literally", "sort of", "kind of", "like", "sozusagen", "quasi")
+FILLER_PATTERNS = {"like": r"(?<!\w)like(?=\s*,)"}      # only "like," as a pause word, not "I like it"
 
 
 def talk_stats(rows):
@@ -6235,9 +6346,9 @@ def talk_stats(rows):
     mw, tw = sum(words(r) for r in me), sum(words(r) for r in th)
     m_sec = sum(max(0.0, r["t_end"] - r["t0"]) for r in me)
     fill = {}
-    blob = " ".join(r["text"].lower() for r in me)
     for f in SPEECH_FILLERS:
-        n = len(re.findall(r"(?<!\w)" + re.escape(f) + r"(?!\w)", blob))
+        n = sum(len(re.findall(FILLER_PATTERNS.get(f) or r"(?<!\w)" + re.escape(f) + r"(?!\w)", r["text"].lower()))
+                for r in me)
         if n:
             fill[f] = n
     delays = []
@@ -6248,7 +6359,9 @@ def talk_stats(rows):
     return {"minutes": round(span, 1), "me_words": mw, "them_words": tw,
             "me_share": round(100 * mw / (mw + tw)) if mw + tw else 0,
             "wpm": round(mw / (m_sec / 60)) if m_sec >= 20 else None,
-            "fillers": sum(fill.values()), "filler_list": fill,
+            "fillers": sum(fill.values()), "filler_list": dict(sorted(fill.items(), key=lambda x: -x[1])),
+            "fillers_per_min": round(sum(fill.values()) / (m_sec / 60), 1) if m_sec >= 20 else None,
+            "pace": None if m_sec < 20 or not mw else "slow" if mw / (m_sec / 60) < 110 else "fast" if mw / (m_sec / 60) > 170 else "good",
             "long_pauses": sum(1 for d in delays if d > 6), "answers": len(delays),
             "avg_delay": round(sum(delays) / len(delays), 1) if delays else None}
 
@@ -6810,7 +6923,7 @@ def parse_meeting_md(text):
             if m:
                 if cur:
                     out.append(cur)
-                cur = ["line", m.group(1), m.group(2), m.group(3)]
+                cur = ["line", m.group(1), re.sub(r"^★\s*", "", m.group(2)), m.group(3)]
             elif cur and ln.startswith(">"):
                 cur[3] += "\n" + ln.lstrip("> ").strip()
             continue
@@ -7069,6 +7182,10 @@ class Engine:
         self.app = app
         self.file_mode = file_mode     # a recording: no answers, no previews, patient with free limits
         self.paused = False
+        self.say_mode = False                # "say it in my language": my speech becomes a sentence to say, not a line
+        self.say_seq = itertools.count(1)
+        self.say_last = 0                    # the newest sentence shown (an older one that finishes later is not shown)
+        self.say_lock = threading.Lock()
         self.tr_inflight = 0           # translations queued or running (a recording waits for them)
         self.tr_lock = threading.Lock()
         self.tr_gen = collections.Counter()
@@ -7554,8 +7671,8 @@ class Engine:
         self.hub.publish("speech_mode", **self.speech_mode())
 
     def live_interim(self, source, key, t0, text):
-        if key in self.done_segs or self.paused:
-            return
+        if key in self.done_segs or self.paused or (source == "me" and self.say_mode):
+            return                                          # (say mode: my words are not shown or translated)
         self._plan_more_coming(source)
         self.live_retries[source] = 0                     # the stream works again
         self.hub.publish("speaking", seg=key, source=source, t0=t0, phase="speaking", text=text, live=True)
@@ -7567,7 +7684,7 @@ class Engine:
         text = re.sub(r"\s+", " ", text).strip()
         self.live_heard[source] = max(self.live_heard.get(source, 0.0), t_end)   # the live service answered up to here
         self.live_retries[source] = 0
-        if self.paused or not normalize_words(text):
+        if self.paused or not normalize_words(text) or (source == "me" and self.say_mode):
             self._mark_done([key])
             self.previews.pop(key, None)
             return self.hub.publish("speaking", seg=key, source=source, phase="discard")
@@ -7760,6 +7877,20 @@ class Engine:
                 self._preview_translate(key, source, latest, mn)
 
     def on_audio(self, kind, source, seg_id, **kw):
+        if source == "me" and self.say_mode and not self.file_mode:
+            if kind in ("segment", "discard"):
+                self.previews.pop(seg_id, None)
+                self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")   # (a row from before say mode)
+            if kind == "segment" and not self.paused:        # say mode: my words go to "say it", never into the transcript
+                job = {"segs": [seg_id], "source": source, "audio": kw["audio"], "t0": kw["t0"], "say": True,
+                       "t_end": kw["t_end"], "dur": kw["dur"], "tries": 0, "t_queued": time.time()}
+                self.hub.publish("say", state="listening", note="Got it, writing it down…")
+                with self.cv:
+                    self.pending.append(job)
+                    self.cv.notify()
+            elif kind in ("segment", "discard"):
+                self._mark_done([seg_id])
+            return
         if source == "me" and kind in ("start", "preview", "segment"):
             self.me_voice_at = time.time()                   # the user is speaking (before any text exists)
         if self.live_mode(source):
@@ -7907,7 +8038,8 @@ class Engine:
                     k = 0
                     while k < len(self.pending):
                         o = self.pending[k]
-                        if (o["source"] == job["source"] and job["dur"] + o["dur"] <= MAX_MERGED
+                        if (o["source"] == job["source"] and bool(o.get("say")) == bool(job.get("say"))
+                                and job["dur"] + o["dur"] <= MAX_MERGED
                                 and self._usable(model, job["dur"] + o["dur"], now)):
                             gap = np.zeros(4000, dtype=np.float32)          # 0.25 s pause
                             job = {**job, "segs": job["segs"] + o["segs"],
@@ -7986,9 +8118,9 @@ class Engine:
     def _process(self, job, target):
         source = job["source"]
         pid, model = target
-        lang = fixed_lang(self.cfg)
+        lang = self.cfg["my_language"] if job.get("say") else fixed_lang(self.cfg)
         t_sent = time.time()
-        if pid == "local" and len(job["segs"]) == 1 and (lang or self.lang_sure >= 2):
+        if pid == "local" and not job.get("say") and len(job["segs"]) == 1 and (lang or self.lang_sure >= 2):
             st = self.previews.get(job["segs"][0])
             end = time.time() + max(2.0, 2.5 * (LOCAL.quick_avg or 1.0))
             while st and st.get("spec_pending") and (st.get("busy") or st.get("spec_audio") is not None) \
@@ -8004,9 +8136,10 @@ class Engine:
                 self.local_finals_n = getattr(self, "local_finals_n", 0) + 1
                 pinned = self.lang_sure >= 2 and self.local_finals_n % 10
                 lg = lang or (self.lang_guess if pinned else None)
-                res = LOCAL.transcribe(job["audio"], "", lg, self._stt_prompt(source))
+                res = LOCAL.transcribe(job["audio"], "", lg, None if job.get("say") else self._stt_prompt(source))
             else:
-                res = self.app.get_api(pid).transcribe(job["audio"], model, lang, self._stt_prompt(source))
+                res = self.app.get_api(pid).transcribe(job["audio"], model, lang,
+                                                       None if job.get("say") else self._stt_prompt(source))
             job["timing"] = {"pause": job["t_queued"] - job["t_end"], "queue": t_sent - job["t_queued"],
                              "stt": time.time() - t_sent, "service": pid, "model": model}
             self.app.note_request()
@@ -8052,6 +8185,9 @@ class Engine:
             return self._drop(job)
 
         text = clean_transcript(res)
+        if job.get("say"):
+            self._mark_done(job["segs"])
+            return self.say_speech(text)
         detected = LANG_CODES.get((res.get("language") or "").lower())
         if detected not in meeting_langs(self.cfg):
             detected = None                             # not one of the meeting's languages: a misdetection
@@ -8257,6 +8393,8 @@ class Engine:
         for s in job["segs"]:
             self.previews.pop(s, None)
             self.hub.publish("speaking", seg=s, source=job["source"], phase="discard")
+        if job.get("say") and not self.stop_event.is_set():
+            self.hub.publish("say", state="error", note="Your words could not be written down. Speak again.")
 
     def _wait_for_other_side(self, job, limit=2.0):
         """Before judging an echo, let overlapping lines of the other side finish (max 2 s)."""
@@ -8658,7 +8796,7 @@ class Engine:
     def _summary(self, rows):
         c = self.cfg
         pub = lambda **kw: self.hub.publish("summary", session_file=self.session.path, **kw)
-        lines = [f"{self.session.label(r)}: {r['text']}" for r in rows]
+        lines = [f"{'★ ' if r.get('marked') else ''}{self.session.label(r)}: {r['text']}" for r in rows]
         chain = self.chat_targets("ans")
         waiting = lambda w: pub(state="working", text="", note=f"Waiting {round(w)} s for the free limit…")
         try:
@@ -8676,31 +8814,36 @@ class Engine:
                     pub(state="working", text="", note=f"Reading part {i} of {len(parts)}…")
                     msg = [{"role": "system", "content": "Write compact notes (in English) of this part of a meeting "
                             "transcript: topics, every question asked and the gist of the reply, facts, names, numbers, "
-                            "follow-ups. Max 12 bullet points. Only what is in the text."},
+                            "decisions, follow-ups (who, what, when), lines marked ★. Max 12 bullet points. Only what is in the text."},
                            {"role": "user", "content": "\n".join(part)}]
                     notes.append(self.chat_patient(chain, msg, 500, 0.2, lambda t: None, on_wait=waiting))
                 source = "Notes of the meeting, part by part:\n\n" + "\n\n".join(notes)
             else:
                 source = "Transcript:\n" + "\n".join(lines)
+            if self.session.my_notes.strip():
+                source += "\n\nThe user's own notes from the meeting:\n" + short(self.session.my_notes.strip(), 3000)
             me, them = c["me_label"], c["them_label"]
             ml = c["my_language"]
             meet = " or ".join(lang_name(x) for x in meeting_langs(c))
             if ml == "fa":
-                heads = ("## خلاصه", "## سؤال‌هایی که پرسیده شد", "## نکات مهم", "## کارهای بعدی",
+                heads = ("## خلاصه", "## سؤال‌هایی که پرسیده شد", "## نکات مهم", "## تصمیم‌ها", "## کارهای بعدی",
                          "«جواب داده نشد»", "«موردی ذکر نشد»")
                 how = "Use exactly these headings"
             else:
-                heads = ("## Summary", "## Questions that were asked", "## Key points", "## Next steps",
+                heads = ("## Summary", "## Questions that were asked", "## Key points", "## Decisions", "## Action items",
                          "'not answered'", "'none mentioned'")
-                how = f"Use these four headings, translated into {lang_name(ml)}"
+                how = f"Use these five headings, translated into {lang_name(ml)}"
             system = (f"You write a meeting summary for {me}, a {lang_name(ml)} speaker. The meeting was in {meet}. "
                       f"Write in {lang_full(ml)}. Keep technical terms, product names and exact numbers as they are. "
                       f"{how} (markdown ##) and bullet points (- ):\n"
                       f"{heads[0]}\n2-4 sentences: what the meeting was about and how it went.\n"
                       f"{heads[1]}\n- each question {them} asked, then briefly how {me} answered "
-                      f"(or {heads[4]}).\n"
+                      f"(or {heads[5]}).\n"
                       f"{heads[2]}\n- important facts, names, numbers, dates, requirements.\n"
-                      f"{heads[3]}\n- follow-ups and things to prepare or send; if none: {heads[5]}.\n"
+                      f"{heads[3]}\n- what was decided or agreed; if none: {heads[6]}.\n"
+                      f"{heads[4]}\n- one per line: **who** — what — by when (only if a time was said); follow-ups and "
+                      f"things to prepare or send; if none: {heads[6]}.\n"
+                      "Moments marked ★ were marked as important by the user: always cover them. "
                       "Only use what is in the text. No introduction."
                       + (f"\n{mode_text(c, 'summary')}" if mode_text(c, "summary") else "")
                       + (f"\nMeeting topic: {c['context'][:300]}" if c["context"] else "") + glossary_note(c))
@@ -8855,6 +8998,98 @@ class Engine:
                                                        {"role": "user", "content": user}], 600, 0.5, lambda t: None)
         ans, fa = split_answer(out)
         return {"text": ans, "meaning": fa, "lang": target}
+
+    def say_speech(self, heard):
+        """Say mode: what the user said (in their own language) becomes a sentence to say in the meeting."""
+        heard = re.sub(r"\s+", " ", heard or "").strip()
+        if not normalize_words(heard):
+            return self.hub.publish("say", state="error", note="Nothing was understood. Speak again, a little louder.")
+        n = next(self.say_seq)
+        self.hub.publish("say", state="working", heard=heard, note="Writing the sentence…")
+        if not self._submit(self._say_speech, heard, n):
+            self.hub.publish("say", state="error", heard=heard, note="The meeting has ended.")
+
+    def _say_speech(self, heard, n=0):
+        def show(**kw):
+            with self.say_lock:
+                if n < self.say_last:
+                    return                                  # a newer sentence is already on screen
+                self.say_last = n
+                self.hub.publish("say", heard=heard, **kw)
+        try:
+            r = self.say(heard, "", "natural")
+            if not r.get("text"):
+                raise APIError("The service gave no sentence. Try again.")
+            show(state="done", text=r["text"], meaning=r.get("meaning") or "", lang=r["lang"])
+            log(f"Say mode: \"{short(heard, 60)}\" -> \"{short(r['text'], 80)}\"")
+        except Exception as e:
+            log("say mode error:", short(e, 160), level="warn")
+            show(state="error", note="It failed: " + short(e, 160))
+
+    def notes_full(self):
+        rows = [r for r in self.session.ordered() if r["text"].strip()]
+        if len(rows) < 2:
+            return False
+        return self._submit(self._notes_full, rows)
+
+    def _notes_full(self, rows):
+        """'Make full notes': the user's own short notes stay the outline; the transcript fills in what was said."""
+        c = self.cfg
+        s = self.session
+        pub = lambda **kw: self.hub.publish("notes_full", session_file=s.path, **kw)
+        ml = c["my_language"]
+        mine = s.my_notes.strip()
+        lines = [f"{'★ ' if r.get('marked') else ''}{s.label(r)}: {r['text']}" for r in rows]
+        text = "\n".join(lines)
+        if len(text) > 24000:                               # the newest part counts most; very long meetings are cut
+            text = "…\n" + text[-24000:]
+        system = (f"You turn {c['me_label']}'s short meeting notes into complete notes, in {lang_full(ml)}. "
+                  "Keep the user's own notes as the outline and in their order; under each, add the details from the "
+                  "transcript that belong to it (names, numbers, dates, what was decided, who does what). Then add a "
+                  "section for important things the notes missed. Lines starting with ★ were marked as important by the user. "
+                  "Markdown with ## headings and - bullets. Only facts from the transcript; never invent. No introduction."
+                  + ("" if mine else " The user wrote no notes: write clear notes of the meeting with the same rules."))
+        user = (f"My notes:\n{mine or '(none)'}\n\nTranscript:\n{text}")
+        last = [0.0]
+
+        def on_text(t):
+            now = time.time()
+            if now - last[0] > 0.1:
+                last[0] = now
+                pub(state="streaming", text=t.strip())
+        try:
+            pub(state="working", text="", note="Writing the full notes…")
+            waiting = lambda w: pub(state="working", text="", note=f"Waiting {round(w)} s for the free limit…")
+            out = self.chat_patient(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                               {"role": "user", "content": user}], 1500, 0.3, on_text,
+                                    on_wait=waiting).strip()
+            s.set_notes(full=out)
+            s.save_if_dirty()
+            pub(state="done", text=out)
+            log(f"Full notes written ({len(rows)} lines, {len(mine)} characters of own notes)")
+        except Exception as ex:
+            log("full notes error:", short(ex))
+            pub(state="error", text="", note="The notes failed: " + short(ex, 160))
+
+    def glossary_suggest(self):
+        """Technical words from the job advert and the CV, for the glossary (spelled as written there)."""
+        c = self.cfg
+        system = ("From the job advert and the CV below, list the technical words that may be spoken in the interview "
+                  "and that speech-to-text could spell wrongly: product and tool names, acronyms, protocols, programming "
+                  "languages, certificates, company names. Spell each exactly as written in the text. At most 40, the most "
+                  "important first. No common English words. Reply with ONE JSON array of strings and nothing else.")
+        user = f"Job advert:\n{short(c.get('job_ad') or '', 6000) or '(none)'}\n\nCV / about the user:\n{short(about_text(c), 5000) or '(none)'}"
+        out = self.run_chat(self.chat_targets("ans"), [{"role": "system", "content": system},
+                                                       {"role": "user", "content": user}], 700, 0.1, lambda t: None)
+        arr = json_from(out, list)
+        if not isinstance(arr, list):
+            arr = re.split(r"[\n,]+", out or "")
+        terms = []
+        for t in [x for item in arr for x in re.split(r"[,;،؛]", str(item))]:
+            t = re.sub(r"\s+", " ", t).strip(" -*•\"'`[]")
+            if 1 < len(t) <= GLOSSARY_MAX_LEN and not t.lower() in {x.lower() for x in terms}:
+                terms.append(t)
+        return terms[:40]
 
     # ---- job advert prep, practice interview, scored review (all on demand only) ----------------------------
     def job_prep(self, ad):
@@ -9860,12 +10095,16 @@ def export_bytes(session, fmt):
     if fmt == "txt":
         out = [f"{'Recording' if session.recording else 'Meeting'} — {session.started:%Y-%m-%d %H:%M}", ""]
         for r in rows:
-            out.append(f"[{stamp(r['t0'])}] {session.label(r)}: {r['text']}")
+            out.append(f"[{stamp(r['t0'])}]{' ★' if r.get('marked') else ''} {session.label(r)}: {r['text']}")
             if r.get("translation"):
                 out.append(f"    → {r['translation']}")
             if r.get("answer"):
                 out.append(f"    💡 {r['answer']}")
-        for title, body in (("Summary", session.summary), ("Feedback", session.feedback)):
+        marked = [r for r in rows if r.get("marked")]
+        if marked:
+            out += ["", "== Marked moments =="] + [f"★ [{stamp(r['t0'])}] {session.label(r)}: {r['text']}" for r in marked]
+        for title, body in (("My notes", session.my_notes.strip()), ("Full notes", session.notes_full.strip()),
+                            ("Summary", session.summary), ("Feedback", session.feedback)):
             if body:
                 out += ["", f"== {title} ==", body]
         return "\n".join(out).encode("utf-8")
@@ -9876,12 +10115,22 @@ def export_bytes(session, fmt):
     if session.summary:
         paras.append(("h", "Summary / خلاصه", None))
         paras += _md_paragraphs(session.summary)
+    marked = [r for r in rows if r.get("marked")]
+    if marked:
+        paras.append(("h", "Marked moments / لحظه‌های علامت‌خورده", None))
+        paras += [("p", r["text"], {"lead": f"★ [{stamp(r['t0'])}] {session.label(r)}:", "bold": False}) for r in marked]
+    if session.my_notes.strip():
+        paras.append(("h", "My notes / یادداشت‌های من", None))
+        paras += _md_paragraphs(session.my_notes)
+    if session.notes_full.strip():
+        paras.append(("h", "Full notes / یادداشت کامل", None))
+        paras += _md_paragraphs(session.notes_full)
     if session.feedback:
         paras.append(("h", "Feedback / بازخورد", None))
         paras += _md_paragraphs(session.feedback)
     paras.append(("h", "Transcript / متن", None))
     for r in rows:
-        paras.append(("p", r["text"], {"lead": f"[{stamp(r['t0'])}] {session.label(r)}:", "bold": False}))
+        paras.append(("p", r["text"], {"lead": f"[{stamp(r['t0'])}]{' ★' if r.get('marked') else ''} {session.label(r)}:", "bold": False}))
         if r.get("translation"):
             paras.append(("p", r["translation"], {"italic": True, "color": "555555"}))
         if r.get("answer"):
@@ -10020,6 +10269,8 @@ class App:
                 "local": LOCAL.info(), "llm": LLM.info(),
                 "download": (lambda d: dict(d.state) if d else None)(self.download),
                 "overlay": self.overlay.on, "paused": bool(eng and eng.paused), "summary": s.summary if s else "",
+                "names": dict(s.names) if s else {}, "my_notes": s.my_notes if s else "", "notes_full": s.notes_full if s else "",
+                "say_mode": bool(eng and not eng.stop_event.is_set() and eng.say_mode),
                 "feedback": s.feedback if s else "", "feedback_scores": dict(s.scores) if s else {},
                 "resume": self.resume_info(),
                 "hide": self.hide_state,
@@ -10062,6 +10313,10 @@ class App:
         """A part just turned off stops at once (the overlay closes)."""
         if not feat(self.cfg, "overlay") and getattr(self, "overlay", None) and self.overlay.on:
             threading.Thread(target=self.overlay.stop, daemon=True).start()
+        eng = getattr(self, "engine", None)
+        if not feat(self.cfg, "say") and eng is not None and eng.say_mode:
+            eng.say_mode = False
+            self.hub.publish("say_mode", on=False)
 
     def api_save_config(self, **values):
         with self.lock:
@@ -10195,7 +10450,8 @@ class App:
         need = ["stt"]
         if feat(c, "translate"):
             need.append("tr")
-        if not for_file and (feat(c, "answers") or coach_on(c) or feat(c, "prep") or feat(c, "after") or feat(c, "screen")):
+        if not for_file and (feat(c, "answers") or coach_on(c) or feat(c, "prep") or feat(c, "after") or feat(c, "screen")
+                             or feat(c, "say") or feat(c, "notes")):
             need.append("ans")                         # (screen reading uses the answers service unless another is set)
         return tuple(need)
 
@@ -10433,7 +10689,10 @@ class App:
                              entries=self.session.ordered() if old is not None else [],
                              summary=self.session.summary if old is not None else "",
                              feedback=self.session.feedback if old is not None else "",
-                             coach_notes=self.session.coach_notes if old is not None else {})
+                             coach_notes=self.session.coach_notes if old is not None else {},
+                             names=dict(self.session.names) if old is not None else {},
+                             my_notes=self.session.my_notes if old is not None else "",
+                             notes_full=self.session.notes_full if old is not None else "")
             threading.Thread(target=self.engine.warm, daemon=True).start()
             threading.Thread(target=self.engine.coach_brief, daemon=True, name="coach-brief").start()
         log(f"Meeting started · microphone: {mic or '(off)'} · computer sound: {spk or '(none)'} · "
@@ -10955,6 +11214,163 @@ class App:
         except APIError as e:
             return {"ok": False, "error": short(e, 200)}
 
+    # ---- 6.19: say it in my language, marks, speaker names, my notes, glossary from the advert ----
+    def api_say_mode(self, on=None):
+        """Say mode (F6, Ctrl+Alt+J): while it is on, what I say into my microphone (in my language) is not written in the
+        transcript but becomes a sentence to say in the meeting language."""
+        eng = self.engine
+        live = bool(eng and not eng.stop_event.is_set())
+        want = (not (live and eng.say_mode)) if on is None else bool(on)
+        if not want:
+            if live and eng.say_mode:
+                eng.say_mode = False
+                self.hub.publish("say_mode", on=False)
+            return {"ok": True, "on": False}
+        off = feature_off(self.cfg, "say")
+        if off:
+            return off
+        if not live:
+            return {"ok": False, "error": "Start the meeting first."}
+        if not self.cfg.get("transcribe_me"):
+            return {"ok": False, "error": "Your microphone is not used (Setup › Audio: write what I say)."}
+        if not any(getattr(c, "source", "") == "me" for c in (self.captures or [])):
+            return {"ok": False, "error": "No microphone is being heard. Choose it in Setup › Audio and start again."}
+        ml = self.cfg["my_language"]
+        targets = eng.stt_targets("me")
+        if targets and all(t[0] == "local" for t in targets) and isinstance(LOCAL.model, VoskModel) \
+                and vosk_lang(LOCAL.path or "") != ml:
+            return {"ok": False, "error": f"The light Vosk model does not understand {lang_name(ml)}. Use a Whisper model "
+                                          "or add a Groq key for say mode."}
+        if targets and all(t[0] == "local" for t in targets) and ml != "en" \
+                and re.search(r"\.en\b|distil", os.path.basename(LOCAL.path or "").lower()):
+            return {"ok": False, "error": f"The local model understands English only, not {lang_name(ml)}. Use a multilingual "
+                                          "Whisper model or add a Groq key for say mode."}
+        eng.say_mode = True
+        self.hub.publish("say_mode", on=True)
+        self.hub.toast("info", f"Say mode is on: mute yourself in Teams or Zoom, then say it in {lang_name(ml)}. "
+                               "Press F6 (or Ctrl+Alt+J) again to turn it off.")
+        return {"ok": True, "on": True}
+
+    def _meeting_watch(self):
+        """Every few seconds: has a Zoom / Teams / Meet meeting window opened? Then the window offers Start (once)."""
+        every = float(os.environ.get("MA_WATCH_SECS") or 8)
+        before, told = set(), {}
+        while not self.closing.wait(every):
+            try:
+                if not feat(self.cfg, "detect"):
+                    before = set()
+                    continue
+                found = meeting_apps(window_titles())
+                new = found - before
+                before = found
+                if self.running or self.stopping or self.recording is not None:
+                    continue                                       # (already listening)
+                now = time.time()
+                for name in sorted(new):
+                    if now - told.get(name, 0) > 600:              # at most once in 10 minutes per program
+                        told[name] = now
+                        log(f"A {name} meeting window opened: Start is offered")
+                        self.hub.publish("meeting_found", app=name)
+            except Exception as e:
+                log("meeting watch:", short(e, 120), level="debug")
+
+    def _shown_session(self):
+        eng = self.helper()
+        return eng.session if eng else (self.session or self.last_session)
+
+    def _session_changed(self, s):
+        if not (self.running and s is self.session):          # (during a meeting the regular save writes it)
+            try:
+                s.save_if_dirty()
+            except Exception as e:
+                log("save failed:", short(e, 120), level="warn")
+
+    def api_mark(self, entry_id=None, on=None):
+        """F7 / Ctrl+Alt+K: the newest line is marked as an important moment; with entry_id: that line (on/off)."""
+        off = feature_off(self.cfg, "marks")
+        if off:
+            return off
+        s = self._shown_session()
+        if not s:
+            return {"ok": False, "error": "There is no transcript yet."}
+        if entry_id is None:
+            eid = None
+        elif isinstance(entry_id, int) and not isinstance(entry_id, bool):
+            eid = entry_id
+        elif isinstance(entry_id, str) and re.fullmatch(r"[0-9]{1,12}", entry_id.strip()):
+            eid = int(entry_id.strip())
+        else:
+            return {"ok": False, "error": "That line is not in the transcript any more."}
+        e = s.mark(eid, on if isinstance(on, bool) else None)
+        if not e:
+            return {"ok": False, "error": "Nothing has been said yet." if eid is None else "That line is not in the transcript any more."}
+        self.hub.publish("entry", entry=e)
+        self._session_changed(s)
+        if eid is None:
+            self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
+        return {"ok": True, "id": e["id"], "marked": e["marked"]}
+
+    def api_rename_speaker(self, key="", name="", session_file=None):
+        s = self._shown_session()
+        if not s:
+            return {"ok": False, "error": "There is no transcript yet."}
+        if session_file is not None and str(session_file) != s.path:
+            return {"ok": False, "error": "Another meeting is shown now: the name was not saved."}
+        if len(s.names) >= 40 and str(key) not in s.names and str(name or "").strip():
+            return {"ok": False, "error": "At most 40 speakers can have a name."}
+        if not s.set_name(key, name):
+            return {"ok": False, "error": "This speaker cannot be renamed."}
+        self.hub.publish("names", names=dict(s.names), session_file=s.path)
+        self._session_changed(s)
+        return {"ok": True, "names": dict(s.names)}
+
+    def api_notes(self, text="", session_file=None):
+        off = feature_off(self.cfg, "notes")
+        if off:
+            return off
+        s = self._shown_session()
+        if not s:
+            return {"ok": False, "error": "Start the meeting first."}
+        if session_file is not None and str(session_file) != s.path:
+            # typed for the meeting shown a moment ago (e.g. Start was pressed while saving): kept with that meeting
+            s = next((x for x in (self.session, self.last_session, self.resumable, getattr(self.review, "session", None))
+                      if x is not None and x.path == str(session_file)), None)
+            if s is None:
+                return {"ok": False, "stale": True, "error": "These notes belong to another meeting: they were not saved."}
+        s.set_notes(mine=str(text or ""))
+        self._session_changed(s)
+        return {"ok": True, "session_file": s.path}
+
+    def api_notes_full(self):
+        off = feature_off(self.cfg, "notes")
+        if off:
+            return off
+        eng = self.helper()
+        if not eng:
+            return {"ok": False, "error": "There is no meeting yet."}
+        if len([r for r in eng.session.ordered() if r["text"].strip()]) < 2:
+            return {"ok": False, "error": "The meeting is too short for notes."}
+        if not eng.notes_full():
+            return {"ok": False, "error": "Please try again in a moment."}
+        return {"ok": True}
+
+    def api_glossary_suggest(self):
+        off = feature_off(self.cfg, "prep")
+        if off:
+            return off
+        if not (str(self.cfg.get("job_ad") or "").strip() or about_text(self.cfg).strip()):
+            return {"ok": False, "error": "Add the job advert (Meeting › Job advert) or your CV (About me) first."}
+        eng = self.helper() or self.tool_engine()
+        try:
+            terms = eng.glossary_suggest()
+        except AuthError as e:
+            return {"ok": False, "error": str(e)}
+        except APIError as e:
+            return {"ok": False, "error": short(e, 200)}
+        merged, added = merge_glossary(self.cfg.get("glossary") or "", terms)
+        full = len(glossary_terms({"glossary": merged})) >= GLOSSARY_MAX_TERMS
+        return {"ok": True, "terms": terms, "added": added, "glossary": merged, "full": full}
+
     def api_search_meetings(self, query="", days=None, ask=False):
         query = str(query or "").strip()[:200]
         try:
@@ -11067,8 +11483,8 @@ class App:
                 u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
                 bad = []
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items()):
-                    if cmd == "toggle":
-                        continue
+                    if cmd == "toggle" or (cmd in OV_MEETING_KEYS and self.running):
+                        continue                               # (during a meeting the program holds Ctrl+Alt+K and J)
                     if u.RegisterHotKey(None, 9000 + i, 0x2 | 0x1 | 0x4000, vk):
                         u.UnregisterHotKey(None, 9000 + i)
                     else:
@@ -13551,7 +13967,9 @@ def open_window(url):
 OV_TITLE = "MA-Overlay"
 OVERLAY_STATUS_PATH = os.path.join(DATA_DIR, ".overlay.json")
 OVERLAY_POS_PATH = os.path.join(DATA_DIR, ".overlay_pos.json")
-OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "screen": (0x53, "S"), "answer": (0x41, "A"), "coach": (0x48, "H"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right")}
+OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "screen": (0x53, "S"), "answer": (0x41, "A"), "coach": (0x48, "H"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right"),
+           "mark": (0x4B, "K"), "say": (0x4A, "J")}
+OV_MEETING_KEYS = {"mark": "marks", "say": "say"}      # registered only during a meeting (and while that part is on)
 
 
 class Overlay:
@@ -13810,18 +14228,36 @@ class Overlay:
         names = {}
         for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
             if cmd != "toggle":
-                continue                                             # the others are registered only while it is on
+                continue                                             # the others are registered only while it is on / in a meeting
             if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4000, vk):    # Ctrl + Alt, no repeat
                 names[i] = cmd
             else:
                 log(f"The key Ctrl+Alt+{label} is used by another program: use the Overlay button instead.", level="warn")
         arrows, tried = {}, False
+        live, live_want = {}, set()
         msg = wt.MSG()
         while not self.app.closing.is_set():
+            want = {cmd for cmd, part in OV_MEETING_KEYS.items() if self.app.running and feat(self.app.cfg, part)}
+            if want != live_want:                                    # mark / say: only during a meeting
+                live_want = want
+                for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
+                    if cmd not in OV_MEETING_KEYS:
+                        continue
+                    if cmd in want and i not in live:
+                        if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4000, vk):
+                            live[i] = cmd
+                        else:
+                            msg_ = (f"The key Ctrl+Alt+{label} is used by another program: use F{6 if cmd == 'say' else 7} "
+                                    "in the window instead.")
+                            log(msg_, level="warn")
+                            self.app.hub.toast("warn", msg_)
+                    elif cmd not in want and i in live:
+                        u.UnregisterHotKey(None, i)
+                        live.pop(i, None)
             if self.on and not tried:
                 tried = True
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
-                    if cmd == "toggle":
+                    if cmd == "toggle" or cmd in OV_MEETING_KEYS:
                         continue
                     once = 0x4000 if cmd in ("screen", "answer", "coach", "more", "less") else 0       # no auto-repeat for these
                     if u.RegisterHotKey(None, i, 0x2 | 0x1 | once, vk):
@@ -13833,8 +14269,12 @@ class Overlay:
                     u.UnregisterHotKey(None, i)
                 arrows, tried = {}, False
             while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):      # WM_HOTKEY
-                cmd = names.get(msg.wParam) or arrows.get(msg.wParam)
-                if cmd == "toggle":
+                cmd = names.get(msg.wParam) or arrows.get(msg.wParam) or live.get(msg.wParam)
+                if cmd == "mark":
+                    threading.Thread(target=self._hotkey_call, args=(self.app.api_mark,), daemon=True).start()
+                elif cmd == "say":
+                    threading.Thread(target=self._hotkey_call, args=(self.app.api_say_mode,), daemon=True).start()
+                elif cmd == "toggle":
                     threading.Thread(target=self.app.api_overlay, daemon=True).start()
                 elif cmd in ("more", "less"):
                     a = int(self.app.cfg.get("overlay_alpha") or 65) + (5 if cmd == "more" else -5)
@@ -13846,8 +14286,67 @@ class Overlay:
                 elif cmd:
                     self.app.hub.publish("ov_cmd", cmd=cmd)
             time.sleep(0.04)
-        for i in list(names) + list(arrows):
+        for i in list(names) + list(arrows) + list(live):
             u.UnregisterHotKey(None, i)
+
+
+# ---- 6.19: "a meeting has opened — start?" (window titles only: nothing is read from the meeting programs) ----
+MEETING_WINDOWS = (
+    ("Zoom", r"^Zoom (Meeting|Webinar)$|^Zoom Workplace\s*[-–—]\s*(Meeting|Webinar)$"),
+    ("Teams", r"^(?!Chat\b)[^|]*\b(Meeting|Call|Besprechung|Anruf|جلسه|تماس)\b[^|]*\|\s*Microsoft Teams$|^Microsoft Teams (meeting|call)$"),
+    ("Google Meet", r"\bMeet\s*[-–—:]\s*[a-z]{3}-[a-z]{4}-[a-z]{3}\b|\bmeet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}\b"),
+    ("Webex", r"^(Cisco )?Webex( Meetings?)?$|^Meeting\s*[-–—|]\s*(Cisco )?Webex$"),
+)
+BROWSER_TITLE = r"\s[-–—]\s(Google Chrome|Microsoft\u200b? ?Edge|Mozilla Firefox|Opera|Brave|Vivaldi)$|YouTube"   # (Edge titles hold a zero-width space)
+
+
+def meeting_apps(titles):
+    """The meeting programs whose meeting window is open, from the window titles."""
+    found = set()
+    for t in titles:
+        t = str(t or "")[:300]
+        web = re.search(BROWSER_TITLE, t) is not None
+        for name, pat in MEETING_WINDOWS:
+            if web and name != "Google Meet":
+                continue                                  # a web page about Zoom or Teams is not a meeting
+            if re.search(pat, t, re.I if name != "Google Meet" else 0):
+                found.add(name)
+    return found
+
+
+def window_titles():
+    """Titles of the visible windows (Windows only; MA_FAKE_WINDOWS='a;;b' stands in for tests)."""
+    fake = os.environ.get("MA_FAKE_WINDOWS")
+    if fake is not None:
+        try:
+            with open(fake, encoding="utf-8") as f:              # a file: its lines (tests change it while running)
+                return [ln.strip() for ln in f if ln.strip()]
+        except OSError:
+            return [x for x in fake.split(";;") if x.strip()]
+    if sys.platform != "win32":
+        return []
+    import ctypes
+    from ctypes import wintypes as wt
+    u = ctypes.windll.user32
+    u.IsWindowVisible.argtypes = [wt.HWND]
+    u.GetWindowTextLengthW.argtypes = [wt.HWND]
+    u.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    out = []
+    proc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def each(h, _):
+        try:
+            if u.IsWindowVisible(h):
+                n = u.GetWindowTextLengthW(h)
+                if 0 < n < 512:
+                    b = ctypes.create_unicode_buffer(n + 1)
+                    u.GetWindowTextW(h, b, n + 1)
+                    out.append(b.value)
+        except Exception:
+            pass
+        return True
+    u.EnumWindows(proc(each), 0)
+    return out
 
 
 def keep_awake(on):
@@ -14047,6 +14546,7 @@ def main():
         log("Tidied up: moved " + ", ".join(TIDIED) + f" into {DATA_DIR}")
     open_window(app.url)
     app.overlay.start_keys()
+    threading.Thread(target=app._meeting_watch, daemon=True, name="meeting-watch").start()
     try:
         app.closing.wait()
     except KeyboardInterrupt:

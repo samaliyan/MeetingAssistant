@@ -1,4 +1,16 @@
-# Meeting Assistant — User Guide (version 6.18)
+# Meeting Assistant — User Guide (version 6.19)
+
+## Version 6.19: eight new helpers
+
+- **Say it in your language**: during a meeting press **F6**, mute yourself in Teams or Zoom, and speak in your language. The sentence to say appears on the right (and in the overlay). Press F6 again to stop. From another program: Ctrl+Alt+J.
+- **Mark a moment**: **F7** (or Ctrl+Alt+K) marks the newest line; the flag next to a line marks or unmarks it. Marks go into the summary and the export.
+- **My notes**: the box under the answer panel. After the meeting press **Make full notes**.
+- **Summary**: now with decisions and action items, and **Copy as message**.
+- **Technical words**: Setup › Meeting › **Fill from job advert and CV**.
+- **Meeting reminder**: when Zoom, Teams or Meet opens, press **Start** in the message.
+- **Names**: click "Person 1" on a line and type a name.
+- **How did I do?**: filler words and speaking pace.
+- Every one can be turned off in Setup › Features.
 
 ## Version 6.18: use only what you need
 

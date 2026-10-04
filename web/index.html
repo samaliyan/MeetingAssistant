@@ -467,6 +467,43 @@ body.f-coach-off #coach{display:none!important}
 body.f-overlay-off #ovBtn,body.f-files-off #recBtn,body.f-after-off #summaryBtn{display:none!important}
 body.f-screen-off [data-tool="screen"],body.f-prep-off [data-tool="jobprep"],body.f-prep-off [data-tool="practice"],
 body.f-coach-off [data-tool="coach"],body.f-prep-off #jobPrepBtn,body.f-answers-off [data-tool="say"],body.f-after-off [data-tool="feedback"]{display:none!important}
+/* 6.19: say it, marks, notes, speaker names */
+body.f-say-off #sayBtn,body.f-say-off #sayCard,body.f-marks-off #markBtn,body.f-marks-off .entry .mark,body.f-notes-off #notesBox,body.f-notes-off [data-tool="notes"],
+body.f-prep-off #glossFill{display:none!important}
+.saycard{margin:10px 14px 0;padding:10px 12px;border:1px solid var(--accent);border-radius:12px;background:var(--surface-2);display:grid;gap:4px}
+.saycard[hidden]{display:none}
+.sc-head{display:flex;align-items:center;gap:8px;font-size:.84rem;color:var(--muted)}
+.sc-head b{color:var(--accent-text)}
+.sc-dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
+.saycard.on .sc-dot{background:var(--danger);animation:pulse 1.2s infinite}
+.sc-heard{margin:0;font-size:.86rem;color:var(--muted);font-family:var(--font-tr)}
+.sc-text{margin:0;font-size:calc(var(--answer-size,17px) * 1.05);font-weight:600;line-height:1.5;color:var(--text)}
+.sc-meaning{margin:0;font-size:.88rem;color:var(--text-2);font-family:var(--font-tr)}
+.sc-note{font-size:.82rem;color:var(--muted);display:flex;align-items:center;gap:6px}
+.sc-note:empty,.sc-heard:empty,.sc-text:empty,.sc-meaning:empty{display:none}
+#sayBtn.on{color:#fff;background:var(--danger);border-color:var(--danger)}
+@media (max-width:1600px){.topbar .hide-md{display:none}}
+.entry .mark{opacity:.35}
+.entry:hover .mark,.entry .mark.on{opacity:1}
+.entry .mark.on{color:var(--amber)}
+.entry.marked{box-shadow:inset 3px 0 0 var(--amber)}
+.entry .who.rename{cursor:pointer;border-bottom:1px dashed transparent}
+.entry .who.rename:hover{border-bottom-color:var(--faint)}
+.entry input.who-edit{font:inherit;font-weight:600;width:12em;padding:1px 6px;border:1px solid var(--accent);border-radius:6px;background:var(--surface);color:var(--text)}
+.notes{border-top:1px solid var(--border);padding:6px 14px 10px}
+.notes summary{cursor:pointer;display:flex;align-items:center;gap:6px;font-weight:600;font-size:.88rem;color:var(--text-2);padding:4px 0;list-style:none}
+.notes summary::-webkit-details-marker{display:none}
+.notes summary::after{content:"▸";margin-inline-start:2px;color:var(--muted)}
+.notes[open] summary::after{content:"▾"}
+.notes .n-state{margin-inline-start:auto;font-weight:400;font-size:.78rem;color:var(--muted)}
+.notes textarea{width:100%;min-height:90px;resize:vertical;font-size:.9rem;line-height:1.5}
+body.f-answers-off .notes textarea{min-height:34vh}
+.notes .n-actions{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.stat-list{font-size:.84rem;color:var(--text-2);margin:-2px 0 10px}
+.toast .act-btn{margin-top:6px;display:inline-block;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:8px;padding:3px 12px;font:inherit;font-weight:600;cursor:pointer}
+body.ov .saycard{margin:0 0 6px;border-color:#9fb4e0;background:rgba(0,0,0,.18);color:#eef1f6}
+body.ov .sc-text{color:#fff} body.ov .sc-heard,body.ov .sc-meaning,body.ov .sc-head{color:#d3d9e3}
+body.ov #sayCopy,body.ov #sayClose{display:none}
 .more-checks{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
 .more-checks summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:.84rem;padding:6px 4px;list-style:none}
 .more-checks summary::-webkit-details-marker{display:none}
@@ -814,6 +851,8 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="meter them off" id="mThem" title="Computer sound (the other side)"><span data-icon="volume"></span><span class="meter-label">Other side</span><span class="bar"><i></i></span></div>
     </div>
     <button class="btn ghost" id="pauseBtn" hidden title="Pause listening: nothing is written or sent until you continue (F8)"><span data-icon="pause"></span><span id="pauseLabel">Pause</span><kbd class="hide-sm">F8</kbd></button>
+    <button class="btn ghost" id="sayBtn" hidden title="Say mode: speak in your language, get the sentence to say in the meeting language. Mute yourself in Teams or Zoom first. (F6, or Ctrl+Alt+J from any program during a meeting)"><span data-icon="speak"></span><span class="hide-sm hide-md" id="sayLabel">Say it</span><kbd class="hide-sm">F6</kbd></button>
+    <button class="btn ghost" id="markBtn" hidden title="Mark the latest moment as important — it goes into the summary and the export (F7, or Ctrl+Alt+K from any program during a meeting)"><span data-icon="flag"></span><span class="hide-sm hide-md">Mark</span><kbd class="hide-sm">F7</kbd></button>
     <button class="btn ghost" id="ovBtn" title="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it (Ctrl+Alt+O, even from another program)"><span data-icon="eye"></span><span class="hide-sm">Overlay</span></button>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
@@ -840,6 +879,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <button data-tool="jobprep" role="menuitem"><span data-icon="list"></span><span class="tp-text">Prepare for the job<small>Paste the advert: likely questions and a checklist</small></span></button>
         <button data-tool="practice" role="menuitem"><span data-icon="play"></span><span class="tp-text">Practice interview<small>Questions one by one, your answer is graded</small></span></button>
         <button data-tool="coach" role="menuitem"><span data-icon="sparkles"></span><span class="tp-text">Coach notes<small>What the coach remembers and prepared</small></span></button>
+        <button data-tool="notes" role="menuitem"><span data-icon="edit"></span><span class="tp-text">Full notes<small>Your notes made complete from the transcript</small></span></button>
         <button data-tool="feedback" role="menuitem"><span data-icon="sparkles"></span><span class="tp-text">How did I do?<small>Review of the meeting, with tips</small></span></button>
         <button data-tool="search" role="menuitem"><span data-icon="list"></span><span class="tp-text">Search past meetings…<small>Find what was said before</small></span></button>
         <button data-tool="export" role="menuitem"><span data-icon="file"></span><span class="tp-text">Export…<small>Word, PDF, subtitles, text</small></span></button>
@@ -878,6 +918,15 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <div class="co-askrow" id="coAskRow" hidden><input class="input" id="coAskText" dir="auto" maxlength="400" placeholder="Ask the coach anything about now…"><button class="btn sm primary" id="coAskGo">Send</button></div>
         </div>
       </div>
+      <div class="saycard" id="sayCard" hidden>
+        <div class="sc-head"><span class="sc-dot"></span><b id="sayTitle">Say mode</b><span class="spacer"></span>
+          <button class="btn icon ghost" id="sayCopy" title="Copy the sentence" aria-label="Copy the sentence"><span data-icon="copy"></span></button>
+          <button class="btn icon ghost" id="sayClose" title="Hide" aria-label="Hide"><span data-icon="x"></span></button></div>
+        <p class="sc-heard" id="sayHeard" dir="auto"></p>
+        <p class="sc-text" id="sayText" dir="auto" aria-live="polite"></p>
+        <p class="sc-meaning" id="sayMeaning" dir="auto"></p>
+        <div class="sc-note" id="sayNote"></div>
+      </div>
       <div class="newq" id="newQ" hidden role="button" tabindex="0"><b>New question</b><span id="newQText"></span><u>Show now</u></div>
       <div class="answer-body" id="answerBody"></div>
       <div class="answer-foot">
@@ -885,6 +934,11 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <button class="btn soft sm" id="answerNowBtn" title="Suggest an answer to the latest question now"><span data-icon="zap"></span>Answer now<kbd>F2</kbd></button>
         <span class="hint" id="answerHint"></span>
       </div>
+      <details class="notes" id="notesBox" hidden>
+        <summary><span data-icon="edit"></span><span id="notesLabel">My notes</span><span class="n-state" id="notesState"></span></summary>
+        <textarea class="input" id="myNotes" aria-label="My notes" dir="auto" maxlength="20000" placeholder="Short notes while you listen — after the meeting they can be completed from the transcript."></textarea>
+        <div class="n-actions"><button class="btn sm ghost" id="notesFull"><span data-icon="sparkles"></span>Make full notes</button></div>
+      </details>
     </aside>
   </main>
 
@@ -952,6 +1006,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <label for="fGloss">Technical words</label>
         <textarea class="input" id="fGloss" data-key="glossary" rows="3" placeholder="OSPF, BGP, RMAN, Data Guard, kubectl …"></textarea>
         <div class="help">Names, products and abbreviations that will be spoken (one per line or separated by commas). They are spelled right in the transcript and translations, and speech recognition listens for them. Up to 60.</div>
+        <button class="btn sm ghost" id="glossFill" style="margin-top:6px" title="Finds the technical words in your job advert and CV and adds the new ones here"><span data-icon="sparkles"></span>Fill from job advert and CV</button>
       </div>
       <label class="toggle"><input type="checkbox" data-key="debrief_scores"><span class="switch"></span><span class="tt"><b>Scores in the review</b><span>"How did I do?" also gives scores (clarity, structure, depth, examples, follow-up) and the three most useful fixes. One extra small request.</span></span></label>
       <label class="toggle"><input type="checkbox" data-key="coach"><span class="switch"></span><span class="tt"><b>Interview situation card</b><span>Shows the stage of the interview, how hard the questions are, questions asked again, and one short tip. It uses about one small request every 45 seconds.</span></span></label>
@@ -1297,12 +1352,16 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="hrow"><kbd>F4</kbd><span>Ask the coach: what should I do or say now?</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
+  <div class="hrow"><kbd>F6</kbd><span>Say mode on / off: speak in <span class="myl">Persian</span>, get the sentence to say (also <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>J</kbd> from any program during a meeting)</span></div>
+  <div class="hrow"><kbd>F7</kbd><span>Mark this moment as important (also <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>K</kbd> from any program during a meeting)</span></div>
   <div class="hrow"><kbd>F8</kbd><span>Pause / continue listening</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>,</kbd><span>Setup</span></div>
   <div class="hrow"><kbd>Ctrl</kbd><kbd>+</kbd> <kbd>Ctrl</kbd><kbd>−</kbd><span>Text size</span></div>
   <b>In the transcript</b>
   <div class="hrow"><span class="hic" data-icon="text"></span><span>Select words → <i>Explain in <span class="myl">Persian</span></i> or <i>Answer this</i></span></div>
   <div class="hrow"><span class="hic" data-icon="edit"></span><span>Pencil next to a line → correct what was heard</span></div>
+  <div class="hrow"><span class="hic" data-icon="flag"></span><span>Flag next to a line → mark it as important (click again to remove)</span></div>
+  <div class="hrow"><span class="hic" data-icon="text"></span><span>Click a speaker's name (Person 1) → give it a real name</span></div>
   <div class="hrow"><span class="hic" data-icon="list"></span><span>Summary → a <span class="myl">Persian</span> summary of the meeting</span></div>
 </div>
 <div class="selpop" id="selPop" hidden>
@@ -1314,6 +1373,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <div class="modal-head"><h2><span data-icon="list"></span>Meeting summary</h2><span class="spacer"></span>
       <button class="btn sm ghost" id="sumAgain"><span data-icon="refresh"></span>Write again</button>
       <button class="btn sm ghost" id="sumCopy"><span data-icon="copy"></span>Copy</button>
+      <button class="btn sm ghost" id="sumMsg" title="Copies the summary, decisions and action items as plain text for an email, Teams or Slack (without the interview questions)"><span data-icon="chat"></span>Copy as message</button>
       <button class="btn icon ghost" id="sumClose" aria-label="Close"><span data-icon="x"></span></button></div>
     <div class="modal-body" id="sumBody" dir="rtl" lang="fa"></div>
     <div class="modal-note" id="sumNote"></div>
@@ -1415,6 +1475,9 @@ const ICONS = {
   eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   wave:'<path d="M3 12h2.5l2.5-6 4 13 3.5-9 2 3H21"/>',
   refresh:'<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>',
+  flag:'<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  chat:'<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  speak:'<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path d="M19 4l2-1M20 8h2"/>',
 };
 function icon(name){ return `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]||""}</svg>`; }
 function paintIcons(root=document){ root.querySelectorAll("[data-icon]").forEach(el=>{ if(!el.firstChild) el.innerHTML = icon(el.dataset.icon); }); }
@@ -1428,7 +1491,7 @@ const S = {
 };
 
 // actions that really take long (they run tests or wait for services); everything else answers quickly
-const SLOW_API = {recording_link: 60, model_news: 90, selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
+const SLOW_API = {glossary_suggest: 120, recording_link: 60, model_news: 90, selfcheck: 90, job_prep: 120, practice_questions: 120, practice_grade: 120, practice_spoken: 60, check_models: 90, test_services: 240, local_test: 360, provider_test: 120, save_provider: 120, credit: 90,
                   audio_check: 90, test_proxy: 60, test_connection: 60, local_delete: 60, stop: 60, start: 60,
                   say: 75, search_meetings: 75, export: 60, about_file: 60};
 async function api(name, body={}){
@@ -1451,6 +1514,8 @@ const label = (src, spk) => {
   if(!(spk > 0)) return base;
   return (base.replace(/\s*\d+$/, "").trim() || base) + " " + (spk + 1);
 };
+const spkKey = e => e.source === "me" ? "me" : (typeof e.who === "string" && e.who.trim()) ? "who:" + Array.from(e.who.trim()).slice(0, 40).join("") : "them:" + (e.speaker || 0);
+const whoOf = e => (e.source !== "me" && (S.names || {})[spkKey(e)]) || e.who || label(e.source, e.speaker);   // a name the user gave wins
 function initials(name){
   const w = String(name||"?").trim().split(/\s+/).filter(Boolean);
   if(w.length===1) return w[0].slice(0,2);
@@ -1525,6 +1590,11 @@ function handle(m){
     case "log_cleared": $("#logBox").innerHTML = ""; $("#logDot").hidden = true; return;
     case "paused": S.paused = m.paused; renderRunning(); return;
     case "summary": return onSummary(m);
+    case "say": return onSay(m);
+    case "say_mode": S.sayMode = !!m.on; renderSayBtn(); if(m.on) showSayCard({state: "on"}); else if(S.say && S.say.state === "on") hideSayCard(); else if(S.say) showSayCard(S.say); return;
+    case "names": if(!m.session_file || !S.sessionFile || m.session_file === S.sessionFile) setNames(m.names); return;
+    case "notes_full": return onNotesFull(m);
+    case "meeting_found": return onMeetingFound(m);
     case "feedback": return onFeedback(m);
     case "screen": return onScreen(m);
     case "hide": S.hide = m.hide || null; renderHide(); return;
@@ -1542,7 +1612,9 @@ function clearTranscript(){
   $("#jump").hidden = true;
 }
 function newSession(m){
-  clearTranscript(); S.sessionFile = m.session_file || ""; S.recName = m.recording || ""; S.hasAudio = !!m.has_audio; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false; S.notes = m.coach_notes || {};
+  flushNotes();
+  S.names = m.names || {}; S.myNotes = m.my_notes || ""; S.notesFull = m.notes_full || ""; S.nfState = ""; S.say = null; hideSayCard();
+  clearTranscript(); S.sessionFile = m.session_file || ""; fillNotes(); S.recName = m.recording || ""; S.hasAudio = !!m.has_audio; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbStats = null; S.paused = false; S.notes = m.coach_notes || {};
   replayEntries(m.entries);
   if((m.entries || []).length) feed.scrollTop = feed.scrollHeight;
   S.sumState = ""; $("#sumBody").innerHTML = ""; $("#sumNote").innerHTML = ""; $("#sumModal").hidden = true;
@@ -1560,6 +1632,10 @@ function onHello(m){
   S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbScores = m.feedback_scores || {}; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
   S.recName = m.recording && ["starting","reading","finishing","downloading","speakers"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
   S.hasAudio = !!m.has_audio;
+  if(notesTimer && $("#myNotes").dataset.file === (m.session_file || "")) m.my_notes = $("#myNotes").value;   // a reconnect never undoes typing
+  else flushNotes();
+  S.names = m.names || {}; S.myNotes = m.my_notes || ""; S.notesFull = m.notes_full || ""; S.sayMode = !!m.say_mode; fillNotes();
+  if(S.sayMode) showSayCard({state: "on"});
   clearTranscript(); renderTitle();
   S.coach = m.coach || null; S.check = m.answer_check || null; S.notes = m.coach_notes || {}; S.overlay = !!m.overlay; renderOverlayBtn();
   replayEntries(m.entries);
@@ -1588,8 +1664,12 @@ const FEATS = [
   ["prep", "Interview prep", "Prepare for the job (from the advert) and Practice interview.", ["ans"]],
   ["after", "After the meeting", "Summary, and How did I do? (a review with tips).", ["ans"]],
   ["files", "Files and links", "Transcribe a recorded file or a YouTube link.", ["stt"]],
+  ["say", "Say it in my language", "Say mode (F6): speak in your language, get the sentence to say in the meeting language.", ["stt", "ans"]],
+  ["marks", "Mark moments", "Mark an important moment (F7); marks go into the summary and the export.", []],
+  ["notes", "My notes", "Type short notes during the meeting; afterwards they are completed from the transcript.", ["ans"]],
+  ["detect", "Meeting reminder", "When a Zoom, Teams or Google Meet meeting opens, the program offers to start.", []],
 ];
-const PRESETS = {text: {files: true}, translate: {translate: true, files: true}, all: null};   // null = everything on
+const PRESETS = {text: {files: true, marks: true, detect: true}, translate: {translate: true, files: true, marks: true, detect: true}, all: null};   // null = everything on
 const featOn = k => !S.cfg || !S.cfg.features || S.cfg.features[k] !== false;
 function featNeed(tasks){                                    // the services a part needs, as one short line
   const st = (S.cfg && S.cfg.tasks) || {};
@@ -1626,7 +1706,10 @@ $$("[data-preset]").forEach(b => b.onclick = () => {
 });
 function applyFeatures(){
   for(const [k] of FEATS) document.body.classList.toggle("f-" + k + "-off", !featOn(k));
-  document.body.classList.toggle("f-panel-off", !featOn("answers") && !(featOn("coach") && S.cfg?.coach));
+  const coachShown = featOn("coach") && S.cfg?.coach;
+  document.body.classList.toggle("f-panel-off", !featOn("answers") && !coachShown && !featOn("say") && !featOn("notes"));
+  const ct = document.querySelector(".coach-title"); if(ct) ct.textContent = coachShown ? "Coach" : featOn("say") ? "Say it" : "My notes";
+  renderSayBtn(); renderNotes();
 }
 function applyConfig(){
   const c = S.cfg; if(!c) return;
@@ -1681,6 +1764,9 @@ function renderRunning(){
              + `new lines are added to the same transcript and file. Start begins a new meeting; the old one stays saved.`;
   }
   $("#pauseBtn").hidden = !S.running;
+  $("#markBtn").hidden = !S.running;
+  if(!S.running && S.sayMode){ S.sayMode = false; if(S.say && S.say.state === "on") hideSayCard(); else if(S.say) showSayCard(S.say); }
+  renderSayBtn(); renderNotes();
   $("#pauseLabel").textContent = S.paused ? "Continue" : "Pause";
   $("#pauseBtn").querySelector("[data-icon]").innerHTML = icon(S.paused ? "play" : "pause");
   $("#pauseBtn").classList.toggle("soft", !!S.paused);
@@ -1776,7 +1862,7 @@ function updateCtx(){
     if(!show) return;
     bar.style.top = (feed.offsetTop + 8) + "px";
     if(bar.dataset.id !== String(e.id)){ bar.dataset.id = e.id; bar.classList.remove("open"); }
-    bar.querySelector(".cx-who").textContent = "They said · " + (e.who || label(e.source, e.speaker));
+    bar.querySelector(".cx-who").textContent = "They said · " + whoOf(e);
     bar.querySelector(".cx-time").textContent = clock(e.t0);
     bar.querySelector(".cx-o").textContent = e.text;
     const f = bar.querySelector(".cx-f"), tr = e.tr_state !== "off" && e.translation;
@@ -1843,11 +1929,15 @@ function entryShell(e){
     <div class="meta"><span class="who"></span><span class="time"></span><span class="tag" hidden></span><span class="edited" hidden>edited</span>
       <button class="btn sm ghost act" title="Suggest an answer to this line">${icon("zap")}Answer this</button>
       <button class="btn icon ghost play" title="Play this line" aria-label="Play this line" hidden>${icon("play")}</button>
+      <button class="btn icon ghost mark" title="Mark as an important moment (F7)" aria-label="Mark as an important moment" aria-pressed="false">${icon("flag")}</button>
       <button class="btn icon ghost edit" title="Correct this line (if a word was heard wrong) — it is translated again" aria-label="Correct this line">${icon("edit")}</button></div>
     <p class="orig" dir="auto"></p><div class="fa" hidden></div>
     <div class="explain" hidden><div class="q" dir="auto"></div><div class="x" ${trAttr()}></div></div><div class="ans-row"></div></div>`;
   el.querySelector(".act").onclick = () => answerNow(e.id);
   el.querySelector(".edit").onclick = () => startEdit(el, e.id);
+  el.querySelector(".mark").onclick = () => markLine(e.id);
+  el.querySelector(".who").onclick = () => { const cur = S.entries.get(e.id); if(cur && cur.source !== "me") startRename(el, cur); };
+  el.querySelector(".who").onkeydown = ev => { if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); el.querySelector(".who").click(); } };
   el.querySelector(".play").onclick = () => playLine(e.id, el.querySelector(".play"));
   return el;
 }
@@ -1881,9 +1971,14 @@ async function playLine(id, btn){
 }
 function fillEntry(el, e){
   el.className = "entry " + e.source + (el.classList.contains("latest") ? " latest" : "") + (el.classList.contains("cont") ? " cont" : "") + (el.classList.contains("turn-start") ? " turn-start" : "");
-  el.querySelector(".avatar").textContent = initials((e.who || label(e.source, e.speaker)));
-  el.querySelector(".who").textContent = (e.who || label(e.source, e.speaker));
+  el.querySelector(".avatar").textContent = initials(whoOf(e));
+  el.querySelector(".who").textContent = whoOf(e);
   el.querySelector(".time").textContent = clock(e.t0);
+  const wb = el.querySelector(".who"); wb.classList.toggle("rename", e.source !== "me"); wb.title = e.source !== "me" ? "Click to give this speaker a name (for example Interviewer or John)" : "";
+  if(e.source !== "me"){ wb.tabIndex = 0; wb.setAttribute("role", "button"); } else { wb.removeAttribute("tabindex"); wb.removeAttribute("role"); }
+  const mk = el.querySelector(".mark"); mk.classList.toggle("on", !!e.marked); mk.setAttribute("aria-pressed", e.marked ? "true" : "false");
+  mk.title = e.marked ? "Marked as important · click to remove the mark" : "Mark as an important moment (F7)";
+  el.classList.toggle("marked", !!e.marked);
   const tag = el.querySelector(".tag"); tag.hidden = !e.lang || (S.cfg?.languages || []).length < 2; tag.textContent = (e.lang||"").toUpperCase();
   el.querySelector(".act").hidden = e.source === "me" && !S.cfg?.answer_me;
   el.dataset.who = e.who || (e.speaker > 0 ? "s" + e.speaker : "");     // the same key as a line still being written
@@ -2018,7 +2113,7 @@ if(OVERLAY){                    // this page is the see-through window: only the
   const box = document.createElement("div"); box.id = "ovBox";
   const oc = document.createElement("div"); oc.id = "ovCoach"; oc.hidden = true;
   const os = document.createElement("div"); os.id = "ovScreen"; os.hidden = true;
-  box.append($("#newQ"), $("#answerBody"), os, oc);
+  box.append($("#sayCard"), $("#newQ"), $("#answerBody"), os, oc);
   setInterval(() => { if(S.ovScreenUntil && Date.now() > S.ovScreenUntil){ S.ovScreenUntil = 0; os.hidden = true; $("#answerBody").style.display = ""; } }, 1000);
   [...document.body.children].forEach(c => { if(c.tagName !== "SCRIPT") c.style.display = "none"; });
   document.body.prepend(box);
@@ -2309,7 +2404,7 @@ function renderAnswer(){
   if(body.dataset.eid !== String(e.id)){ body.scrollTop = 0; body.dataset.eid = String(e.id); }     // a new answer starts at its top
   body.innerHTML = `
     <div class="q-block">
-      ${e.forced || !S.running || (newestAnswered() && newestAnswered().id !== e.id) ? `<div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc((e.who || label(e.source, e.speaker)))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>` : ""}
+      ${e.forced || !S.running || (newestAnswered() && newestAnswered().id !== e.id) ? `<div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>` : ""}
       <p class="q-orig" dir="auto"></p>
       ${e.translation && !e.question ? `<p class="q-fa" ${trAttr()}></p>` : ""}
     </div>
@@ -2449,7 +2544,7 @@ function startEdit(el, id){
 $("#copyAllBtn").onclick = async () => {
   const rows = [...S.entries.values()].sort((a, b) => a.t0 - b.t0);
   if(!rows.length) return toast("warn", "The transcript is empty.");
-  const out = rows.map(e => `[${clock(e.t0)}] ${(e.who || label(e.source, e.speaker))}: ${e.text}` + (e.translation ? `\n    ${e.translation}` : "")
+  const out = rows.map(e => `[${clock(e.t0)}] ${whoOf(e)}: ${e.text}` + (e.translation ? `\n    ${e.translation}` : "")
     + (e.answer ? `\n    → ${e.answer}` : "")).join("\n");
   try{ await navigator.clipboard.writeText(out + (S.summary ? "\n\n" + S.summary : "")); toast("ok", `Transcript copied (${rows.length} lines).`); }
   catch{ toast("error", "Could not copy."); }
@@ -2506,6 +2601,12 @@ $("#summaryBtn").onclick = () => {
 $("#sumAgain").onclick = makeSummary;
 $("#sumClose").onclick = () => { $("#sumModal").hidden = true; };
 $("#sumModal").onclick = ev => { if(ev.target.id === "sumModal") $("#sumModal").hidden = true; };
+$("#sumMsg").onclick = () => {
+  const md = S.sumState && !["done", ""].includes(S.sumState) ? "" : (S.summary || "");
+  const t = summaryMessage(md);
+  if(!t) return toast("info", "Wait until the summary is written.");
+  copyText(t, "Copied as a message — paste it into an email, Teams or Slack.");
+};
 $("#sumCopy").onclick = async () => {
   const t = $("#sumBody").innerText.trim(); if(!t) return;
   try{ await navigator.clipboard.writeText(t); toast("ok", "Summary copied."); }catch{ toast("error", "Could not copy."); }
@@ -2684,7 +2785,7 @@ function renderFooter(){
 
 /* ---------- toasts & banner ---------- */
 const recentToasts = new Map();
-function toast(level, text){
+function toast(level, text, action){
   const now = Date.now();
   if(recentToasts.get(text) > now - 4000) return;
   recentToasts.set(text, now);
@@ -2698,11 +2799,17 @@ function toast(level, text){
     d.onclick = () => { t.remove(); openDrawer("log"); };
     t.querySelector(".msg").appendChild(d);
   }
+  if(action){                                               // a button in the message (e.g. Start when a meeting opened)
+    const b = document.createElement("button"); b.className = "act-btn"; b.textContent = action.text;
+    b.onclick = () => { t.remove(); action.run(); };
+    t.querySelector(".msg").appendChild(document.createElement("br")); t.querySelector(".msg").appendChild(b);
+  }
   t.querySelector(".x").onclick = () => t.remove();
   $("#toasts").appendChild(t);
   while($("#toasts").children.length > 4) $("#toasts").firstChild.remove();
   // during a meeting a problem stays until you close it (you may not be looking at the screen)
-  if(!(level === "error" && S.running)) setTimeout(() => t.remove(), level === "error" ? 12000 : level === "warn" ? 8000 : 4500);
+  if(!(level === "error" && S.running)) setTimeout(() => t.remove(), action ? 20000 : level === "error" ? 12000 : level === "warn" ? 8000 : 4500);
+  return t;
 }
 function showBanner(level, text, kind){ const b = $("#banner"); b.className = "banner " + (level==="warn"?"warn":""); b.innerHTML = icon("alert") + `<span>${esc(text)}</span>`; b.hidden = false; b.dataset.kind = kind || ""; }
 function hideBanner(){ const b = $("#banner"); b.hidden = true; b.dataset.kind = ""; }
@@ -3698,7 +3805,7 @@ $$("#logFilter [data-val]").forEach(b => b.onclick = () => {
 
 /* ---------- keyboard ---------- */
 document.addEventListener("keydown", ev => {
-  if(["F2", "F3", "F8", "F9"].includes(ev.key) && ev.repeat){ ev.preventDefault(); return; }   // a held key acts once
+  if(["F2", "F3", "F6", "F7", "F8", "F9"].includes(ev.key) && ev.repeat){ ev.preventDefault(); return; }   // a held key acts once
   if(ev.key === "F9"){ ev.preventDefault(); toggleRun(ev.shiftKey); }
   else if(ev.key === "F2"){
     ev.preventDefault();
@@ -3706,6 +3813,8 @@ document.addEventListener("keydown", ev => {
     if(!a?.isContentEditable && !["INPUT", "TEXTAREA", "SELECT"].includes(a?.tagName)) answerNow();
   }
   else if(ev.key === "F3"){ ev.preventDefault(); readScreen(); }
+  else if(ev.key === "F6" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); toggleSay(); }
+  else if(ev.key === "F7" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); markLine(null); }
   else if(ev.key === "F4" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey){
     ev.preventDefault();
     if(!ev.repeat){
@@ -3761,7 +3870,7 @@ $("#toolModal").onclick = ev => { if(ev.target.id === "toolModal" && toolDown ==
 /* the tools menu */
 $("#toolsBtn").onclick = ev => { ev.stopPropagation(); renderToolBtns(); $("#toolPop").hidden = !$("#toolPop").hidden; };
 document.addEventListener("click", ev => { if(!$("#toolPop").hidden && !ev.target.closest("#toolPop")) $("#toolPop").hidden = true; });
-const TOOL_RUN = {jobprep: () => openJobPrep(), practice: () => openPractice(), coach: () => openNotes(), screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
+const TOOL_RUN = {notes: () => openFullNotes(false), jobprep: () => openJobPrep(), practice: () => openPractice(), coach: () => openNotes(), screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
 $$("#toolPop [data-tool]").forEach(b => b.onclick = () => { $("#toolPop").hidden = true; TOOL_RUN[b.dataset.tool](); });
 function renderToolBtns(){
   const f = $('#toolPop [data-tool="feedback"]'), x = $('#toolPop [data-tool="export"]');
@@ -3804,17 +3913,218 @@ function onScreen(m){
   else if(m.state === "error") toast("error", m.note || "The screen could not be read.");
 }
 
+/* ---------- 6.19: say it in my language, marks, speaker names, my notes, meeting reminder ---------- */
+function renderSayBtn(){
+  const b = $("#sayBtn"); if(!b) return;
+  b.hidden = !S.running || !featOn("say");
+  b.classList.toggle("on", !!S.sayMode);
+  b.setAttribute("aria-pressed", S.sayMode ? "true" : "false");
+  $("#sayLabel").textContent = S.sayMode ? "Say mode on" : "Say in " + myLang().name;
+}
+async function toggleSay(){
+  if(!featOn("say")) return toast("info", FEATS.find(f => f[0] === "say")[1] + " is turned off. Turn it on in Setup › Features.");
+  if(!S.running && !S.sayMode) return toast("info", "Start the meeting first, then press F6 and speak in " + myLang().name + ".");
+  if(S.sayBusy) return;                                      // a second quick press waits for the first
+  S.sayBusy = true;
+  let r; try{ r = await api("say_mode", {on: !S.sayMode}); } finally { S.sayBusy = false; }
+  if(!r.ok) return toast("warn", r.error || "Say mode could not start.");
+  S.sayMode = !!r.on; renderSayBtn();
+  if(S.sayMode) showSayCard({state: "on"}); else if(S.say && S.say.state === "on") hideSayCard(); else if(S.say) showSayCard(S.say);
+}
+function showSayCard(m){
+  S.say = m;
+  const card = $("#sayCard"); if(!card) return;
+  card.hidden = false; card.classList.toggle("on", !!S.sayMode);
+  const busy = ["listening", "working"].includes(m.state);
+  $("#sayTitle").textContent = S.sayMode ? "Say mode · speak in " + myLang().name : "Say it";
+  const h = $("#sayHeard"); h.textContent = m.heard ? "«" + m.heard + "»" : ""; h.dir = myLang().rtl ? "rtl" : "ltr"; h.lang = myLang().code;
+  if(m.state === "done") S.sayDone = m;                                // the last sentence stays until a newer one is ready
+  const keep = m.state === "done" ? m : (m.state !== "on" && S.sayDone) || null;
+  $("#sayText").textContent = keep ? (keep.text || "") : "";
+  const mm = $("#sayMeaning"); mm.textContent = keep ? (keep.meaning || "") : ""; mm.dir = myLang().rtl ? "rtl" : "ltr"; mm.lang = myLang().code;
+  $("#sayNote").innerHTML = busy ? `<span class="spinner"></span>${esc(m.note || "Working…")}`
+    : m.state === "error" ? `${icon("alert")}${esc(m.note || "It failed.")}`
+    : m.state === "on" ? `${icon("info")}${esc("Mute yourself in Teams or Zoom, then speak. Your words are not added to the transcript. F6 turns it off.")}` : "";
+  $("#sayCopy").hidden = !keep || !keep.text;
+  if(OVERLAY && S.ovScreenUntil) S.ovScreenUntil = 1;               // a screen result gives way (the timer shows the answer again)
+}
+function hideSayCard(){ const c = $("#sayCard"); if(c) c.hidden = true; S.say = null; S.sayDone = null; }
+function onSay(m){
+  showSayCard(m);
+  clearTimeout(S.sayTimer);
+  if(["listening", "working"].includes(m.state))                        // never left on "writing" if the sentence is lost
+    S.sayTimer = setTimeout(() => { if(S.say && ["listening", "working"].includes(S.say.state)) showSayCard({...S.say, state: "error", note: "No answer came. Speak again."}); }, 90000);
+}
+$("#sayBtn").onclick = toggleSay;
+$("#sayClose").onclick = () => { if(S.sayMode) toggleSay(); hideSayCard(); };
+$("#sayCopy").onclick = () => { if(S.sayDone && S.sayDone.text) copyText(S.sayDone.text, "Sentence copied."); };
+
+async function markLine(id){
+  if(!featOn("marks")) return toast("info", FEATS.find(f => f[0] === "marks")[1] + " is turned off. Turn it on in Setup › Features.");
+  const r = await api("mark", id == null ? {} : {entry_id: id});
+  if(!r.ok) return toast("info", r.error || "Nothing was marked.");
+  const e = S.entries.get(r.id); if(e){ e.marked = r.marked; const el = document.getElementById("e" + e.id); if(el) fillEntry(el, e); }
+}
+$("#markBtn").onclick = () => markLine(null);
+
+function startRename(el, e){
+  const who = el.querySelector(".who"); if(who.hidden || el.querySelector(".who-edit")) return;
+  const key = spkKey(e), inp = document.createElement("input");
+  inp.className = "who-edit"; inp.maxLength = 40; inp.dir = "auto"; inp.value = (S.names || {})[key] || "";
+  inp.placeholder = e.who || label(e.source, e.speaker); inp.setAttribute("aria-label", "Name of this speaker");
+  who.hidden = true; who.after(inp); inp.focus(); inp.select();
+  let done = false;
+  const finish = async save => {
+    if(done) return; done = true;
+    const name = inp.value.trim(); inp.remove(); who.hidden = false;
+    if(!save || name === ((S.names || {})[key] || "")) return;
+    const seq = S.nameSeq = (S.nameSeq || 0) + 1, file = S.sessionFile;
+    const r = await api("rename_speaker", {key, name, session_file: file});
+    if(!r.ok) return toast("warn", r.error || "The name was not saved.");
+    if(seq === S.nameSeq && file === S.sessionFile) setNames(r.names);   // (an older answer never undoes a newer name)
+    toast("ok", name ? `Every line of this speaker now shows “${name}”.` : "The name was removed.");
+  };
+  inp.onkeydown = ev => {
+    if(ev.key === "Enter"){ ev.preventDefault(); ev.stopPropagation(); finish(true); }
+    else if(ev.key === "Escape"){ ev.preventDefault(); ev.stopPropagation(); finish(false); } };
+  inp.onblur = () => finish(true);
+}
+function setNames(n){
+  S.names = n || {};
+  S.entries.forEach(e => { const el = document.getElementById("e" + e.id); if(el) fillEntry(el, e); });
+  renderAnswer(); updateCtx();
+}
+
+/* my notes: saved by themselves while you type */
+function renderNotes(){
+  const box = $("#notesBox"); if(!box) return;
+  box.hidden = !featOn("notes") || OVERLAY || !(S.running || S.sessionFile);
+  const nf = $("#notesFull"); if(nf) nf.hidden = S.running;
+  const lab = $("#notesLabel"); if(lab) lab.textContent = S.running ? "My notes" : "My notes · last meeting";
+}
+function fillNotes(){
+  const t = $("#myNotes"); if(!t) return;
+  if((document.activeElement !== t && !notesTimer) || t.dataset.file !== (S.sessionFile || "")) t.value = S.myNotes || "";   // (never over what is being typed)
+  t.dataset.file = S.sessionFile || "";
+  if(t.value && !$("#notesBox").open) $("#notesBox").open = true;
+  $("#notesState").textContent = "";
+  renderNotes();
+}
+var notesTimer = null, notesSeq = 0;
+$("#myNotes").oninput = () => {
+  S.myNotes = $("#myNotes").value; $("#notesState").textContent = "Saving…";
+  clearTimeout(notesTimer);
+  notesTimer = setTimeout(saveNotes, 1200);
+};
+$("#myNotes").onblur = () => { if(notesTimer){ clearTimeout(notesTimer); saveNotes(); } };
+async function saveNotes(){
+  clearTimeout(notesTimer); notesTimer = null;
+  const t = $("#myNotes"), text = t.value, file = t.dataset.file || S.sessionFile || "", seq = ++notesSeq;
+  const r = await api("notes", {text, session_file: file});      // the server refuses notes of another meeting
+  if(!r.ok) toast("warn", r.error || "Your notes were not saved.");     // (also for the meeting shown before)
+  if(seq !== notesSeq || file !== S.sessionFile) return;          // a newer save, or another meeting meanwhile
+  $("#notesState").textContent = r.ok ? "Saved" : "Not saved";
+}
+function flushNotes(){                                     // before another meeting is shown: the typed text is kept with its own meeting
+  if(notesTimer){ saveNotes(); }
+}
+addEventListener("pagehide", () => {
+  if(!notesTimer) return;
+  const t = $("#myNotes");
+  try{ fetch("/api/notes", {method: "POST", keepalive: true, headers: {"Content-Type": "application/json", "X-Token": TOKEN},
+                            body: JSON.stringify({text: t.value, session_file: t.dataset.file || S.sessionFile || ""})}); }catch{}
+});
+$("#notesFull").onclick = () => openFullNotes(true);
+async function openFullNotes(make){
+  if(!featOn("notes")) return toast("info", FEATS.find(f => f[0] === "notes")[1] + " is turned off. Turn it on in Setup › Features.");
+  if(notesTimer){ clearTimeout(notesTimer); await saveNotes(); }
+  if(["working", "streaming"].includes(S.nfState)) return showFullNotes(S.nfLast || {state: "working"});
+  if(S.notesFull && !make) return showFullNotes({state: "done", text: S.notesFull});
+  if(S.running) return toast("info", "Full notes are made after the meeting: press Stop first.");
+  S.nfState = "working"; showFullNotes({state: "working", note: "Starting…"});
+  clearTimeout(S.nfTimer);
+  S.nfTimer = setTimeout(() => { if(["working", "streaming"].includes(S.nfState)){ S.nfState = "error"; if(TM.kind === "notes") showFullNotes({state: "error", note: "No answer came. Try again."}); } }, 240000);
+  const r = await api("notes_full");
+  if(!r.ok){ S.nfState = "error"; showFullNotes({state: "error", note: r.error || "Could not start."}); }
+}
+function showFullNotes(m){
+  if(TM.kind !== "notes") openTool("notes", "Full notes", "edit");
+  S.nfLast = m;
+  const busy = ["working", "streaming"].includes(m.state);
+  $("#toolBody").innerHTML = (m.text ? `<div ${rtlAttr()} class="rtl-text">${mdLite(m.text)}</div>`
+    : !busy && !S.myNotes ? `<p class="help">You wrote no notes, so the notes are written from the transcript alone.</p>` : "");
+  $("#toolNote").innerHTML = busy ? `<span class="spinner"></span>${esc(m.note || "Writing…")}`
+    : m.state === "error" ? `${icon("alert")}${esc(m.note || "It failed.")}` : m.state === "done" ? `${icon("check")}Saved in the meeting file.` : "";
+  toolActions([{icon: "refresh", text: S.notesFull ? "Write again" : "Make full notes", disabled: busy || S.running, run: () => openFullNotes(true)},
+               {icon: "copy", text: "Copy", disabled: !m.text, run: () => copyText($("#toolBody").innerText.trim(), "Notes copied.")}]);
+}
+function onNotesFull(m){
+  if(m.session_file && S.sessionFile && m.session_file !== S.sessionFile) return;
+  S.nfState = m.state;
+  if(m.state === "done") S.notesFull = m.text || "";
+  if(TM.kind === "notes") showFullNotes(m);
+  else if(m.state === "done") toast("ok", "The full notes are ready — Tools › Full notes.");
+  else if(m.state === "error") toast("error", m.note || "The notes failed.");
+}
+
+/* a meeting window opened: offer Start */
+function onMeetingFound(m){
+  if(OVERLAY || S.running || S.stopping || recActive() || !featOn("detect")) return;
+  toast("info", `A ${m.app || "meeting"} meeting has opened. Start listening?`, {text: "Start", run: () => { if(!S.running) toggleRun(false); }});
+}
+
+/* glossary from the job advert and the CV */
+$("#glossFill").onclick = async () => {
+  const b = $("#glossFill"); if(b.disabled) return;
+  b.disabled = true; const old = b.innerHTML; b.innerHTML = `<span class="spinner"></span>Reading the advert and the CV…`;
+  try{
+    const r = await api("glossary_suggest", {});
+    if(!r.ok) return toast("warn", r.error || "No words were found.");
+    if(!r.added.length) return toast("info", r.full ? "The list is full (60 words). Remove some words first." : r.terms.length ? "All the words found are already in the list." : "No technical words were found.");
+    const cur = $("#fGloss").value, have = new Set(cur.split(/[\n\r,;،؛]+/).map(x => x.trim().toLowerCase()).filter(Boolean));
+    const add = [];                                                    // added to what is in the box now (it may not be saved yet)
+    let len = cur.trimEnd().length;
+    for(const t of r.added){
+      if(have.has(t.toLowerCase())) continue;
+      if(have.size + add.length >= 60 || len + t.length + 1 > 3000) break;   // the limits of the list
+      add.push(t); len += t.length + 1;
+    }
+    if(!add.length) return toast("info", have.size >= 60 || len > 2900 ? "The list is full. Remove some words first." : "All the words found are already in the list.");
+    const val = (cur.trimEnd() ? cur.trimEnd() + "\n" : "") + add.join("\n");
+    $("#fGloss").value = val; S.cfg.glossary = val; queueSave({glossary: val});
+    toast("ok", `${add.length} words added: ${add.slice(0, 8).join(", ")}${add.length > 8 ? " …" : ""}. Remove any you do not need.`);
+  } finally { b.disabled = false; b.innerHTML = old; }
+};
+
+/* the summary as a message to send (email, Teams, Slack): plain text, without the interview questions */
+function summaryMessage(md){
+  const parts = String(md || "").split(/^##\s+/m), lead = parts.shift().trim();
+  const out = lead ? [lead.replace(/\*\*(.+?)\*\*/g, "$1")] : [];
+  const isQ = h => /question|سؤال|سوال|پرسیده|frage|pregunta|domand|أسئلة|soru|вопрос/i.test(h) && !/open|باز|offen/i.test(h);
+  const byName = parts.some(p => isQ(p.split("\n")[0]));
+  parts.forEach((p, i) => {
+    p = p.trim();
+    const [head, ...rest] = p.split("\n");
+    if(byName ? isQ(head) : (i === 1 && parts.length >= 5 && !lead)) return;    // "Questions that were asked" stays private
+    const body = rest.join("\n").replace(/\*\*(.+?)\*\*/g, "$1").replace(/^\s*[-*]\s+/gm, "• ").trim();
+    if(body) out.push(head.trim().replace(/[:：]$/, "") + ":\n" + body);
+  });
+  return out.join("\n\n");
+}
 /* the review after a meeting */
 function statTiles(st){
   if(!st) return "";
   const tiles = [];
   if(st.minutes) tiles.push([st.minutes + " min", "length"]);
   if(Number.isFinite(st.me_share)) tiles.push([st.me_share + "%", "your share of talking"]);
-  if(st.wpm) tiles.push([st.wpm, "words per minute"]);
+  if(st.wpm) tiles.push([st.wpm, "words per minute" + (st.pace === "slow" ? " · slow" : st.pace === "fast" ? " · fast" : st.pace === "good" ? " · good pace" : "")]);
   if(Number.isFinite(st.fillers)) tiles.push([st.fillers, "filler words*"]);
   if(st.answers) tiles.push([st.long_pauses + " / " + st.answers, "slow replies (over 6 s)"]);
   if(!tiles.length) return "";
-  return `<div class="stat-tiles" dir="ltr">${tiles.map(t => `<div class="stat-tile"><b>${esc(t[0])}</b><span>${esc(t[1])}</span></div>`).join("")}</div><div class="help" dir="ltr" style="margin:-4px 0 8px">*Speech-to-text often leaves out “um” and “uh”, so this is a minimum.</div>`;
+  const fl = Object.entries(st.filler_list || {}).slice(0, 6).map(([w, n]) => `“${w}” ×${n}`).join(" · ");
+  const more = (fl ? `<div class="stat-list" dir="ltr">Filler words: ${esc(fl)}${st.fillers_per_min != null ? esc(` — ${st.fillers_per_min} per minute of speaking`) : ""}</div>` : "")
+    + (st.pace ? `<div class="stat-list" dir="ltr">${esc(st.pace === "slow" ? "Pace: slower than usual (about 110–170 words per minute is easy to follow)." : st.pace === "fast" ? "Pace: fast — slow down a little and pause between points (about 110–170 words per minute is easy to follow)." : "Pace: easy to follow (110–170 words per minute).")}</div>` : "");
+  return `<div class="stat-tiles" dir="ltr">${tiles.map(t => `<div class="stat-tile"><b>${esc(t[0])}</b><span>${esc(t[1])}</span></div>`).join("")}</div>${more}<div class="help" dir="ltr" style="margin:-4px 0 8px">*Speech-to-text often leaves out “um” and “uh”, so this is a minimum.</div>`;
 }
 async function openFeedback(again){
   if(!featOn("after")) return toast("info", FEATS.find(f => f[0] === "after")[1] + " is turned off. Turn it on in Setup › Features.");
@@ -4162,7 +4472,9 @@ function printPdf(){
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Meeting</title><style>${css}</style></head><body>
     <h1>Meeting transcript</h1><div class="t">${esc(new Date(rows[0].t0 * 1000).toLocaleString())}${S.cfg && S.cfg.context ? " · " + esc(S.cfg.context.split("\n")[0]) : ""}</div>
     ${S.summary ? `<h2>Summary</h2><div dir="auto">${block(S.summary)}</div>` : ""}${S.feedback ? `<h2>Feedback</h2><div dir="auto">${block(S.feedback)}</div>` : ""}
-    <h2>Transcript</h2>${rows.map(e => `<div class="l"><b>${esc((e.who || label(e.source, e.speaker)))}</b> <span class="t">${clock(e.t0)}</span><div dir="auto">${esc(e.text)}</div>${e.translation ? `<div class="tr" dir="auto">${esc(e.translation)}</div>` : ""}${e.answer ? `<div class="a" dir="auto">${esc(e.answer)}${e.answer_fa ? `<br>${esc(e.answer_fa)}` : ""}</div>` : ""}</div>`).join("")}</body></html>`;
+    ${rows.some(e => e.marked) ? `<h2>Marked moments</h2>${rows.filter(e => e.marked).map(e => `<div class="l">★ <b>${esc(whoOf(e))}</b> <span class="t">${clock(e.t0)}</span><div dir="auto">${esc(e.text)}</div></div>`).join("")}` : ""}
+    ${S.myNotes && S.myNotes.trim() ? `<h2>My notes</h2><div dir="auto" style="white-space:pre-wrap">${esc(S.myNotes.trim())}</div>` : ""}${S.notesFull ? `<h2>Full notes</h2><div dir="auto">${block(S.notesFull)}</div>` : ""}
+    <h2>Transcript</h2>${rows.map(e => `<div class="l"><b>${e.marked ? "★ " : ""}${esc(whoOf(e))}</b> <span class="t">${clock(e.t0)}</span><div dir="auto">${esc(e.text)}</div>${e.translation ? `<div class="tr" dir="auto">${esc(e.translation)}</div>` : ""}${e.answer ? `<div class="a" dir="auto">${esc(e.answer)}${e.answer_fa ? `<br>${esc(e.answer_fa)}` : ""}</div>` : ""}</div>`).join("")}</body></html>`;
   const f = document.createElement("iframe");
   f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
   f.onload = () => { try{ f.contentWindow.focus(); f.contentWindow.print(); }catch{ toast("error", "Printing did not start. Use the Word file instead."); } setTimeout(() => f.remove(), 120000); };

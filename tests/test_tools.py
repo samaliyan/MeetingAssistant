@@ -2166,15 +2166,19 @@ def test_features_can_be_turned_off(app):
         a.cfg["features"] = {"translate": False, "answers": False, "coach": False}
         assert a.needed_tasks() == ("stt", "ans")                   # prep, summary and screen reading still use answers
         a.cfg["features"] = {"translate": False, "answers": False, "coach": False, "prep": False, "after": False, "screen": False}
+        assert a.needed_tasks() == ("stt", "ans")                   # 6.19: say mode and full notes use answers too
+        a.cfg["features"].update(say=False, notes=False)
         assert a.needed_tasks() == ("stt",)                         # only speech to text needs a service
         assert a.needed_tasks(for_file=True) == ("stt",)
         a.cfg["features"] = {}
         assert a.needed_tasks() == ("stt", "tr", "ans")
         a.cfg["features"] = {"answers": False, "screen": False, "after": False, "prep": False, "files": False,
-                             "overlay": False, "coach": False}
+                             "overlay": False, "coach": False, "say": False, "notes": False, "marks": False}
         for name, kw in (("answer_now", {}), ("screen", {}), ("summary", {}), ("feedback", {}), ("job_prep", {"ad": "x" * 60}),
                          ("practice_questions", {}), ("say", {"text": "hello"}), ("recording", {"path": "x.mp3"}),
-                         ("recording_link", {"url": "https://example.com/v"}), ("overlay", {"on": True})):
+                         ("recording_link", {"url": "https://example.com/v"}), ("overlay", {"on": True}),
+                         ("say_mode", {"on": True}), ("mark", {}), ("notes", {"text": "x"}), ("notes_full", {}),
+                         ("glossary_suggest", {})):
             r = a.call(name, kw)
             assert r["ok"] is False and r.get("feature") and "Setup › Features" in r["error"], (name, r)
         assert a.call("recording", {"cancel": True})["ok"] is True          # stopping always works
@@ -2202,3 +2206,305 @@ def test_lines_follow_the_feature_switches(app):
         assert e["tr_state"] != "off" and tr and calls                                     # on again: both run
     finally:
         eng.stop_event.set()
+
+
+# ---- 6.19: say it in my language, marks, speaker names, my notes, glossary, meeting reminder --------------
+class _RecHub:
+    def __init__(self):
+        self.events, self.toasts = [], []
+    def publish(self, kind, **k): self.events.append((kind, k))
+    def toast(self, level, text): self.toasts.append((level, text))
+
+
+def test_marks_names_and_notes_reach_the_files(app):
+    cfg = app.sanitize({})
+    s = app.Session(cfg)
+    t = time.time()
+    a = s.add("them", t, t + 2, "What is your notice period?", "en", [1], speaker=1)
+    b = s.add("them", t + 3, t + 5, "And your salary expectation?", "en", [2], speaker=2)
+    s.add("me", t + 6, t + 8, "Three months.", "en", [3])
+    assert s.mark(None)["id"] == s.ordered()[-1]["id"]            # F7: the newest line, always "on"
+    assert s.mark(None)["marked"] is True                         # pressing again never removes it
+    assert s.mark(a["id"])["marked"] is True and s.mark(a["id"])["marked"] is False and s.mark(a["id"])["marked"] is True
+    assert s.mark(99999) is None
+    assert s.set_name("them:1", "  John   Smith ") and s.label(s.get(a["id"])) == "John Smith"
+    assert s.label(s.get(b["id"])) != "John Smith"                 # only that speaker
+    assert not s.set_name("me", "X") and not s.set_name("bad key", "X") and not s.set_name("them:1234", "X")
+    assert not s.set_name("them:1\n", "X")
+    assert s.set_name("them:2", "")                                # empty = back to the default name
+    assert app.speaker_key({"source": "them", "who": "Person 2"}) == "who:Person 2"
+    assert app.speaker_key({"source": "them", "speaker": None}) == "them:0"
+    s.set_notes(mine="notice period?\n- salary")
+    s.save_if_dirty()
+    md = open(s.path, encoding="utf-8").read()
+    assert "★ John Smith:** What is your notice period?" in md and "## Marked moments" in md and "## My notes" in md
+    txt = app.export_bytes(s, "txt").decode("utf-8")
+    assert "== Marked moments ==" in txt and "★ [" in txt and "== My notes ==" in txt and "John Smith" in txt
+    with zipfile.ZipFile(io.BytesIO(app.export_bytes(s, "docx"))) as z:
+        doc = z.read("word/document.xml").decode("utf-8")
+    assert "Marked moments" in doc and "John Smith" in doc and "salary" in doc
+    back = app.Session.load_last(cfg)
+    assert back.names == {"them:1": "John Smith"} and back.my_notes.startswith("notice period?")
+    assert [r["marked"] for r in back.ordered()] == [True, False, True]
+    # damaged or hostile values from the file are cleaned
+    assert app.clean_names({"them:1": "A", "x": "B", "who:" + "z" * 80: "C", "them:2": 5, "them:3": " " * 3}) == {"them:1": "A"}
+
+
+def test_mark_rename_notes_actions(app):
+    a = app.App()
+    try:
+        a.hub = _RecHub()
+        assert a.api_mark()["ok"] is False                        # no transcript yet
+        eng, sess, _ = _engine(app)
+        a.review = eng
+        t = time.time()
+        e = sess.add("them", t, t + 2, "Tell me about yourself.", "en", [1])
+        r = a.api_mark()
+        assert r["ok"] and r["id"] == e["id"] and r["marked"] and a.hub.toasts and "Marked" in a.hub.toasts[-1][1]
+        assert a.api_mark(entry_id=str(e["id"]))["marked"] is False      # the flag on a line switches it
+        assert a.api_mark(entry_id="abc")["ok"] is False
+        assert a.api_mark(entry_id=True)["ok"] is False and a.api_mark(entry_id=3.9)["ok"] is False
+        assert a.api_mark(entry_id=e["id"], on="false")["marked"] is True          # only a real true/false is taken
+        assert a.api_mark(entry_id=e["id"], on=False)["marked"] is False
+        r = a.api_rename_speaker(key="them:0", name="Interviewer")
+        assert r["ok"] and r["names"] == {"them:0": "Interviewer"} and sess.label(sess.get(e["id"])) == "Interviewer"
+        assert ("names", {"names": {"them:0": "Interviewer"}, "session_file": sess.path}) in a.hub.events
+        assert a.api_rename_speaker(key="me", name="X")["ok"] is False
+        assert a.api_notes(text="n" * 30000)["ok"] and len(sess.my_notes) == 20000
+        r = a.api_notes(text="other", session_file="C:/elsewhere/meeting.md")
+        assert r["ok"] is False and r["stale"] and sess.my_notes == "n" * 20000          # never into the wrong meeting
+        assert a.api_notes(text="kept", session_file=sess.path)["ok"] and sess.my_notes == "kept"
+        assert a.api_rename_speaker(key="them:0", name="X", session_file="other.md")["ok"] is False
+        assert os.path.isfile(sess.path)                          # saved at once (no meeting is running)
+        a.cfg["features"] = {"marks": False, "notes": False}
+        assert a.api_mark()["feature"] == "marks" and a.api_notes(text="x")["feature"] == "notes"
+        assert a.api_rename_speaker(key="them:0", name="")["ok"] is True      # names are part of the transcript itself
+        eng.stop_event.set()
+    finally:
+        a.closing.set()
+
+
+def test_say_mode_routes_my_speech_to_a_sentence(app):
+    import numpy as np
+    eng, sess, calls = _engine(app)
+    hub = _RecHub()
+    eng.hub = hub
+    eng.app.hub = hub
+    eng.cfg["my_language"] = "fa"
+    eng.cfg["languages"] = ["en"]
+    try:
+        seen = {}
+
+        class FakeSTT:
+            def transcribe(self, audio, model, lang, prompt):
+                seen["lang"] = lang
+                return {"text": "بگو که من سه سال تجربه دارم", "language": "persian", "segments": []}
+        eng.app.get_api = lambda pid: FakeSTT()
+        eng.app.note_request = lambda: None
+        eng.say = lambda text, lang="", tone="natural": {"text": "I have three years of experience.", "meaning": "سه سال تجربه دارم", "lang": "en"}
+        eng._submit = lambda fn, *a: fn(*a) or True
+        eng.say_mode = True
+        audio = np.zeros(16000, dtype=np.float32)
+        eng.on_audio("segment", "me", 77, audio=audio, t0=time.time() - 2, t_end=time.time(), dur=1.0)
+        with eng.cv:
+            job = eng.pending.pop()
+        assert job["say"] is True and job["source"] == "me"
+        eng._process(job, ("groq", "whisper-large-v3"))
+        assert seen["lang"] == "fa"                               # recognised in MY language, not the meeting language
+        assert sess.ordered() == []                               # never written into the transcript
+        done = [k for kind, k in hub.events if kind == "say" and k.get("state") == "done"]
+        assert done and done[-1]["text"] == "I have three years of experience." and done[-1]["heard"].startswith("بگو")
+        # the other side is not affected, and with say mode off my words are a line again
+        eng.on_audio("segment", "them", 78, audio=audio, t0=time.time() - 2, t_end=time.time(), dur=1.0)
+        with eng.cv:
+            assert not eng.pending[-1].get("say")
+            eng.pending.clear()
+        eng.say_mode = False
+        eng.on_audio("segment", "me", 79, audio=audio, t0=time.time() - 2, t_end=time.time(), dur=1.0)
+        with eng.cv:
+            assert not eng.pending[-1].get("say")
+            eng.pending.clear()
+        # a live service never writes my line while say mode is on
+        eng.say_mode = True
+        eng.live_final("me", 80, time.time() - 1, time.time(), "garbled words")
+        assert sess.ordered() == []
+        # nothing understood: a clear message, nothing sent
+        eng.say_speech("  ")
+        assert hub.events[-1][1]["state"] == "error"
+        # an older sentence that finishes after a newer one is not shown over it
+        hub.events.clear()
+        eng._say_speech("new", 9)
+        eng._say_speech("old", 8)
+        assert [k["heard"] for kind, k in hub.events if kind == "say"] == ["new"]
+        # a say piece that cannot be written down tells the card
+        eng._drop({"segs": [81], "source": "me", "say": True})
+        assert hub.events[-1][0] == "say" and hub.events[-1][1]["state"] == "error"
+    finally:
+        eng.stop_event.set()
+
+
+def test_say_mode_action_checks(app):
+    a = app.App()
+    try:
+        assert a.api_say_mode(on=True) == {"ok": False, "error": "Start the meeting first."}
+        assert a.api_say_mode(on=False)["ok"] is True                    # turning off always works
+        a.cfg["features"] = {"say": False}
+        assert a.api_say_mode(on=True)["feature"] == "say"
+        eng, sess, _ = _engine(app)
+        a.engine = eng
+        a.cfg["features"] = {}
+        a.captures = []
+        assert "microphone" in a.api_say_mode(on=True)["error"].lower()
+        class Cap: source = "me"
+        a.captures = [Cap()]
+        a.hub = _RecHub()
+        assert a.api_say_mode(on=True) == {"ok": True, "on": True} and eng.say_mode
+        assert any("mute" in t.lower() for _, t in a.hub.toasts)
+        assert a.api_say_mode() == {"ok": True, "on": False} and not eng.say_mode     # the key switches it
+        eng.say_mode = True
+        a.cfg["features"] = {"say": False}
+        a._apply_features()
+        assert not eng.say_mode                                           # turned off in Features: stops at once
+        eng.stop_event.set()
+    finally:
+        a.closing.set()
+
+
+def test_glossary_merge_and_suggest(app):
+    text, added = app.merge_glossary("OSPF, BGP\nkubectl", ["bgp", "Data Guard", "  RMAN ", "x" * 50, "Data guard", ""])
+    assert added == ["Data Guard", "RMAN"] and text == "OSPF, BGP\nkubectl\nData Guard\nRMAN"
+    assert app.merge_glossary("", ["k8s"]) == ("k8s", ["k8s"])
+    assert app.merge_glossary("A", []) == ("A", [])
+    full = "\n".join(f"t{i}" for i in range(app.GLOSSARY_MAX_TERMS))
+    assert app.merge_glossary(full, ["new"])[1] == []                    # the limit is kept
+    eng, sess, _ = _engine(app)
+    try:
+        eng.cfg["job_ad"] = "We need Oracle RMAN and Data Guard, Kubernetes, Terraform."
+        eng.run_chat = lambda *a, **k: 'Here: ["RMAN", "Data Guard", "rman", "Kubernetes", "' + "y" * 60 + '"]'
+        assert eng.glossary_suggest() == ["RMAN", "Data Guard", "Kubernetes"]
+        eng.run_chat = lambda *a, **k: "RMAN\n- Terraform\n"
+        assert eng.glossary_suggest() == ["RMAN", "Terraform"]
+    finally:
+        eng.stop_event.set()
+    a = app.App()
+    try:
+        a.cfg["job_ad"] = ""
+        a.cfg["about_me"] = ""
+        assert "job advert" in a.api_glossary_suggest()["error"]
+    finally:
+        a.closing.set()
+
+
+def test_meeting_windows_are_recognised(app):
+    f = app.meeting_apps
+    assert f(["Zoom Meeting", "Inbox - Outlook"]) == {"Zoom"}
+    assert f(["Meeting with Sara | Microsoft Teams", "Chat | Microsoft Teams"]) == {"Teams"}
+    assert f(["Meet - abc-defg-hij - Google Chrome"]) == {"Google Meet"}
+    assert f(["Chat | Microsoft Teams", "Zoom Workplace", "Google Docs", "meet the team - Notepad"]) == set()
+    assert f(["Cisco Webex Meetings"]) == {"Webex"}
+    assert f(["Chat | Weekly Meeting | Microsoft Teams", "Webex Meetings pricing - Google Chrome",     # pages and chats
+              "Zoom Meeting tips - YouTube - Google Chrome", "Weekly Meeting notes - Microsoft\u200b Edge"]) == set()
+    assert f(["Meet - abc-defg-hij and 2 more pages - Personal - Microsoft\u200b Edge"]) == {"Google Meet"}
+    old = os.environ.get("MA_FAKE_WINDOWS")
+    os.environ["MA_FAKE_WINDOWS"] = "Zoom Meeting;;Notes"
+    try:
+        assert app.window_titles() == ["Zoom Meeting", "Notes"]
+    finally:
+        if old is None:
+            os.environ.pop("MA_FAKE_WINDOWS")
+        else:
+            os.environ["MA_FAKE_WINDOWS"] = old
+
+
+def test_meeting_watch_offers_start_once(app, tmp_path):
+    import threading
+    p = os.path.join(tmp_path, "w.txt")
+    open(p, "w").write("Inbox\n")
+    old = {k: os.environ.get(k) for k in ("MA_FAKE_WINDOWS", "MA_WATCH_SECS")}
+    os.environ["MA_FAKE_WINDOWS"], os.environ["MA_WATCH_SECS"] = p, "0.05"
+    a = app.App()
+    try:
+        a.hub = _RecHub()
+        th = threading.Thread(target=a._meeting_watch, daemon=True)
+        th.start()
+        time.sleep(0.2)
+        open(p, "w").write("Inbox\nZoom Meeting\n")
+        time.sleep(0.3)
+        found = [k for kind, k in a.hub.events if kind == "meeting_found"]
+        assert found == [{"app": "Zoom"}]
+        open(p, "w").write("Inbox\n")
+        time.sleep(0.2)
+        open(p, "w").write("Zoom Meeting\n")                       # opened again soon after: not offered again
+        time.sleep(0.3)
+        assert len([1 for kind, _ in a.hub.events if kind == "meeting_found"]) == 1
+        a.cfg["features"] = {"detect": False}
+        open(p, "w").write("Meeting with Sara | Microsoft Teams\n")
+        time.sleep(0.3)
+        assert len([1 for kind, _ in a.hub.events if kind == "meeting_found"]) == 1     # turned off
+        a.cfg["features"] = {}
+        a.running = True
+        time.sleep(0.3)
+        assert len([1 for kind, _ in a.hub.events if kind == "meeting_found"]) == 1     # a meeting is already running
+    finally:
+        a.closing.set()
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_summary_asks_for_decisions_and_actions_and_uses_marks(app):
+    eng, sess, _ = _engine(app)
+    hub = _RecHub()
+    eng.hub = hub
+    try:
+        t = time.time()
+        sess.add("them", t, t + 2, "We decided to move the release to Friday.", "en", [1])
+        e = sess.add("me", t + 3, t + 5, "I will send the test report by Thursday.", "en", [2])
+        sess.mark(e["id"])
+        sess.set_notes(mine="release friday")
+        got = {}
+
+        def chat(chain, msgs, *a, **k):
+            got["system"], got["user"] = msgs[0]["content"], msgs[1]["content"]
+            return "## Summary\nok"
+        eng.chat_patient = chat
+        eng.cfg["my_language"] = "en"
+        eng._summary(sess.ordered())
+        assert "## Decisions" in got["system"] and "## Action items" in got["system"] and "by when" in got["system"]
+        assert "★ " in got["user"] and "release friday" in got["user"]
+        eng.cfg["my_language"] = "fa"
+        eng._summary(sess.ordered())
+        assert "## تصمیم‌ها" in got["system"]
+        # full notes: my notes are the outline
+        eng._notes_full(sess.ordered())
+        assert "My notes:\nrelease friday" in got["user"] and sess.notes_full == "## Summary\nok"
+        assert hub.events[-1] == ("notes_full", {"session_file": sess.path, "state": "done", "text": "## Summary\nok"})
+    finally:
+        eng.stop_event.set()
+
+
+def test_filler_words_and_pace(app):
+    rows = [{"source": "me", "t0": 0, "t_end": 60, "text": "So, like, I actually like Python. Um, you know, I basically, like, automated it. " + "word " * 120}]
+    st = app.talk_stats(rows)
+    assert st["filler_list"]["like"] == 2                            # "I like Python" is not a filler
+    assert list(st["filler_list"])[0] == "like" and st["fillers"] == 6
+    assert st["fillers_per_min"] == 6.0 and st["pace"] == "good"
+    fast = app.talk_stats([{"source": "me", "t0": 0, "t_end": 30, "text": "word " * 100}])
+    assert fast["pace"] == "fast" and app.talk_stats([{"source": "me", "t0": 0, "t_end": 5, "text": "hi"}])["pace"] is None
+
+
+def test_new_parts_are_off_for_someone_without_the_answers_service(app):
+    import json as _j
+    with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:
+        _j.dump({"config_version": 5, "api_key": "gsk_x", "features": {"answers": False, "after": False, "translate": False}}, f)
+    c = app.load_config()
+    assert c["features"]["say"] is False and c["features"]["notes"] is False and app.feat(c, "marks") and app.feat(c, "detect")
+    with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:
+        _j.dump({"config_version": 5, "api_key": "gsk_x", "features": {"translate": False}}, f)
+    c = app.load_config()
+    assert app.feat(c, "say") and app.feat(c, "notes")
+    with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:              # a 6.19 file is taken as it is
+        _j.dump({"config_version": 6, "api_key": "gsk_x", "features": {"answers": False, "after": False}}, f)
+    assert app.feat(app.load_config(), "say")

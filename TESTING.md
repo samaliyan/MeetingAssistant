@@ -1,7 +1,7 @@
 # What is tested, and how
 
 This file says, part by part, how the program is checked and what cannot be checked without a real Windows computer,
-real sound or real services. It is updated with every audit (last: 6.17, seven independent reviewers plus two re-reviews of the fixes).
+real sound or real services. It is updated with every audit (last: 6.19, two independent reviewers of the new parts plus a re-review of the fixes; 6.17: seven reviewers).
 
 Ways of checking:
 
@@ -46,6 +46,10 @@ Ways of checking:
 | Keep the sound, ▶ on a line | yes (WAV here) | yes (play, switch lines, stop at line end) | yes | – | Opus files (soundfile on Windows), 3-hour meetings |
 | Vosk light model (engine via ctypes, zip download, language warning) | yes (download from a local server, unsafe zip paths, which download is used; the real engine with a real English model when given) | yes (real engine + real English model: choose, Test, a real recording) | yes (independent review) | – | the Windows engine (libvosk.dll), downloads from alphacephei.com, Persian and other models, folders with Persian letters |
 | NVIDIA support with one button (cuBLAS download, PATH, reload) | yes (fake PyPI: a break in the middle, SHA-256 check, only 2 files kept, remove and remove-at-next-start) | yes (button, progress, stop, continue, remove; fake files) | yes (independent review; CTranslate2 sources read) | – | a real NVIDIA card, the real 560 MB file from pypi.org, real speed |
+| 6.19 say mode (F6): my speech in my language → a sentence to say, never a transcript line | yes (language sent, nothing in the transcript, live lines dropped, order of results, a lost piece reports) | yes (whole meeting with a fake Groq: F6, Persian speech, card, overlay) | yes | – | real Persian speech, Deepgram live, the global key Ctrl+Alt+J on Windows |
+| 6.19 marks, speaker names, my notes, full notes | yes (files, export, Continue, wrong meeting refused, bad input) | yes (F7, flag, rename, notes saved, notes typed just before Start stay with their meeting) | yes | – | Ctrl+Alt+K on Windows, closing the window while typing |
+| 6.19 summary with decisions and action items, Copy as message, glossary from the advert, filler words and pace | yes (prompts, merging, limits, counting "like,") | yes (summary, message text, glossary button) | yes | – | quality of real model text |
+| 6.19 meeting reminder (window titles) | yes (titles of Zoom, Teams, Meet, Webex; web pages and chats not counted; once per 10 minutes) | yes (fake window list → message → Start) | yes | – | the real window titles of Zoom, Teams and Meet on Windows |
 | Features switches (Setup › Features, presets, hiding, Start needs) | yes (settings, needed services, every action refused when off, lines not translated / answered) | yes (presets, text-only meeting, coach-only panel, narrow window, overlay) | yes (2 reviews) | – | WebView2 look |
 | Build (exe) and release | – | – | yes | build job | first run of the exe on a clean PC |
 
@@ -64,3 +68,6 @@ Setup › Services › **Check this computer** tests the Windows parts on the us
 - API keys are stored as plain text in `Data\config.json` (and its backup copy).
 - Two overlay hotkeys can collide with other programs on AltGr keyboards; use the buttons then.
 - Very long meetings keep every line in the page (no virtual list yet).
+- 6.19 meeting reminder: Teams in a web browser and meetings whose window title has no "Meeting" or "Call" are not noticed.
+- 6.19 say mode: with a live service (Deepgram) your speech is still sent to it while say mode is on (it is not shown).
+- 6.19 say mode: there is no echo check on the say piece; use headphones.

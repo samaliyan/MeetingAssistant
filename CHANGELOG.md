@@ -2,6 +2,21 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.19]
+
+**Eight new helpers for meetings.** Each one has its own switch in Setup › Features.
+
+- **Say it in my language (F6).** Press F6 (or Ctrl+Alt+J from any program, during a meeting), mute yourself in Teams or Zoom, and speak in your own language. Your words are not written in the transcript; a card shows the sentence to say in the meeting language, with its meaning. F6 again turns it off.
+- **Mark a moment (F7).** F7 (or Ctrl+Alt+K) marks the newest line as important; the flag next to any line marks or unmarks it. Marked lines are in the summary, the meeting file, Word, text and PDF export, with ★.
+- **My notes.** A notes box under the answer panel, saved while you type. After the meeting **Make full notes** (or Tools › Full notes) completes your notes from the transcript.
+- **Decisions and action items** in the summary (who — what — by when), and **Copy as message**: the summary as plain text for an email, Teams or Slack (without the interview questions).
+- **Technical words from the job advert and the CV**: Setup › Meeting › **Fill from job advert and CV** adds the new ones to the list.
+- **Meeting reminder**: when a Zoom, Teams or Google Meet meeting window opens, a message offers **Start** (once; only the window titles are read).
+- **Speaker names**: click "Person 1" on a line and type a name (for example Interviewer or John); every line, the summary and the export use it.
+- **How did I do?** lists the filler words you used ("um", "you know", "like," …) per minute and says if your pace was slow, easy to follow or fast.
+- Someone who used the program without the answers service (answers and "after the meeting" off) keeps it that way: the two new parts that need it start off.
+- 138 automated tests.
+
 ## [6.18]
 
 **Use only what you need: Setup › Features.** Eight switches, one per part of the program:
