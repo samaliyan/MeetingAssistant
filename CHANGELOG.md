@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.21]
+
+**"Test it now" fixed.** The **Test it now** button for "Hide from screen sharing" said *"The hidden window could not be found"* even when the window was open and really hidden. The exe (and the Python version started from `venv`) runs the hidden window in a second, inner process, and the test was looking for the window in the outer one, which has no window. The hidden window now reports which process it really is, and the test looks there. Hiding itself was not affected — only the test. 141 automated tests.
+
 ## [6.20]
 
 **A test fixed, nothing in the program changed.** One of the 141 automated tests for "Hide from screen sharing" wrongly assumed the Windows version number is always 0 (true only when the test runs outside Windows). On the GitHub check that runs on a real Windows machine, the version number is real (for example 26100), so the test failed there even though the program itself was correct. The test now checks the real number on Windows and the placeholder number everywhere else. 141 automated tests.
