@@ -714,6 +714,31 @@ def test_no_live_translation_when_the_meeting_is_in_my_language(app):
         eng.stop_event.set()
 
 
+def test_gguf_arch_tells_speech_from_chat_and_routes_each(app, tmp_path):
+    import struct
+    def gguf(name, arch):
+        path = str(tmp_path / name); key = b"general.architecture"; val = arch.encode()
+        with open(path, "wb") as f:
+            f.write(b"GGUF" + struct.pack("<IQQ", 3, 0, 1)
+                    + struct.pack("<Q", len(key)) + key + struct.pack("<I", 8)
+                    + struct.pack("<Q", len(val)) + val)
+        return path
+    wh = gguf("whisper-medium-Q8_0.gguf", "whisper")
+    gem = gguf("gemma3-4b.gguf", "gemma3")
+    assert app.gguf_arch(wh) == "whisper"
+    assert app.gguf_arch(gem) == "gemma3"
+    assert app.gguf_arch(str(tmp_path)) == ""                      # a folder, not a .gguf
+    # a Whisper model does not belong in the Local AI model slot
+    assert "speech model" in app.wrong_slot_message(wh, "llm").lower()
+    assert app.wrong_slot_message(gem, "llm") == ""
+    # a chat model does not belong in the speech-to-text slot
+    assert "chat model" in app.wrong_slot_message(gem, "stt").lower()
+    assert app.wrong_slot_message(wh, "stt") == ""
+    # the speech picker now points a chat model to the right place instead of "not a speech model"
+    _, err = app.model_folder(gem)
+    assert "Local AI model" in err
+
+
 def _say(app, eng, text, when=None):
     now = when or __import__("time").time()
     eng.accept_text("them", text, "en", now - 2, now - 0.1, [next(app._seg_counter)],
