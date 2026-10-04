@@ -2,6 +2,22 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.17]
+
+A full independent check of the whole program (seven reviewers: threads, error paths, security, network, the window, settings and build, and the look and the buttons), and the fixes.
+
+- **The local model never runs twice in memory.** A whisper.cpp model that was replaced or turned off could start itself again in the background; now it stays closed. A whisper.cpp model that takes too long is started afresh (it no longer makes every next sentence wait). Stop on a recording ends a long whisper.cpp step at once.
+- **Stop on a recording**: ffmpeg is always ended (also when Stop is pressed in the first seconds), and no time is spent on the speaker step after Stop. A short problem in fast file mode is tried again (up to 3 times) instead of ending the recording; if a recording stops on an error, the lines already written are kept and saved.
+- **Downloads** (models, Vosk, NVIDIA): a blocked site always gets the advice "needs a VPN or proxy"; the useful error (for example "start your VPN") is shown instead of the last one; a part of a file that does not fit is never stitched on; the Vosk engine file is checked with its SHA-256; a web page saved instead of a model is recognised.
+- **Links**: "too many requests / busy" is no longer reported as "video removed"; the link box is off when this copy cannot download links; the address is kept out of the log after the "?".
+- **The window**: a setting changed during a meeting is never undone by a message from an earlier change; a line still playing stops when a meeting starts; the screen is redrawn when an unfinished line is removed; the first second before the program answers shows a spinner, not "undefined"; the file window starts clean; Setup › Services shows Test all parts, Check this computer and New models, and the rest under **More checks**; the Local model card is shorter (one Speed choice, Test, then Open models folder / Delete).
+- **Words**: "Tell the people apart" and **Person 1, Person 2** in recordings too (as in meetings); the Vosk warning has a one-click **Download the … Vosk model** button; the health check marks what needs action and gives NVIDIA advice that matches the NVIDIA box.
+- **Settings**: if config.json is missing, the backup is used and the message says "missing" (to start fresh, delete both files). The proxy password is never sent to the window.
+- **Security**: deleting a model never touches a network path; network paths written with mixed slashes are recognised.
+- **Build**: build_exe.bat and install.bat now add onnxruntime and yt-dlp too (optional); the release warns when a part is missing.
+- The guides use the real button names (**Use Groq as a backup**, **Test**).
+- 126 automated tests.
+
 ## [6.16]
 
 **NVIDIA graphics card with one button.** When the computer has an NVIDIA card, Setup › Services › Local model shows **Use the NVIDIA graphics card**.
@@ -30,7 +46,7 @@ All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [G
 Six ideas from the open-source program Buzz, built into this program.
 
 - **Recorded files are much faster with the local model.** When a file is transcribed with the local model (faster-whisper), the program skips the silent parts and works on many pieces at once (batched mode), so it is several times faster, most of all on an NVIDIA graphics card. The language is found once for the whole file.
-- **Who said what in a recording.** In the "Transcribe a file…" window choose **Tell the speakers apart** (or the number of people). After the text is ready, each line is labelled Speaker 1, Speaker 2 … The voice model (27 MB) is downloaded the first time.
+- **Who said what in a recording.** In the "Transcribe a file…" window choose **Separate the speakers** (or the number of people). After the text is ready, each line is labelled Speaker 1, Speaker 2 … The voice model (27 MB) is downloaded the first time.
 - **whisper.cpp engine for Intel and AMD graphics.** Three new models in Setup › Services › Local model: cpp-base, cpp-small and cpp-large-v3-turbo. They run on any graphics card that supports Vulkan (Intel Iris / Arc, AMD Radeon, NVIDIA) and on the processor otherwise. A ggml-….bin file you downloaded yourself can be chosen too.
 - **Better subtitles (.srt / .vtt).** A long sentence becomes several short subtitles: at most two lines of 42 characters and 7 seconds each; the translation is cut in the same places, at a comma when there is one. The speaker name is shown only when there is more than one speaker.
 - **A link to text.** Paste a YouTube link (or any page with audio or video) in the "Transcribe a file…" window and press **Transcribe the link**. It is downloaded into the "downloads" folder, then transcribed and translated like a file. Needs ffmpeg (the window tells you how to install it).

@@ -1,7 +1,7 @@
 # What is tested, and how
 
 This file says, part by part, how the program is checked and what cannot be checked without a real Windows computer,
-real sound or real services. It is updated with every audit.
+real sound or real services. It is updated with every audit (last: 6.17, seven independent reviewers plus two re-reviews of the fixes).
 
 Ways of checking:
 

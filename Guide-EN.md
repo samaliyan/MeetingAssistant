@@ -1,4 +1,4 @@
-# Meeting Assistant — User Guide (version 6.16)
+# Meeting Assistant — User Guide (version 6.17)
 
 ## Version 6.16: NVIDIA graphics card with one button
 
@@ -12,7 +12,7 @@
 ## Version 6.14: files, speakers, links, subtitles, sound
 
 - **Faster files with the local model**: silent parts are skipped and many pieces are read at once.
-- **Who said what**: in the "Transcribe a file…" window choose **Tell the speakers apart** (or 2–5 people). Lines are labelled Speaker 1, Speaker 2 …
+- **Who said what**: in the "Transcribe a file…" window choose **Tell the people apart** (or 2–5 people). Lines are labelled Person 1, Person 2 …
 - **Intel and AMD graphics**: Setup › Services › Local model › download **cpp-small** (whisper.cpp engine).
 - **Better subtitles**: short cues of two lines; the translation is cut at the same places.
 - **A link to text**: paste a YouTube link in the "Transcribe a file…" window and press **Transcribe the link** (needs ffmpeg).
@@ -1357,7 +1357,14 @@ Test on this computer
 
 3. If the result was slow, choose a smaller model and test again.
 
-4. If you have an NVIDIA graphics card, the app tries to use it by itself. If it gives an error, choose this option so only the processor is used:
+4. If you have an NVIDIA graphics card, a box in the Local model card offers one download (about 560 MB, once) that lets the local model use it:
+
+   1. Click **Use the NVIDIA graphics card**.
+   2. Wait until the download is done (you can stop it and continue later).
+   3. Click **Test on this computer**. The line at the top of the card should say **NVIDIA graphics card**.
+   4. To free the space again, click **Remove NVIDIA support**.
+
+   If the graphics card gives an error, choose this option so only the processor is used:
 
 ```
 Run on: processor only
@@ -1386,7 +1393,7 @@ All speech to text
 All speech-to-text is done on the computer. This is good when your VPN is slow or the Groq quota has run out. If the local model is busy and this option is on, Groq helps:
 
 ```
-If a service fails, use Groq instead
+Use Groq as a backup
 ```
 
 ### Setting the live text speed of the local model
@@ -1669,7 +1676,7 @@ To see whether ffmpeg is found:
 3. Click Check this computer.
 4. The ffmpeg line in the report should be green.
 
-- To tell the speakers apart, choose Tell the speakers apart under Who is speaking before you pick the file. Otherwise all lines are written under the other person's name.
+- To tell the speakers apart, choose Tell the people apart under Who is speaking before you pick the file. Otherwise all lines are written under the other person's name.
 - For a recorded file, suggested answers are not written automatically. But you can get an answer with the answer button or by selecting words.
 - The Groq free quota is usually enough for a file of one or two hours. For very long files, the hourly or per-minute quota may run out. In that case the app waits by itself and then continues (this is written at the bottom of the window).
 - If you chose the local model for all speech to text, the file is turned into text on the computer itself.
@@ -1838,7 +1845,7 @@ app.log
 2. **The bottom of the window says Offline:** Your VPN is off (if you need one to reach these services) or the proxy is not correct. In the connection settings section, click this button so the exact reason is written:
 
 ```
-Test connection
+Test
 ```
 
 3. **The microphone bar does not move:** Open these three pages, in order, in Windows settings:

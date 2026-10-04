@@ -21,6 +21,7 @@ import importlib.util
 import io
 import itertools
 import json
+import ntpath
 import math
 import os
 import queue
@@ -64,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.16"
+VERSION = "6.17"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -483,6 +484,7 @@ CONFIG_LOCKED = [False]      # the settings file exists but could not be read: n
 def load_config():
     cfg = dict(DEFAULTS)
     saved = {}
+    missing_main = False
     for i, path in enumerate((CONFIG_PATH, CONFIG_PATH + ".bak")):
         data = None
         for attempt in range(5):                       # OneDrive / antivirus may lock it for a moment
@@ -491,6 +493,8 @@ def load_config():
                     data = json.load(f)
                 break
             except FileNotFoundError:
+                if i == 0:
+                    missing_main = True               # missing (moved by OneDrive / antivirus, or deleted): the backup is used
                 break
             except (ValueError, UnicodeDecodeError) as e:
                 log("config damaged:", short(e, 100), level="error")
@@ -518,7 +522,9 @@ def load_config():
         if isinstance(data, dict):
             saved = data
             if i == 1:
-                CONFIG_NOTE.append("Your settings file was damaged — the backup copy was used.")
+                CONFIG_NOTE.append("Your settings file was missing — the backup copy was used. (To start fresh, delete "
+                                   "both config.json and config.json.bak.)" if missing_main else
+                                   "Your settings file was damaged — the backup copy was used.")
                 log("config.json was damaged — the backup copy of your settings was used", level="warn")
             break
     if not isinstance(saved, dict):
@@ -1231,7 +1237,11 @@ class MeetingAudio:
 
     def _open(self, source, t0):
         k = 1 + sum(1 for p_ in self.parts if p_["source"] == source)
-        stem = f"{self.base}.{source}" + ("" if k == 1 else f".{k}")
+        while True:                                   # never over an older file (e.g. kept before a crash)
+            stem = f"{self.base}.{source}" + ("" if k == 1 else f".{k}")
+            if not any(os.path.exists(stem + e) for e in (".ogg", ".flac", ".wav")):
+                break
+            k += 1
         if sf is not None:
             for ext, fmt, sub in ((".ogg", "OGG", "OPUS"), (".flac", "FLAC", "PCM_16")):
                 try:
@@ -1260,7 +1270,12 @@ class MeetingAudio:
 
     def _drain(self):
         while True:
-            item = self.q.get()
+            try:
+                item = self.q.get(timeout=1)
+            except queue.Empty:
+                if self.files is None:                      # closed while the queue was full: no stop sign came
+                    return
+                continue
             if item is None:
                 return
             try:
@@ -1284,6 +1299,29 @@ class MeetingAudio:
                     self._put(st, quiet[:min(left, len(quiet))])
                     left -= len(quiet)
             self._put(st, y)
+            if now - getattr(self, "_indexed", 0) > 20:         # the index is kept up to date: a crash loses nothing
+                self._indexed = now
+                self._write_index(files=self.files)
+
+    def _write_index(self, files=None):
+        parts = list(self.parts) + [{"source": src, "file": os.path.basename(st["path"]), "t0": st["t0"],
+                                     "dur": round(st["n"] / 16000, 2)} for src, st in (files or {}).items()]
+        try:
+            for st in (files or {}).values():                   # what is on disk can be read after a crash
+                try:
+                    if st["kind"] == "sf":
+                        st["f"].flush()
+                    else:
+                        st["f"]._patchheader()             # the header says how long it is: readable after a crash
+                        st["f"]._file.flush()
+                except Exception:
+                    pass
+            tmp = self.index + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"parts": parts}, f)
+            os.replace(tmp, self.index)
+        except OSError as e:
+            log("the meeting sound index could not be written:", short(e), level="warn")
 
     @staticmethod
     def _put(st, y):
@@ -1310,13 +1348,7 @@ class MeetingAudio:
                 self.parts.append({"source": source, "file": os.path.basename(st["path"]), "t0": st["t0"],
                                    "dur": round(st["n"] / 16000, 2)})
             if files:
-                try:
-                    tmp = self.index + ".tmp"
-                    with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump({"parts": self.parts}, f)
-                    os.replace(tmp, self.index)
-                except OSError as e:
-                    log("the meeting sound index could not be written:", short(e), level="warn")
+                self._write_index()
 
 
 def load_audio_index(path):
@@ -2769,7 +2801,8 @@ CPP_CATALOG = [
 # Vosk: very small, very light models (one language each). Less accurate than Whisper, no punctuation - for weak
 # computers. The engine itself (libvosk, ~15 MB) is downloaded once, the first time a Vosk model is downloaded.
 VOSK_BASE = "https://alphacephei.com/vosk/models/"
-VOSK_ENGINE = {"url": "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip", "mb": 15}
+VOSK_ENGINE = {"url": "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip", "mb": 15,
+               "sha256": "f1dcc9cca460630f81ea8f71794f69c80bed6556d2a4e6237b5785e1d2dff34b"}   # program code: checked
 VOSK_CATALOG = [
     {"id": f"vosk-model-small-{code}", "url": VOSK_BASE + f"vosk-model-small-{code}.zip", "mb": mb, "ui": "stt",
      "engine": "vosk", "lang": code[:2], "note": f"Vosk · {name} only · very light, less accurate, no punctuation"}
@@ -3603,6 +3636,9 @@ class CppServer:
     def __init__(self, model_path, threads, gpu=True):
         self.model_path, self.threads, self.gpu = model_path, threads, gpu
         self.proc, self.port, self.job, self.device = None, 0, None, "processor"
+        self.closed = False                    # dropped (another model chosen, or Off): never started again
+        self.interrupted = False               # Stop on a recording: the running request is not tried again
+        self.life = threading.Lock()           # start / stop / close one at a time
         self.log_path = os.path.join(DATA_DIR, "whisper-server.log")
 
     def start(self, should_stop=lambda: False, timeout=240):
@@ -3622,12 +3658,20 @@ class CppServer:
         finally:
             logf.close()
         self.job = _kill_with_us(self.proc)
+        if self.closed:                        # closed while it was starting: never left running
+            self.stop()
+            raise RuntimeError("the model was closed")
         end = time.time() + timeout
         while time.time() < end:
-            if should_stop():
+            if should_stop() or self.closed:
                 self.stop()
+                if self.closed:
+                    raise RuntimeError("the model was closed")
                 return False
-            if self.proc.poll() is not None:
+            p_ = self.proc
+            if p_ is None:                     # stopped meanwhile (Stop pressed on a recording)
+                raise RuntimeError("whisper.cpp was stopped")
+            if p_.poll() is not None:
                 raise RuntimeError("whisper.cpp stopped: " + self.last_log())
             try:
                 r = httpx.get(f"http://127.0.0.1:{self.port}/health", timeout=3, trust_env=False)
@@ -3662,7 +3706,45 @@ class CppServer:
             return "graphics card"
         return f"processor ({self.threads} threads)"
 
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def _restart(self):
+        """The server stopped (graphics driver reset, out of memory, antivirus): started again, at most 3 times in 10 minutes."""
+        if self.closed:
+            raise RuntimeError("the model was closed")
+        now = time.time()
+        planned, self.planned = getattr(self, "planned", False), False
+        self.restarts = [t for t in getattr(self, "restarts", []) if now - t < 600] + ([] if planned else [now])   # Stop is no crash
+        if len(self.restarts) > 3:
+            raise RuntimeError("whisper.cpp keeps stopping — choose the model again, or 'Run on: processor only'")
+        log("whisper.cpp starting again" if planned else "whisper.cpp stopped; starting it again", level="info" if planned else "warn")
+        with self.life:
+            if self.closed:
+                raise RuntimeError("the model was closed")
+            self.stop()
+            self.start()
+
     def transcribe(self, audio16k, language=None, prompt=None, timestamps=False):
+        if not self.alive():
+            self._restart()
+        self.interrupted = False
+        try:
+            return self._transcribe(audio16k, language, prompt, timestamps)
+        except httpx.TimeoutException:
+            # the server keeps working on the abandoned request and every next one would wait behind it: start it afresh
+            if not self.closed:
+                log("whisper.cpp took too long; starting it again", level="warn")
+                self.stop()
+            raise
+        except (httpx.TransportError, OSError):
+            time.sleep(0.5)
+            if self.alive() or self.closed or self.interrupted:
+                raise                                     # (stopped on purpose: no new start, no second try)
+            self._restart()                               # it died during this request: once more on a fresh server
+            return self._transcribe(audio16k, language, prompt, timestamps)
+
+    def _transcribe(self, audio16k, language=None, prompt=None, timestamps=False):
         data = {"response_format": "verbose_json", "temperature": "0.0", "language": language or "auto",
                 "no_language_probabilities": "true",          # (otherwise a second, full pass guesses the language)
                 "no_timestamps": "false" if timestamps else "true"}
@@ -3683,6 +3765,18 @@ class CppServer:
                 for sg in (j.get("segments") or []) if isinstance(sg, dict)]
         return {"text": str(j.get("text") or " ".join(x["text"].strip() for x in segs)).strip(),
                 "language": str(j.get("language") or language or ""), "segments": segs}
+
+    def close(self):
+        """For good: also a request running right now does not start it again."""
+        self.closed = True
+        with self.life:
+            self.stop()
+
+    def interrupt(self):
+        """Stop pressed on a recording: the running request ends at once; the next one starts the server again."""
+        if not self.closed:
+            self.interrupted = self.planned = True
+            self.stop()
 
     def stop(self):
         p = self.proc
@@ -3854,6 +3948,10 @@ class ZipDownload:
                             raise DownloadError(f"HTTP {r.status_code}")
                         if r.status_code == 200 and have:
                             have = 0                             # the site ignored 'continue from': start over
+                        m_ = re.match(r"bytes\s+(\d+)-", r.headers.get("content-range") or "")
+                        if r.status_code == 206 and have and (not m_ or int(m_.group(1)) != have):   # a wrong or unknown piece: start over
+                            os.remove(part)                      # a wrong piece would spoil the file: start it over
+                            raise DownloadError("the site sent the wrong part")
                         t0, got = time.time(), 0
                         with open(part, "ab" if have else "wb") as f:
                             for chunk in r.iter_bytes(1 << 20):
@@ -3894,6 +3992,9 @@ class ZipDownload:
     def run(self):
         try:
             os.makedirs(MODELS_DIR, exist_ok=True)
+            for d in os.listdir(MODELS_DIR):                 # unpacking left over from a crash or an error
+                if d.endswith(".tmp") and os.path.isdir(os.path.join(MODELS_DIR, d)):
+                    shutil.rmtree(os.path.join(MODELS_DIR, d), ignore_errors=True)
             free = shutil.disk_usage(MODELS_DIR).free
             if free < self.state["total"] * 3:
                 raise DownloadError(f"Not enough free disk space: about {round(self.state['total'] * 3 / 1e6)} MB needed "
@@ -3904,6 +4005,13 @@ class ZipDownload:
                     self._emit(True, state="cancelled")
                     return
                 self._emit(True, state="checking")
+                h = hashlib.sha256()
+                with open(part, "rb") as f:
+                    for block in iter(lambda: f.read(1 << 20), b""):
+                        h.update(block)
+                if h.hexdigest() != VOSK_ENGINE["sha256"]:
+                    os.remove(part)
+                    raise DownloadError("the Vosk engine file did not pass the check (SHA-256) — press Download again")
                 tmp = os.path.join(MODELS_DIR, "vosk-engine.tmp")
                 shutil.rmtree(tmp, ignore_errors=True)
                 try:
@@ -3974,10 +4082,7 @@ class ZipDownload:
             log(f"Model '{self.item['id']}' downloaded to {self.dest}")
             self._emit(True, state="done", path=self.dest, done=self.state["total"])
         except DownloadError as e:
-            msg = str(e)
-            if re.search(r"403|connect|timed out|reset|refused|ssl", msg, re.I):
-                msg += " — alphacephei.com or github.com may need a VPN or proxy (Setup › Services › Network (VPN / proxy))."
-            self._emit(True, state="error", error=msg)
+            self._emit(True, state="error", error=net_hint(str(e), "alphacephei.com or github.com"))
         except Exception as e:
             log("vosk download:", traceback.format_exc())
             self._emit(True, state="error", error=short(e, 200))
@@ -4041,7 +4146,7 @@ class GpuPackDownload:
             if free < (size or GPU_PACK["mb"] * 1_000_000) * 2.8:
                 raise DownloadError(f"Not enough free disk space: about {round((size or 560e6) * 2.8 / 1e6)} MB needed "
                                     f"(download and unpack), {round(free / 1e6)} MB free.")
-            for attempt in range(10):                        # a broken connection continues where it stopped
+            for attempt in range(16):                        # a broken connection continues where it stopped
                 if self.cancel.is_set():
                     break
                 have = os.path.getsize(self.part) if os.path.isfile(self.part) else 0
@@ -4057,6 +4162,10 @@ class GpuPackDownload:
                             raise DownloadError(f"HTTP {r.status_code}")
                         if r.status_code == 200 and have:
                             have = 0
+                        m_ = re.match(r"bytes\s+(\d+)-", r.headers.get("content-range") or "")
+                        if r.status_code == 206 and have and (not m_ or int(m_.group(1)) != have):   # a wrong or unknown piece: start over
+                            os.remove(self.part)                 # a wrong piece would spoil the file: start it over
+                            raise DownloadError("the site sent the wrong part")
                         t0, got = time.time(), 0
                         with open(self.part, "ab" if have else "wb") as f:
                             for chunk in r.iter_bytes(1 << 20):
@@ -4070,9 +4179,11 @@ class GpuPackDownload:
                 except (httpx.HTTPError, DownloadError, OSError) as e:
                     log("NVIDIA support download:", short(e, 120), level="warn")
                     grown = (os.path.getsize(self.part) if os.path.isfile(self.part) else 0) > have
-                    if not grown and attempt >= 2:
-                        if proxy and "" in routes and proxy != "":
-                            proxy = ""                           # the proxy does not work for this site: direct
+                    fails = getattr(self, "_fails", 0) + (0 if grown else 1)
+                    self._fails = 0 if grown else fails
+                    if fails >= 3:
+                        if proxy and "" in routes:
+                            proxy, self._fails = "", 0           # the proxy does not work for this site: direct, 3 tries again
                             continue
                         raise DownloadError(dl_error(e) if isinstance(e, httpx.HTTPError) else short(e, 120))
                     time.sleep(2)
@@ -4127,10 +4238,7 @@ class GpuPackDownload:
             log("NVIDIA support for the local model installed in", dest)
             self._emit(True, state="done", path=dest, done=self.state["total"])
         except DownloadError as e:
-            msg = str(e)
-            if re.search(r"403|connect|timed out|reset|refused|ssl|answered", msg, re.I):
-                msg += " — pypi.org may need a VPN or proxy (Setup › Services › Network (VPN / proxy))."
-            self._emit(True, state="error", error=msg)
+            self._emit(True, state="error", error=net_hint(str(e), "pypi.org"))
         except Exception as e:
             log("NVIDIA support download:", traceback.format_exc())
             self._emit(True, state="error", error=short(e, 200))
@@ -4177,7 +4285,7 @@ class LocalWhisper:
         """A model that is replaced or closed: whisper.cpp's server program is ended; a faster-whisper model loses
         its batch helper (which points back at it), so its memory is really freed."""
         if isinstance(m, CppServer):
-            m.stop()
+            m.close()
         elif isinstance(m, VoskModel):
             m.free()
         elif m is not None and hasattr(m, "_ma_batched"):
@@ -4185,6 +4293,11 @@ class LocalWhisper:
                 del m._ma_batched
             except Exception:
                 pass
+
+    def add_final(self, d):
+        """The count of sentences on the local model; shared by every engine, so it has its own lock."""
+        with self.lock:
+            self.finals = max(0, self.finals + d)
 
     def free_for_final(self):
         return self.ready() and self.waiting == 0 and self.finals == 0
@@ -4279,7 +4392,7 @@ class LocalWhisper:
             try:
                 if not srv.start(should_stop=lambda: g != self.gen):
                     return
-                srv.transcribe(np.zeros(16000, np.float32), "en")     # a first run loads everything on the graphics card
+                srv._transcribe(np.zeros(16000, np.float32), "en")    # a first run loads everything (no restart: on failure the processor is tried)
                 if first_err is not None:
                     log("whisper.cpp: the graphics card could not be used, it runs on the processor:", short(first_err, 200), level="warn")
                     self.cpu_note = ("The graphics card could not be used (update its driver, e.g. the Intel or AMD graphics "
@@ -4980,7 +5093,8 @@ class ModelDownload:
                         ok = True
                         break
                     except DownloadError as e:
-                        last = e
+                        if not (last is not None and "proxy" in str(last) and "proxy" not in str(e)):
+                            last = e                       # an error that says 'start your VPN' is kept: it is the useful one
                         log(f"Model download via {host}{' + proxy' if proxy else ' (direct)'} failed: {e}", level="warn")
                         # the connection broke after some progress: continue where it stopped (a few times)
                         if self._on_disk() > before and resumed < 12:
@@ -5015,6 +5129,15 @@ class ModelDownload:
                 done_path = os.path.join(self.dest, self.item["file"])
                 if not os.path.isfile(done_path):
                     raise DownloadError(f"{self.item['file']} is missing after the download")
+                name = self.item["file"].lower()
+                with open(done_path, "rb") as f:
+                    head = f.read(4)
+                bad = (name.endswith(".gguf") and head != b"GGUF") or (name.endswith(".bin") and not is_ggml(done_path)) \
+                    or head[:1] == b"<"                       # a web page (blocked site, captive portal) instead of a model
+                if bad:
+                    shutil.rmtree(self.dest, ignore_errors=True)
+                    raise DownloadError(f"{self.item['file']} is not a real model file (the site sent something else, "
+                                        "maybe a block page). Turn on your VPN and press Download again.")
             else:
                 done_path, why = model_folder(self.dest)
                 if not done_path:
@@ -5023,7 +5146,7 @@ class ModelDownload:
             log(f"Model '{self.item['id']}' downloaded to {self.dest}")
             self._emit(True, state="done", path=done_path, done=self.state["total"])
         except DownloadError as e:
-            self._emit(True, state="error", error=str(e))
+            self._emit(True, state="error", error=net_hint(str(e), "huggingface.co"))
         except Exception as e:
             log("model download:", traceback.format_exc())
             self._emit(True, state="error", error=short(e, 200))
@@ -5149,6 +5272,16 @@ class ModelDownload:
                     if h.hexdigest() != sha:
                         os.remove(path)
                         raise DownloadError(f"{name} arrived damaged and was deleted — press Download again")
+
+
+_NET_RE = re.compile(r"403|429|451|cannot reach|connect|timed out|timeout|reset|refused|ssl|proxy|answered|unreachable", re.I)
+
+
+def net_hint(msg, sites):
+    """A download error, plus the advice that fits Iran most of the time when it looks like a blocked site."""
+    if _NET_RE.search(msg or ""):
+        return f"{msg} — {sites} may need a VPN or proxy (Setup › Services › Network (VPN / proxy))."
+    return msg
 
 
 def dl_error(e):
@@ -7756,7 +7889,7 @@ class Engine:
                         k += 1
                     job["qh"], job["qt"] = self._record(model, now, job["dur"]), model
                     if model[0] == "local":
-                        LOCAL.finals += 1
+                        LOCAL.add_final(1)
                     self.busy += 1
                     self.inflight[id(job)] = job
                     return job, model
@@ -7807,7 +7940,7 @@ class Engine:
             finally:
                 with self.cv:
                     if model[0] == "local":
-                        LOCAL.finals = max(0, LOCAL.finals - 1)
+                        LOCAL.add_final(-1)
                     self.busy -= 1
                     self.inflight.pop(id(job), None)
                     self.cv.notify_all()
@@ -7900,7 +8033,7 @@ class Engine:
                 if m2:
                     h2 = self._record(m2, time.time(), job["dur"])
                     if m2[0] == "local":
-                        LOCAL.finals += 1                   # the local model is busy with this sentence
+                        LOCAL.add_final(1)                   # the local model is busy with this sentence
             if m2:
                 try:
                     api2 = LOCAL if m2[0] == "local" else self.app.get_api(m2[0])
@@ -7912,7 +8045,7 @@ class Engine:
                 finally:
                     if m2[0] == "local":
                         with self.cv:
-                            LOCAL.finals = max(0, LOCAL.finals - 1)
+                            LOCAL.add_final(-1)
         elif detected:
             self.lang_sure = self.lang_sure + 1 if detected == self.lang_guess else 1
             self.lang_guess = detected
@@ -8963,7 +9096,7 @@ def open_recording(path):
                     if raw:
                         yield np.frombuffer(raw, dtype=np.float32).copy()
                 code = proc.wait(timeout=10)
-                if code != 0 and not STOPPED.get(id(proc)):
+                if code != 0 and not STOPPED.get(id(proc)) and not errf.closed:   # (closed: Stop came before the start)
                     errf.seek(0)
                     msg = errf.read().decode("utf-8", "replace").strip().splitlines()
                     why = short(msg[-1] if msg else f"code {code}", 160)
@@ -8987,6 +9120,13 @@ def open_recording(path):
                 proc.kill()                       # a blocked read ends at once
             except Exception:
                 pass
+            import inspect
+            if inspect.getgeneratorstate(g) in ("GEN_CREATED", "GEN_CLOSED"):   # never started: its clean-up does not run
+                STOPPED.pop(id(proc), None)
+                try:
+                    errf.close()
+                except Exception:
+                    pass
         g = gen_ff()
         OPEN_READERS[id(g)] = stop
         return g, total
@@ -9153,6 +9293,8 @@ def speakers_for_rows(rows, audio_iter, base, prints, k=0, cancel=None, progress
         else:
             embs.append(e)
             ids.append(r["id"])
+    if cancel is not None and cancel.is_set():
+        return {}                                             # Stop pressed: no grouping work for nothing
     if len(embs) > 1500:                                      # very long recordings: group a sample, then the rest by likeness
         step = len(embs) / 1500
         pick = sorted({int(i * step) for i in range(1500)})
@@ -9270,9 +9412,10 @@ class LinkJob:
             err = "Links are not supported in this copy of the program (yt-dlp is missing). Use the latest release."
         except Exception as e:
             err = "cancelled" if self.cancel.is_set() else short(re.sub(r"\x1b\[[0-9;]*m", "", str(e)).replace("ERROR: ", ""), 200)
-        with self.app.lock:
-            if self.app.recording is self:
-                self.app.recording = None
+        if err or self.cancel.is_set():
+            with self.app.lock:
+                if self.app.recording is self:
+                    self.app.recording = None
         if err:
             if err != "cancelled":
                 why = link_problem(err)
@@ -9288,8 +9431,14 @@ class LinkJob:
             self.app.hub.toast("info", "Download stopped.")
             self.app.publish_running()
             return
-        r = self.app.api_recording(path=path, speakers=self.speakers, name=self.name)
+        r = self.app.api_recording(path=path, speakers=self.speakers, name=self.name, _from=self)   # takes over atomically
+        if r.get("ok") and self.cancel.is_set():               # Stop was pressed during the hand-over
+            self.app.api_recording(cancel=True)
         if not r.get("ok"):
+            with self.app.lock:
+                if self.app.recording is self:
+                    self.app.recording = None
+            self.app.publish_running()
             msg = {"setup": "Setup is not complete (Setup › Services).", "ffmpeg": r.get("detail") or "ffmpeg is needed."}.get(
                 r.get("error"), r.get("error") or "The downloaded file could not be opened.")
             self.app.hub.toast("error", f"The link was downloaded to the “downloads” folder, but: {msg}")
@@ -9306,11 +9455,13 @@ def link_problem(err):
         why = "This video is private or needs a sign-in, so it cannot be downloaded."
     elif "unsupported url" in low or "is not a valid url" in low or "no video formats" in low or "nothing to download" in low:
         why = "There is no audio or video at this link. Open the video page itself and copy its address."
-    elif "unavailable" in low or "removed" in low or "404" in low:
-        why = "This video is not available (removed, or blocked in your region)."
+    elif "429" in low or "too many requests" in low or "503" in low or "502" in low:
+        why = f"The site is busy or asks to wait (too many requests). Wait a few minutes, or use another VPN server ({net})."
     elif any(k in low for k in ("getaddrinfo", "name resolution", "timed out", "refused", "reset", "ssl", "403",
                                 "unreachable", "proxy", "connection")):
         why = f"The site could not be reached. Turn on your VPN, or set a proxy in {net}."
+    elif "unavailable" in low or "removed" in low or "404" in low:
+        why = "This video is not available (removed, or blocked in your region)."
     elif "javascript" in low or "js runtime" in low or "ejs" in low or "challenge" in low:
         why = "YouTube needs a part that is missing in this copy (a JavaScript runtime). Use the latest release."
     else:
@@ -9409,7 +9560,7 @@ class RecordingJob:
         people = len(set(got.values()))
         self.session.people = people
         for eid, g in got.items():
-            e = self.session.update(eid, speaker=g, who=f"Speaker {g + 1}")
+            e = self.session.update(eid, speaker=g, who=f"Person {g + 1}")      # the same name as in a live meeting
             if e:
                 self.app.hub.publish("entry", entry=e)
         self.session.dirty = True
@@ -9437,10 +9588,23 @@ class RecordingJob:
             cut = len(buf) if done else quiet_cut(buf[:int(FILE_WINDOW * 16000)])
             win, buf = buf[:cut], buf[cut:]
             self._emit(pos=start, state="reading")
-            try:
-                segs, got = LOCAL.transcribe_long(win, lang, prompt)
-            except (Transient, ModelUnavailable, LocalLoading) as e:
-                return short(e, 160)
+            for attempt in range(3):                           # a short problem: the same piece is tried again
+                try:
+                    segs, got = LOCAL.transcribe_long(win, lang, prompt)
+                    break
+                except (Transient, LocalLoading) as e:
+                    if attempt == 2 or self.cancel.is_set():
+                        return short(e, 160)
+                    log(f"Recording: the piece at {start / 60:.1f} min is tried again ({short(e, 100)})", level="warn")
+                    self._emit(note="A short problem — trying this part again…")
+                    for _ in range(50):
+                        if self.cancel.is_set():
+                            break
+                        time.sleep(0.1)
+                except ModelUnavailable as e:
+                    return short(e, 160)
+            if self.cancel.is_set():
+                break
             code = LANG_CODES.get(str(got or "").lower(), got if got in LANGS else None) if not lang else lang
             if not lang and code in meeting_langs(c):
                 lang = code                                    # the language is found once, then kept
@@ -9478,8 +9642,10 @@ class RecordingJob:
             if fast:
                 log("Recording: fast file mode (the local model gets minutes at once; silence is skipped)")
                 problem = self._run_fast(blocks, base, pos)
-                OPEN_READERS.pop(id(blocks), None)
-                blocks.close()                                 # (ffmpeg, if it was used, ends here)
+                stop_ = OPEN_READERS.pop(id(blocks), None)
+                if stop_:
+                    stop_()                                    # ffmpeg ends even if nothing was read (Stop pressed early)
+                blocks.close()
                 blocks = _Empty()
             seg = Segmenter("them", 16000, self.app.cfg["sensitivity"], eng.on_audio, clock=lambda: base + pos[0])
             step = int(16000 * FRAME_SEC)
@@ -9548,16 +9714,30 @@ class RecordingJob:
             self.session.save_if_dirty()
         except Exception as e:
             log("recording:", traceback.format_exc())
-            self._emit(True, state="error", error=short(e, 200))
-            self.app.hub.toast("error", "Could not transcribe the recording: " + short(e, 160))
-            eng.finish(timeout=1)
+            n = len(self.session.entries)
+            self._emit(True, state="error", error=short(e, 200) + (f" — the {n} lines written are saved." if n else ""))
+            self.app.hub.toast("error", ("The recording stopped: " if n else "Could not transcribe the recording: ")
+                               + short(e, 160) + (f" The {n} lines written are saved." if n else ""))
+            end = time.time() + 120                         # what was already read is still written and saved
+            while n and (eng.pending or eng.busy or eng.tr_inflight) and time.time() < end and not self.cancel.is_set():
+                time.sleep(0.3)
+            eng.finish(timeout=5 if n else 1)
+            try:
+                self.session.save_if_dirty()
+            except Exception:
+                pass
         finally:
             if blocks is not None:
-                OPEN_READERS.pop(id(blocks), None)
+                stop = OPEN_READERS.pop(id(blocks), None)
                 try:
                     blocks.close()
                 except Exception:
                     pass
+                if stop:                                   # ffmpeg ends even if the reading never started
+                    try:
+                        stop()
+                    except Exception:
+                        pass
             self.app.recording_finished(self)
 
 
@@ -9763,7 +9943,13 @@ class App:
         c["modes"] = {k: v["name"] for k, v in MODES.items()}
         c["tasks"] = self.task_status()
         c["ready"] = all(v["ok"] for v in c["tasks"].values())
+        c["proxy"] = mask_proxy(c.get("proxy") or "")   # a proxy password is never sent to the window (screen sharing)
         return c
+
+    def _real_proxy(self, v):
+        """The window shows the proxy with its password as ***: sent back unchanged, it means the saved one."""
+        cur = self.cfg.get("proxy") or ""
+        return cur if isinstance(v, str) and "***" in v and v.strip() == mask_proxy(cur) else v
 
     def shown_proxy(self):
         """(proxy, where it came from) for the window — a password in it is hidden."""
@@ -9792,18 +9978,19 @@ class App:
                 "stats": self.stats.summary(), "quota": eng.quota_info() if eng else None,
                 "audio_ok": pyaudio is not None,
                 "spk_ok": importlib.util.find_spec("onnxruntime") is not None,     # speakers in a recording can be told apart
+                "links_ok": importlib.util.find_spec("yt_dlp") is not None,        # a link can be downloaded
                 "speech_mode": eng.speech_mode() if eng else None,
                 "coach": eng.coach_state if eng else None,
                 "coach_notes": (s.coach_notes if s else {}),
                 "answer_check": eng.current_check() if eng else None,
                 "usage": usage_copy(),
                 "local": LOCAL.info(), "llm": LLM.info(),
-                "download": self.download.state if self.download else None,
+                "download": (lambda d: dict(d.state) if d else None)(self.download),
                 "overlay": self.overlay.on, "paused": bool(eng and eng.paused), "summary": s.summary if s else "",
                 "feedback": s.feedback if s else "", "feedback_scores": dict(s.scores) if s else {},
                 "resume": self.resume_info(),
                 "hide": self.hide_state,
-                "recording": self.recording.state if self.recording else None}
+                "recording": (lambda r: dict(r.state) if r else None)(self.recording)}
 
     def set_net(self, ok, ms, error="", name="Groq"):
         if ok != self.net.get("ok") or name != self.net.get("name") or (not ok and error != self.net.get("error")):
@@ -9849,7 +10036,7 @@ class App:
                     if v:
                         new["api_key"] = ""
                 elif k in DEFAULTS and k not in INTERNAL_KEYS:
-                    new[k] = v
+                    new[k] = self._real_proxy(v) if k == "proxy" else v
             new = sanitize(new)
             changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
             changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
@@ -9894,7 +10081,7 @@ class App:
         key = (api_key or "").strip() or self.cfg["api_key"]
         if not key:
             return {"ok": False, "error": "Paste your Groq API key first."}
-        p, src = detect_proxy(self.cfg["proxy"] if proxy is None else proxy)
+        p, src = detect_proxy(self.cfg["proxy"] if proxy is None else self._real_proxy(proxy))
         shared = (key, p) == (self.cfg["api_key"], detect_proxy(self.cfg["proxy"])[0])
         try:
             api = self.get_api() if shared else GroqAPI(key, p)
@@ -9939,8 +10126,10 @@ class App:
                 ok = bool(c["api_key"])
                 why = "" if ok else "Groq has no API key"
             elif pid == "local":
-                ok = bool(c["local_model"])
-                why = "" if ok else "no local model chosen"
+                folder, problem = model_folder(c["local_model"]) if c["local_model"] else ("", "")
+                ok = bool(folder) and LOCAL.state != "error"
+                why = ("" if ok else "no local model chosen" if not c["local_model"] else
+                       f"the local model cannot be used: {LOCAL.error or problem or 'not found'}")
             elif pid == "llm":
                 ok = t != "stt" and bool(c["llm_model"])
                 why = "" if ok else "no local AI model chosen"
@@ -10171,6 +10360,7 @@ class App:
                     with _usage_lock:
                         USAGE.clear()                      # counts are per meeting
                 s_path = self.session.path
+                self._keep_saving(self.last_session)
                 self.last_session = None
                 USAGE_ON[0] = True
                 self.engine = Engine(self, self.session)
@@ -10312,9 +10502,9 @@ class App:
             log("Meeting stopped")
             self._stop_captures()                  # flushes the last sentence into the queue
             ar, self.audio_rec = getattr(self, "audio_rec", None), None
-            if ar is not None:
-                ar.close()
             engine, session = self.engine, self.session
+        if ar is not None:
+            ar.close()                             # (outside the lock: writing what is left may take a moment)
         self.publish_running()
 
         def finish():
@@ -10824,17 +11014,20 @@ class App:
                 add("Sound", "bad", short(e, 120))
         c = self.cfg
         keys = [p["name"] for p in c.get("providers", []) if p.get("api_key")] + (["Groq"] if c.get("api_key") else [])
-        add("Services with a key", "ok" if keys else "bad", ", ".join(keys) if keys else "none yet: Setup > Services")
+        add("Services with a key", "ok" if keys else "bad", ", ".join(keys) if keys else "none yet: Setup › Services")
         add("Proxy", "info", "set" if c.get("proxy") else "none (if the services do not answer from your country, set one)")
         latest = "not in this copy. Download the latest MeetingAssistant.exe from github.com/samaliyan/MeetingAssistant/releases"
         gpus = gpu_names()
         if gpus:
-            add("Graphics card", "ok", ", ".join(gpus) + (" (for the local model choose small)" if any("nvidia" in g.lower() for g in gpus)
-                                                          else " (for the local model choose cpp-small)"))
+            nv = any("nvidia" in g.lower() for g in gpus)
+            add("Graphics card", "ok", ", ".join(gpus) + (
+                (" (local model: large-v3-turbo runs well on it)" if gpu_pack_ready() else
+                 " (local model: install NVIDIA support first, then larger models run well)") if nv
+                else " (for the local model choose cpp-small)"))
         add("whisper.cpp engine (local model on any graphics card)", "ok" if cpp_server_path() else "info",
             "included" if cpp_server_path() else latest)
         if has_nvidia():
-            add("NVIDIA support for the local model", "ok" if gpu_pack_ready() else "info",
+            add("NVIDIA support for the local model", "ok" if gpu_pack_ready() else "warn",
                 "installed" if gpu_pack_ready() else "not installed: Setup › Services › Local model › “Use the NVIDIA graphics card” "
                 "(about 560 MB, once) makes the local model several times faster")
         add("Vosk engine (very light local models)", "ok" if vosk_lib_path() else "info",
@@ -10842,7 +11035,7 @@ class App:
         for mod, what in (("onnxruntime", "Faster transcribing of files, and telling speakers apart"),
                           ("yt_dlp", "Links (YouTube and other sites)")):
             ok_ = importlib.util.find_spec(mod) is not None
-            add(what, "ok" if ok_ else "info", "included" if ok_ else latest)
+            add(what, "ok" if ok_ else "warn", "included" if ok_ else latest)
         ffp = ffmpeg_path()
         add("ffmpeg (for m4a / mp4 files and links)", "ok" if ffp else "warn",
             ("found: " + ffp) if ffp else "not found: only mp3, wav, flac and ogg files can be read, and links do not work. "
@@ -11062,7 +11255,7 @@ class App:
                 "more": more, "places": places,
                 "is_model": kind == "model" and (os.path.isfile(os.path.join(path, "model.bin")) or is_vosk_dir(path))}
 
-    def api_recording(self, path="", browse=False, cancel=False, speakers=0, name=None):
+    def api_recording(self, path="", browse=False, cancel=False, speakers=0, name=None, _from=None):
         """Transcribe (and translate) an audio or video file. speakers: 0 off, -1 tell people apart, 2-8 that many people."""
         try:
             speakers = int(speakers or 0)
@@ -11073,14 +11266,17 @@ class App:
             rec = self.recording
             if rec:
                 rec.cancel.set()
-                stop = OPEN_READERS.get(id(rec.blocks)) if rec.blocks is not None else None
+                stop = OPEN_READERS.get(id(rec.blocks)) if getattr(rec, "blocks", None) is not None else None
                 if stop:
                     stop()
+                m = LOCAL.model
+                if isinstance(m, CppServer) and LOCAL.run_lock.locked():
+                    m.interrupt()                         # a long whisper.cpp request ends now, not in minutes
             return {"ok": True}
         with self.lock:
             if self.running or self.stopping:
                 return {"ok": False, "error": "Stop the meeting first."}
-            if self.recording:
+            if self.recording and self.recording is not _from:    # (a link that was downloaded hands over to its file)
                 return {"ok": False, "error": "A recording is already being transcribed."}
             c = self.cfg
             missing = self.missing_tasks(("stt", "tr"))
@@ -11111,7 +11307,7 @@ class App:
             return {"ok": False, "error": "ffmpeg", "detail": f"The program cannot read {ext} files by itself. "
                     "With ffmpeg it reads every audio and video type (m4a, mp4, webm, …). Or convert the file to mp3 or wav."}
         with self.lock:
-            if self.running or self.stopping or self.recording:     # something started while the dialog was open
+            if self.running or self.stopping or (self.recording and self.recording is not _from):   # started meanwhile
                 return {"ok": False, "error": "A meeting or another recording is running — stop it first."}
             self.cfg["last_recording_dir"] = os.path.dirname(path)
             try:
@@ -11123,6 +11319,7 @@ class App:
             self._set_review(None)
             job = RecordingJob(self, path, speakers, name)
             self.recording = job
+            self._keep_saving(self.last_session)
             self.last_session = job.session
             with _usage_lock:
                 USAGE.clear()
@@ -11187,7 +11384,7 @@ class App:
             self.recording = job
         self.publish_running()
         job.thread.start()
-        log(f"Downloading a link to transcribe: {url}")
+        log(f"Downloading a link to transcribe: {url.split('?')[0] + ('?…' if '?' in url else '')}")   # (sign-in tokens in the address stay out of the log)
         return {"ok": True, "job": job.state}
 
     def recording_finished(self, job):
@@ -11199,12 +11396,21 @@ class App:
         self.publish_running()
         self._gpu_reload_if_waiting()
 
+    def _keep_saving(self, s):
+        """A meeting replaced by a new one is still saved for 15 minutes (translations of its last lines may come late)."""
+        if s is not None and s is not self.session:
+            if not hasattr(self, "older"):
+                self.older = {}
+            self.older[s] = time.time()
+
     def _gpu_reload_if_waiting(self):
         """NVIDIA support installed during a meeting: the local model is loaded again (graphics card first) once it ends."""
-        if getattr(self, "gpu_reload", False) and not (self.running or self.stopping or self.recording):
+        with self.lock:
+            if not getattr(self, "gpu_reload", False) or self.running or self.stopping or self.recording:
+                return
             self.gpu_reload = False
-            LOCAL.unload()
-            self.sync_local()
+        LOCAL.unload()
+        self.sync_local()
 
     @staticmethod
     def _reveal(path, select=False):
@@ -11624,7 +11830,7 @@ class App:
 
     # ---- local AI model for translation and answers -----------------------------------------------
     def llm_state(self):
-        d = self.download.state if self.download else None
+        d = (lambda d_: dict(d_.state) if d_ else None)(self.download)
         return {"ok": True, "llm": LLM.info(), "models": find_llm_models(self.cfg["llm_model"]),
                 "catalog": catalog_view(LLM_CATALOG, "llm"), "download": d, "config": self.public_config()}
 
@@ -11949,7 +12155,7 @@ class App:
     def local_state(self):
         return {"ok": True, "local": LOCAL.info(), "models": find_models(self.cfg["local_model"]),
                 "catalog": catalog_view(LOCAL_CATALOG + (CPP_CATALOG if cpp_server_path() else []) + vosk_catalog(), "stt"),
-                "cpp": bool(cpp_server_path()), "download": self.download.state if self.download else None,
+                "cpp": bool(cpp_server_path()), "download": (lambda d: dict(d.state) if d else None)(self.download),
                 "gpu": {"nvidia": has_nvidia(), "ready": gpu_pack_ready(), "mb": GPU_PACK["mb"],
                         "can": (sys.platform == "win32" or bool(os.environ.get("MA_GPU_NAMES"))) and _fw["mod"] is not None,
                         "download": dict(self.gpu_dl.state) if getattr(self, "gpu_dl", None) else None},
@@ -11960,6 +12166,8 @@ class App:
 
     def api_local_choose(self, path="", browse=False):
         """Uses a model folder (or model.bin inside it). browse=True opens the Windows file dialog."""
+        if self.recording:                              # the recording uses the local model right now
+            return {"ok": False, "error": "A recording is being transcribed. Change the local model when it is done."}
         if is_network_path(path):
             return {"ok": False, "error": "Copy the model folder to this computer first."}
         if browse:
@@ -11990,6 +12198,8 @@ class App:
     def api_local_use(self, role="preview"):
         """role: preview (local live text, final text from the service chosen for speech to text),
         all (the local model does all speech to text), off."""
+        if self.recording:                              # the recording uses the local model right now
+            return {"ok": False, "error": "A recording is being transcribed. Change the local model when it is done."}
         with self.lock:
             c = self.cfg
             if role != "off" and not c["local_model"]:
@@ -12020,6 +12230,8 @@ class App:
 
     def api_local_test(self):
         """Loads the model (if needed) and measures it on this computer."""
+        if self.recording:                              # the recording uses the local model right now
+            return {"ok": False, "error": "A recording is being transcribed. Change the local model when it is done."}
         c = self.cfg
         if not c["local_model"]:
             return {"ok": False, "error": "Choose or download a model first."}
@@ -12095,6 +12307,10 @@ class App:
         return {"ok": True, "download": self.download.state}
 
     def api_local_delete(self, path=""):
+        if is_network_path(path):
+            return {"ok": False, "error": "Only models in the program's 'models' folder can be deleted here."}
+        if self.recording:                              # the recording uses the local model right now
+            return {"ok": False, "error": "A recording is being transcribed. Change the local model when it is done."}
         chosen, _ = model_folder(path)
         if not chosen and is_vosk_dir(path):           # a Vosk model can be deleted even when its engine is gone
             chosen = os.path.abspath(path)
@@ -12160,8 +12376,9 @@ class App:
             def progress(st):
                 self.hub.publish("gpu_dl", download=st)
                 if st["state"] == "done":
-                    busy = self.running or self.stopping or self.recording
-                    self.gpu_reload = True
+                    with self.lock:
+                        busy = self.running or self.stopping or self.recording
+                        self.gpu_reload = True
                     if not busy:
                         self._gpu_reload_if_waiting()       # loaded again, now trying the graphics card first
                     self.hub.publish("local", local=LOCAL.info())
@@ -12185,7 +12402,7 @@ class App:
         """Step by step: which proxy, is the VPN app listening, does it reach Groq."""
         import socket
         steps = []
-        p, src = detect_proxy(self.cfg["proxy"] if proxy is None else proxy)
+        p, src = detect_proxy(self.cfg["proxy"] if proxy is None else self._real_proxy(proxy))
         if p:
             steps.append({"ok": True, "text": ("Using your Windows proxy: " if src == "system" else "Using: ") + mask_proxy(p)})
             try:
@@ -12322,6 +12539,13 @@ class App:
             for s in (self.session, self.last_session):
                 if s:
                     s.save_if_dirty(final=False)
+            for s in list(getattr(self, "older", {})):        # an earlier meeting whose last translations came late
+                try:
+                    s.save_if_dirty()
+                except Exception:
+                    pass
+                if now - self.older[s] > 900:
+                    self.older.pop(s, None)
         if now - last_stats > 1.0:
             last_stats = now
             with _usage_lock:
@@ -12416,7 +12640,7 @@ class App:
             end = time.time() + 10
             while rev is not None and rev.tr_inflight > 0 and time.time() < end:
                 time.sleep(0.2)
-            for s in (self.session, self.last_session):
+            for s in (self.session, self.last_session, *list(getattr(self, "older", {}))):
                 if s:
                     s.save_if_dirty()
             if self.download:
@@ -12448,7 +12672,12 @@ its desktop shortcut.</p></div></body>"""
 def is_network_path(p):
     """\\\\server\\share or //server/share: opening it would send the Windows login to that computer."""
     p = str(p or "").strip().strip('"')
-    return p.startswith(("\\\\", "//"))
+    if p.startswith(("\\\\", "//", "\\/", "/\\")):
+        return True
+    try:
+        return ntpath.normpath(p).startswith("\\\\")   # mixed slashes that Windows reads as \\server
+    except Exception:
+        return False
 
 
 def mask_proxy(p):

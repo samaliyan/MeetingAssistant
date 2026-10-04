@@ -1519,7 +1519,7 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
         f.write(b"lmgg" + b"\0" * 100)
     old = os.environ.get("MA_WHISPER_SERVER")
     os.environ["MA_WHISPER_SERVER"] = srv
-    app.DATA_DIR = str(tmp_path)
+    old_data, app.DATA_DIR = app.DATA_DIR, str(tmp_path)          # put back at the end: other tests share the module
     try:
         assert app.model_folder(model) == (os.path.abspath(model), "") and app.model_label(model) == "small-q5_1 (whisper.cpp)"
         L = app.LocalWhisper()
@@ -1533,11 +1533,17 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
             assert False
         except app.Transient as e:
             assert "no language" in str(e)
+        old_pid = L.model.proc.pid
+        L.model.proc.kill()                                          # the engine dies (driver reset, out of memory)
+        L.model.proc.wait(5)
+        r = L.transcribe(app.np.zeros(16000, app.np.float32), language="en")
+        assert r["text"] == "Hello world." and L.model.proc.pid != old_pid    # started again by itself
         pid = L.model.proc.pid
         L.unload()
         time.sleep(1.5)
         assert not os.path.exists(f"/proc/{pid}") or open(f"/proc/{pid}/stat").read().split()[2] == "Z"   # the engine ends
     finally:
+        app.DATA_DIR = old_data
         if old is None:
             os.environ.pop("MA_WHISPER_SERVER", None)
         else:
@@ -1560,7 +1566,12 @@ def test_fast_file_mode_with_the_local_model(app, tmp_path):
             b[-sr:] = 0.0
             yield b
 
+    hiccup = [1]
+
     def long(audio, language=None, prompt=None):
+        if len(calls) == 1 and hiccup:                          # one short problem on the second piece: tried again
+            hiccup.pop()
+            raise app.Transient("Local model: connection reset")
         calls.append((len(audio) / sr, language, prompt))
         n = len(audio) / sr
         return ([{"start": 1.0, "end": 4.0, "text": f" Part {len(calls)} starts here.", "no_speech_prob": 0.01, "avg_logprob": -0.2,
@@ -1590,7 +1601,7 @@ def test_fast_file_mode_with_the_local_model(app, tmp_path):
         assert t0s == sorted(t0s)
         base = rows[0]["t0"] - 1.0
         assert abs((rows[2]["t0"] - base) - (calls[0][0] + 1.0)) < 0.01    # times are positions in the recording
-        assert job.state["state"] == "done"
+        assert job.state["state"] == "done" and not hiccup
     finally:
         L.ready, L.long_ok, L.transcribe_long, L.state, app.open_recording = saved
     q = np.ones(20 * sr, np.float32)
@@ -1655,11 +1666,11 @@ def test_link_is_downloaded_then_transcribed(app, tmp_path):
         w.writeframes((np.sin(np.arange(32000) / 5) * 8000).astype(np.int16).tobytes())
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=folder))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    app.DOWNLOADS_DIR = os.path.join(folder, "downloads")
+    old_dl, app.DOWNLOADS_DIR = app.DOWNLOADS_DIR, os.path.join(folder, "downloads")
     a = app.App()
     a.missing_tasks = lambda *x: []
     started = []
-    a.api_recording = lambda **k: started.append(k) or {"ok": True}
+    a.api_recording = lambda **k: started.append(k) or setattr(a, "recording", None) or {"ok": True}   # the file job takes over
     try:
         assert a.api_recording_link(url="not a link")["ok"] is False
         r = a.api_recording_link(url=f"http://127.0.0.1:{srv.server_address[1]}/talk.wav", speakers=2)
@@ -1669,8 +1680,9 @@ def test_link_is_downloaded_then_transcribed(app, tmp_path):
                 break
             time.sleep(0.1)
         assert started and started[0]["speakers"] == 2 and os.path.isfile(started[0]["path"])
-        assert started[0]["path"].startswith(app.DOWNLOADS_DIR) and a.recording is None
+        assert started[0]["path"].startswith(app.DOWNLOADS_DIR) and a.recording is None and started[0]["_from"] is not None
     finally:
+        app.DOWNLOADS_DIR = old_dl
         srv.shutdown()
 
 
@@ -2048,4 +2060,97 @@ def test_nvidia_support_remove_and_notes(app):
     finally:
         shutil.rmtree(d, ignore_errors=True)
         app._GPU.pop("cleaned", None)
+        a.closing.set()
+
+
+def test_audit_617_small_fixes(app, tmp_path):
+    import os, time, types
+    np = app.np
+    # a mixed-slash network path is refused too
+    assert app.is_network_path("\\/server/share/a.mp3") and app.is_network_path("/\\server\\x")
+    assert not app.is_network_path("C:\\Users\\a.mp3")
+    a = app.App()
+    try:
+        # the proxy password never goes to the window, and sending the masked text back keeps the real one
+        a.api_save_config(proxy="http://user:secret@127.0.0.1:8080")
+        shown = a.public_config()["proxy"]
+        assert "secret" not in shown and "***" in shown
+        a.api_save_config(proxy=shown)
+        assert a.cfg["proxy"] == "http://user:secret@127.0.0.1:8080"
+        a.api_save_config(proxy="")
+        # a local model that is gone is not 'ready'
+        a.cfg.update(stt_provider="local", local_model=os.path.join(str(tmp_path), "gone"), api_key="")
+        st = a.task_status()["stt"]
+        assert not st["ok"] and "cannot be used" in st["why"]
+        # an earlier meeting replaced by a new one is still saved when late translations arrive
+        s1 = app.Session(app.sanitize({}))
+        e = s1.add("them", time.time(), time.time() + 1, "Last question?", "en", [1])
+        s1.save_if_dirty()
+        a._keep_saving(s1)
+        s1.update(e["id"], translation="سؤال آخر؟", tr_state="done")
+        for s in list(a.older):
+            s.save_if_dirty()
+        assert "سؤال آخر؟" in open(s1.path, encoding="utf-8").read()
+    finally:
+        a.closing.set()
+    # the meeting sound: a second recorder (after a crash) never writes over the first files, and the index is kept current
+    path = os.path.join(str(tmp_path), "meeting_c.md")
+    r1 = app.MeetingAudio(path)
+    r1._indexed = 0
+    r1.write("them", np.full(16000, 0.3, np.float32), 16000)
+    time.sleep(1.0)
+    assert app.load_audio_index(os.path.join(str(tmp_path), "meeting_c.audio.json"))      # written while recording
+    first = [f for f in os.listdir(str(tmp_path)) if f.startswith("meeting_c.them")]
+    r1.files = None                                                   # 'crash': never closed
+    r2 = app.MeetingAudio(path)
+    r2.parts = []                                                     # as if the index were lost
+    r2.write("them", np.full(16000, 0.3, np.float32), 16000)
+    r2.close()
+    names = sorted(f for f in os.listdir(str(tmp_path)) if f.startswith("meeting_c.them"))
+    assert len(names) == 2 and first[0] in names                      # the old file is still there, untouched
+
+
+def test_audit_616_settings_reset_links_and_dropped_engine(app):
+    import os, json
+    # a v3 settings file: only the kept keys come over; odd values are fixed
+    with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"config_version": 3, "api_key": "gsk_x", "local_model": "C:/old/model", "save_audio": "yes"}, f)
+    c = app.load_config()
+    assert c["api_key"] == "gsk_x" and c["local_model"] == "" and c["save_audio"] is False
+    c2 = app.sanitize({"save_audio": "yes", "local_device": "gpu"})
+    assert c2["save_audio"] in (True, False) and c2["local_device"] == "auto"
+    # config.json missing: the backup copy is used, and the note says "missing", not "damaged"
+    with open(app.CONFIG_PATH + ".bak", "w", encoding="utf-8") as f:
+        json.dump({"config_version": app.CONFIG_VERSION, "api_key": "gsk_old"}, f)
+    os.remove(app.CONFIG_PATH)
+    app.CONFIG_NOTE.clear()
+    c3 = app.load_config()                                      # missing (OneDrive, antivirus): the backup keeps the keys
+    assert c3["api_key"] == "gsk_old" and any("missing" in n for n in app.CONFIG_NOTE)
+    os.remove(app.CONFIG_PATH + ".bak")
+    # link messages: a busy site is not "removed"; blocked sites get the VPN advice
+    assert "busy" in app.link_problem("HTTP Error 503: Service Unavailable")
+    assert "busy" in app.link_problem("HTTP Error 429: Too Many Requests")
+    assert "VPN" in app.net_hint("model.bin: cannot reach the site", "huggingface.co")
+    assert app.net_hint("model.bin is missing on the site", "x") == "model.bin is missing on the site"
+    # a whisper.cpp engine that was dropped is never started again by a request still running
+    srv = app.CppServer("x.bin", 1)
+    srv.close()
+    try:
+        srv._restart()
+        assert False
+    except RuntimeError as e:
+        assert "closed" in str(e)
+    # Stop on a recording restarts whisper.cpp later, but is never counted as a crash
+    srv2 = app.CppServer("x.bin", 1)
+    srv2.start = lambda *a, **k: True
+    now = app.time.time()
+    srv2.restarts = [now - 5, now - 4, now - 3]
+    srv2.interrupt()
+    srv2._restart()                                              # a 4th crash would raise; a planned one does not
+    assert len(srv2.restarts) == 3
+    # deleting never touches a network path
+    a = app.App()
+    try:
+        assert a.api_local_delete(path=r"\\server\share\model")["ok"] is False
+    finally:
         a.closing.set()

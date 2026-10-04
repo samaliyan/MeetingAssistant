@@ -61,7 +61,7 @@ rem  If this part fails, the program is still built, only without the local mode
 echo        Adding the local model engine...
 set "LOCALOPTS="
 rem  its helpers first, then faster-whisper itself WITHOUT the two packages we do not need
-rem  (av reads audio files, onnxruntime is an extra voice detector - the program has its own)
+rem  (av reads audio files; onnxruntime is added separately below)
 %BPY% -m pip install %PIPQ% "ctranslate2>=4.6.3,<5" "tokenizers>=0.15" tqdm >>pip_log.txt 2>&1
 if errorlevel 1 goto nolocal
 %BPY% -m pip install %PIPQ% --no-deps "faster-whisper>=1.1" >>pip_log.txt 2>&1
@@ -75,6 +75,14 @@ goto afterlocal
 echo        Could not add it ^(see pip_log.txt^). The program is built anyway - just without the local model.
 %BPY% -m pip uninstall -y -q faster-whisper ctranslate2 >nul 2>&1
 :afterlocal
+
+rem  Optional parts (each may fail without stopping the build): faster recordings and telling speakers apart
+rem  (onnxruntime), and YouTube / web links (yt-dlp with its YouTube scripts).
+echo        Adding faster recordings, speakers and links (optional)...
+%BPY% -m pip install %PIPQ% "onnxruntime>=1.17,<2" >>pip_log.txt 2>&1
+if errorlevel 1 echo        Could not add onnxruntime - recordings work, just slower and without speaker names.
+%BPY% -m pip install %PIPQ% "yt-dlp[default]>=2025.11.12" >>pip_log.txt 2>&1
+if errorlevel 1 echo        Could not add yt-dlp - everything works except transcribing links.
 
 rem  The engine for the local AI model (translation and answers on this computer). Ready-made
 rem  packages only (no compiler is needed); if there is none for this Python, it is simply left out.
@@ -146,7 +154,7 @@ if exist dist\MeetingAssistant rmdir /s /q dist\MeetingAssistant
 dist\MeetingAssistant.exe --make-shortcut
 for %%D in (build .buildenv __pycache__ tools\__pycache__) do if exist "%%D" rmdir /s /q "%%D"
 if exist MeetingAssistant.spec del /q MeetingAssistant.spec
-if defined LOCALOPTS if defined LLMOK if exist pip_log.txt del /q pip_log.txt
+if defined LOCALOPTS if defined LLMOK if defined WEBOK if exist pip_log.txt del /q pip_log.txt
 
 for /f %%S in ('powershell -NoProfile -Command "[math]::Round((Get-Item 'dist\MeetingAssistant.exe').Length/1MB)"') do set "SIZE=%%S"
 

@@ -100,6 +100,9 @@ jobs:
           python -c "import sys,types;sys.modules.setdefault('av',types.ModuleType('av'));import faster_whisper" || echo "::warning::This release has no local speech-to-text engine"
           python -c "import llama_cpp" || echo "::warning::This release has no local AI engine"
           test -f whisper_cpp/whisper-server.exe || echo "::warning::This release has no whisper.cpp engine (Intel / AMD graphics)"
+          test -f jsrt/qjs.exe || echo "::warning::This release has no quickjs: YouTube links work only where deno or node is installed"
+          python -c "import yt_dlp" || echo "::warning::This release has no yt-dlp: links cannot be transcribed"
+          python -c "import onnxruntime" || echo "::warning::This release has no onnxruntime: no fast file mode, no speaker separation"
 
       - name: Package
         shell: bash
