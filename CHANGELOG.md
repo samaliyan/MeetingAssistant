@@ -2,6 +2,12 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.25]
+
+**Subtitles: only the translation, like film subtitles.** A new **Subtitles** button (also Setup › Display, and **Ctrl+Alt+T** while the overlay is on) turns it on and off at any time. In the window, each line shows only its translation; a line that is not translated (for example it is already in your language) shows what was said, and the original comes back when the mode is off (it is always kept in the meeting file). The see-through window (overlay) then shows the last two lines in large letters at the bottom instead of the answer, and the sentence still being spoken appears there as soon as its translation comes. To have no suggested answers at all, use Setup › Features › Text + translation.
+
+**Fixed: the buttons of a line no longer cover its text.** On grouped lines (several lines of the same person) the flag, the pen and "Answer this" sat on top of the end of the text — with Persian, on its first words. The text now keeps room for exactly the buttons that are shown. 145 automated tests.
+
 ## [6.24]
 
 **Faster start, and the overlay opens at once.** The program is one .exe file, so at every start Windows first unpacks the whole program (about 100 MB since 6.14) into a temporary folder. The hidden window (Hide from screen sharing) and the see-through window (overlay) started the program a second time, and each unpacked everything again. They now use the copy that is already unpacked. Measured on a Windows machine: the window is open after 5.1 s instead of 6.7 s, and the overlay opens in 1.8 s instead of 5.3 s. On a computer with an antivirus that checks every unpacked file, the gain is larger. The program still quits cleanly and removes its temporary folder.

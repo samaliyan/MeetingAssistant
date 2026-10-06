@@ -1,4 +1,11 @@
-# Meeting Assistant — User Guide (version 6.24)
+# Meeting Assistant — User Guide (version 6.25)
+
+## Version 6.25: subtitles
+
+- **Subtitles (only the translation)**: press the **Subtitles** button at the top. Each line shows only its translation, like film subtitles. The see-through window (overlay) shows the last two lines in large letters at the bottom instead of the answer; a sentence still being spoken is translated there as it comes.
+- Turn it on and off any time: the same button, **Ctrl+Alt+T** while the overlay is on, or Setup › Display › **Subtitles: only the translation**.
+- A line that is not translated (for example it is already in your language) shows what was said. The original is kept: it comes back when subtitles are off, and it is in the meeting file.
+- To also get no suggested answers: Setup › Features › **Text + translation**.
 
 ## Version 6.19: eight new helpers
 

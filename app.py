@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.24"
+VERSION = "6.25"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -226,6 +226,7 @@ DEFAULTS = {
     "answer_size": 24,           # px
     "overlay_alpha": 65,         # % how solid the see-through answer window is (30..100)
     "overlay_text": 85,          # % how strong the words in it are (30..100)
+    "subtitles": False,          # subtitle mode: only the translation, like film subtitles (main window and overlay)
     "overlay_hide": True,        # hide the see-through window from screen sharing
     "overlay_pos": "top",        # top | bottom of the screen
     # other services (OpenAI-compatible) and which service does what
@@ -14279,7 +14280,7 @@ OV_TITLE = "MA-Overlay"
 OVERLAY_STATUS_PATH = os.path.join(DATA_DIR, ".overlay.json")
 OVERLAY_POS_PATH = os.path.join(DATA_DIR, ".overlay_pos.json")
 OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "screen": (0x53, "S"), "answer": (0x41, "A"), "coach": (0x48, "H"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right"),
-           "mark": (0x4B, "K"), "say": (0x4A, "J")}
+           "mark": (0x4B, "K"), "say": (0x4A, "J"), "subs": (0x54, "T")}      # (new keys go at the end: the ids stay)
 OV_MEETING_KEYS = {"mark": "marks", "say": "say"}      # registered only during a meeting (and while that part is on)
 
 
@@ -14573,7 +14574,7 @@ class Overlay:
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
                     if cmd == "toggle" or cmd in OV_MEETING_KEYS:
                         continue
-                    once = 0x4000 if cmd in ("screen", "answer", "coach", "more", "less") else 0       # no auto-repeat for these
+                    once = 0x4000 if cmd in ("screen", "answer", "coach", "more", "less", "subs") else 0   # no auto-repeat for these
                     if u.RegisterHotKey(None, i, 0x2 | 0x1 | once, vk):
                         arrows[i] = cmd
                     else:
@@ -14597,6 +14598,9 @@ class Overlay:
                     threading.Thread(target=self._hotkey_call, args=(self.app.api_screen,), daemon=True).start()
                 elif cmd == "answer":
                     threading.Thread(target=self._hotkey_call, args=(self.app.api_answer_now,), daemon=True).start()
+                elif cmd == "subs":                                  # subtitle mode on / off (both windows follow)
+                    threading.Thread(target=self.app.api_save_config,
+                                     kwargs={"subtitles": not self.app.cfg.get("subtitles")}, daemon=True).start()
                 elif cmd:
                     self.app.hub.publish("ov_cmd", cmd=cmd)
             time.sleep(0.04)
