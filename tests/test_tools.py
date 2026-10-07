@@ -1312,6 +1312,53 @@ def test_subtitle_mode_is_a_mode_for_videos(app):
         a.closing.set()
 
 
+def test_webview_debug_port_only_for_tests(app, monkeypatch):
+    class WV:
+        settings = {}
+    monkeypatch.delenv("MA_WEBVIEW_DEBUG_PORT", raising=False)
+    app.webview_test_port(WV)
+    assert "REMOTE_DEBUGGING_PORT" not in WV.settings                  # users: never opened
+    monkeypatch.setenv("MA_WEBVIEW_DEBUG_PORT", "9333")
+    app.webview_test_port(WV)
+    assert WV.settings["REMOTE_DEBUGGING_PORT"] == 9333
+    app.webview_test_port(WV, 1)
+    assert WV.settings["REMOTE_DEBUGGING_PORT"] == 9334                # the overlay: its own browser, its own port
+    monkeypatch.setenv("MA_WEBVIEW_DEBUG_PORT", "x; rm")
+    WV.settings = {}
+    app.webview_test_port(WV)
+    assert WV.settings == {}                                           # only a number is taken
+    page = open(os.path.join(os.path.dirname(app.__file__), "web", "index.html"), encoding="utf-8").read()
+    assert "function ovIdle()" in page and "Overlay is on" in page     # the overlay never sits empty
+
+
+def test_overlay_has_its_own_storage_and_its_page_is_checked(app):
+    import inspect
+    # sharing the hidden window's web storage left the overlay empty: it must have its own
+    assert app.OVERLAY_STORAGE != app.HIDDEN_STORAGE
+    src = inspect.getsource(app.Overlay._start_helper)
+    assert "OVERLAY_STORAGE" in src and "HIDDEN_STORAGE" not in src
+    a = app.App()
+    try:
+        toasts = []
+        a.hub.toast = lambda level, text: toasts.append((level, text))
+        a.overlay.on = True
+        a.overlay.stop_flag.clear()
+        assert a.overlay._page_check(wait=0.6) is False                 # no overlay page: said plainly
+        assert toasts and toasts[-1][0] == "error" and "empty" in toasts[-1][1]
+        q = a.hub.subscribe()
+        q.overlay = True                                                  # the overlay's page connected
+        assert a.hub.overlay_pages() == 1
+        toasts.clear()
+        assert a.overlay._page_check(wait=0.6) is True and not toasts
+        a.hub.unsubscribe(q)
+        assert a.hub.overlay_pages() == 0
+    finally:
+        a.overlay.on = False
+        a.closing.set()
+    page = open(os.path.join(os.path.dirname(app.__file__), "web", "index.html"), encoding="utf-8").read()
+    assert 'OVERLAY ? "/events?ov=1" : "/events"' in page
+
+
 def test_second_piece_after_the_first_was_answered(app):
     import time
     eng, sess, calls = _engine(app)

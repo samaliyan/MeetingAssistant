@@ -2,6 +2,14 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.27]
+
+**The overlay works with "Hide this window from screen sharing" on.** Checked on a real Windows machine with the released exe: when the main window was hidden from screen sharing, the see-through window opened (and its keys worked) but stayed an empty grey box — in every version back to at least 6.23. The hidden main window and the overlay shared one web storage folder, and the overlay's page could not start in it. The overlay now has its own (Data\.window_overlay). The program also checks that the overlay's page really loaded; if not, it says so instead of showing an empty box.
+
+**The overlay always shows what is happening.** Before: a faint "No question yet" until a question was answered — and with answers turned off (Text + translation), never anything. Now: before the meeting, "Overlay is on" with what to do and its keys; during the meeting, the sentence being said right now (or the last one from the other side) with its translation; when a question is answered, the answer, as before. With answers off it never shows an old answer.
+
+**A new check on every change:** GitHub starts the new exe on a real Windows machine and uses the overlay as a user does — Ctrl+Alt+O, Ctrl+Alt+PageUp, Ctrl+Alt+T, the Overlay button — with screen-sharing hiding on, off, and mixed, and looks at what it shows inside (before a meeting, a line, a question with its answer, subtitles). 148 automated tests.
+
 ## [6.26]
 
 **Subtitles is now a real mode for films, videos and audio — not only a different look.** Press **Subtitles** (it turns solid: **Subtitles: on**) and the program works for something playing on this computer instead of a meeting:
