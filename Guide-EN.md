@@ -1,4 +1,11 @@
-# Meeting Assistant — User Guide (version 6.26)
+# Meeting Assistant — User Guide (version 6.27)
+
+## Version 6.27: the overlay fixed
+
+- **Fixed**: with "Hide this window from screen sharing" on, the overlay opened but stayed empty (a grey box).
+- **It always shows something**: before the meeting it says it is on and what to do; during the meeting the sentence being said now (or the last one from the other side) with its translation; when a question is answered, the answer.
+- It also works with **Text + translation** (no answers): it shows what is said and its translation.
+- Hard to read over a busy screen? **Ctrl+Alt+PageUp** makes it more solid.
 
 ## Version 6.26: subtitle mode (film, video, audio)
 

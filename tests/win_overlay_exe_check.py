@@ -57,7 +57,7 @@ def inside(name, out, step, feed=None):
     screen capture), its text, page errors; feed=JS gives it meeting lines first."""
     try:
         with sync_playwright() as pw:
-            br = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP}", timeout=15000)
+            br = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP + 1}", timeout=15000)   # the overlay's own port
             pages = [pg for c in br.contexts for pg in c.pages]
             ov = next((pg for pg in pages if "overlay=1" in pg.url), None)
             if ov is None:

@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.26"
+VERSION = "6.27"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -13902,13 +13902,14 @@ def _hide_capture_test(pid):
                 pass
 
 
-def webview_test_port(webview):
+def webview_test_port(webview, offset=0):
     """Tests only (never set for users): MA_WEBVIEW_DEBUG_PORT opens the web view's debugging port, so the Windows
-    check can look inside the hidden window and the overlay (their pictures cannot be taken from the screen)."""
+    check can look inside the hidden window and the overlay (their pictures cannot be taken from the screen).
+    offset: the overlay has its own web storage, so its own browser and its own port (port + 1)."""
     port = os.environ.get("MA_WEBVIEW_DEBUG_PORT", "")
     if port.isdigit():
         try:
-            webview.settings["REMOTE_DEBUGGING_PORT"] = int(port)
+            webview.settings["REMOTE_DEBUGGING_PORT"] = int(port) + offset
         except Exception:
             pass
 
@@ -14191,7 +14192,7 @@ def run_overlay_helper(argv):
             webview.create_window(OV_TITLE, url, **kw)
         threading.Thread(target=worker, daemon=True, name="overlay-worker").start()
         watch_parent(int(opt("--parent", "0") or 0) if opt("--parent", "0").isdigit() else 0, stop, status)
-        webview_test_port(webview)
+        webview_test_port(webview, 1)
         webview.start(gui="edgechromium", storage_path=storage or None, private_mode=False)
     except Exception as e:
         failed = True

@@ -1321,6 +1321,8 @@ def test_webview_debug_port_only_for_tests(app, monkeypatch):
     monkeypatch.setenv("MA_WEBVIEW_DEBUG_PORT", "9333")
     app.webview_test_port(WV)
     assert WV.settings["REMOTE_DEBUGGING_PORT"] == 9333
+    app.webview_test_port(WV, 1)
+    assert WV.settings["REMOTE_DEBUGGING_PORT"] == 9334                # the overlay: its own browser, its own port
     monkeypatch.setenv("MA_WEBVIEW_DEBUG_PORT", "x; rm")
     WV.settings = {}
     app.webview_test_port(WV)
