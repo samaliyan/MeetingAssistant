@@ -8,7 +8,7 @@ All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [G
 
 **The overlay always shows what is happening.** Before: a faint "No question yet" until a question was answered — and with answers turned off (Text + translation), never anything. Now: before the meeting, "Overlay is on" with what to do and its keys; during the meeting, the sentence being said right now (or the last one from the other side) with its translation; when a question is answered, the answer, as before. With answers off it never shows an old answer.
 
-**A new check on every change:** GitHub starts the new exe on a real Windows machine and uses the overlay as a user does — Ctrl+Alt+O, Ctrl+Alt+PageUp, Ctrl+Alt+T, the Overlay button — with screen-sharing hiding on, off, and mixed, and looks at what it shows inside (before a meeting, a line, a question with its answer, subtitles). 149 automated tests.
+**A new check on every change:** GitHub starts the new exe on a real Windows machine and uses the overlay as a user does — Ctrl+Alt+O, Ctrl+Alt+PageUp, Ctrl+Alt+T, the Overlay button — with screen-sharing hiding on, off, and mixed, and looks at what it shows inside (before a meeting, a line, a question with its answer, subtitles). 148 automated tests.
 
 ## [6.26]
 
