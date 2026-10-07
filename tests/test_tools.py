@@ -1277,6 +1277,41 @@ def test_subtitle_mode_setting_key_and_page(app):
     assert 'id="subBtn"' in page and 'data-key="subtitles"' in page and 'sb.id = "ovSub"' in page
 
 
+def test_subtitle_mode_is_a_mode_for_videos(app):
+    cfg = app.sanitize({"subtitles": True, "features": {"translate": False, "overlay": True}})
+    # translation is always on there; overlay and files keep the user's choice; the rest is paused
+    assert app.feat(cfg, "translate") is True and app.feat(cfg, "overlay") is True and app.feat(cfg, "files") is True
+    for k in ("answers", "coach", "screen", "prep", "after", "say", "marks", "notes", "detect"):
+        assert app.feat(cfg, k) is False, k
+    assert "paused in subtitle mode" in app.feature_off(cfg, "answers")["error"]
+    assert app.use_mic(cfg) is False                                   # only the computer's sound (the video)
+    assert "film" in app.translate_system(cfg)
+    # the user's own choices are untouched and apply again in meeting mode
+    meet = app.sanitize(dict(cfg, subtitles=False))
+    assert meet["features"]["translate"] is False and app.feat(meet, "translate") is False
+    assert app.feat(meet, "answers") is True and app.use_mic(meet) is True and "film" not in app.translate_system(meet)
+    assert app.use_mic(app.sanitize({"transcribe_me": False})) is False
+    a = app.App()
+    try:
+        a.cfg.update(app.sanitize({"subtitles": True}))
+        assert a.needed_tasks() == ("stt", "tr")                    # Start needs no answers service there
+        # switching during a session: the audio is reopened at once (the microphone dropped / taken back)
+        calls, eng = [], type("E", (), {"say_mode": True, "speech_mode": lambda self: {}})()
+        a.running, a.engine = True, eng
+        a._restart_captures = lambda e: calls.append(e)
+        a.api_save_config(subtitles=False)
+        a.api_save_config(subtitles=True)
+        import time
+        time.sleep(0.3)
+        assert calls == [eng, eng] and eng.say_mode is False        # "say it" stops in subtitle mode
+        a.api_save_config(overlay_alpha=70)                          # another setting: no restart
+        time.sleep(0.2)
+        assert len(calls) == 2
+    finally:
+        a.running, a.engine = False, None
+        a.closing.set()
+
+
 def test_second_piece_after_the_first_was_answered(app):
     import time
     eng, sess, calls = _engine(app)

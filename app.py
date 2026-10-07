@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.25"
+VERSION = "6.26"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -226,7 +226,8 @@ DEFAULTS = {
     "answer_size": 24,           # px
     "overlay_alpha": 65,         # % how solid the see-through answer window is (30..100)
     "overlay_text": 85,          # % how strong the words in it are (30..100)
-    "subtitles": False,          # subtitle mode: only the translation, like film subtitles (main window and overlay)
+    "subtitles": False,          # subtitle mode: a film / video / audio on this computer -> only its translation, like
+                                 # film subtitles; the microphone is not used; answers, coach and the like are paused
     "overlay_hide": True,        # hide the see-through window from screen sharing
     "overlay_pos": "top",        # top | bottom of the screen
     # other services (OpenAI-compatible) and which service does what
@@ -289,9 +290,24 @@ FEATURE_TASKS = {"translate": ("tr",), "answers": ("ans",), "coach": ("ans",), "
                  "detect": ()}
 
 
+SUBS_KEEP = ("translate", "overlay", "files")      # the parts that work in subtitle mode (translation is always on there)
+
+
 def feat(cfg, name):
-    """Is this part of the program turned on? (Everything is on unless the user turned it off.)"""
+    """Is this part of the program turned on? (Everything is on unless the user turned it off.)
+    Subtitle mode (a film or video, not a meeting) pauses every part except translation, the overlay and files;
+    the user's own on / off choices are kept and apply again when subtitle mode is turned off."""
+    if cfg.get("subtitles"):
+        if name == "translate":
+            return True
+        if name not in SUBS_KEEP:
+            return False
     return bool((cfg.get("features") or {}).get(name, True))
+
+
+def use_mic(cfg):
+    """Is the user's microphone written down? Not in subtitle mode: only the computer's sound (the video) is heard."""
+    return bool(cfg.get("transcribe_me")) and not cfg.get("subtitles")
 
 
 def coach_on(cfg):
@@ -302,6 +318,9 @@ def feature_off(cfg, name):
     """None when the part is on; otherwise the answer every action of that part gives (also to the global keys)."""
     if feat(cfg, name):
         return None
+    if cfg.get("subtitles"):
+        return {"ok": False, "feature": name,
+                "error": f"{FEATURES[name]} is paused in subtitle mode. Press Subtitles to go back to meeting mode."}
     return {"ok": False, "feature": name,
             "error": f"{FEATURES[name]} is turned off. Turn it on in Setup › Features."}
 KEEP_FROM_OLD = ("api_key", "proxy", "language", "languages", "context", "answer_style", "about_me",
@@ -5527,8 +5546,13 @@ TRANSLATE_SYSTEM = (
     "Output only the {lang} translation — no quotes, no notes.{topic}")
 
 
+SUBS_NOTE = (" The lines are dialogue from a film, series, video or other recording (not a meeting): translate them "
+             "as natural spoken subtitles, short and easy to read; keep the names of people and places as they are.")
+
+
 def translate_system(cfg, topic=""):
-    return TRANSLATE_SYSTEM.format(lang=lang_full(cfg["my_language"]), topic=topic)
+    return TRANSLATE_SYSTEM.format(lang=lang_full(cfg["my_language"]),
+                                   topic=(SUBS_NOTE if cfg.get("subtitles") else "") + topic)
 
 
 def lang_full(code):
@@ -7428,7 +7452,7 @@ class Engine:
         lines = [f"Latest question from the other side ({round(since)} s ago): {short(q.get('question') or q['text'], 300)}"]
         if q.get("qtype"):
             lines.append(f"Kind: {q['qtype']}" + (f", usual answer length {q.get('qmin')}-{q.get('qmax')} s" if q.get("qmax") else ""))
-        mic = self.cfg["transcribe_me"] and any(getattr(cap, "source", "") == "me" for cap in list(getattr(self.app, "captures", None) or []))
+        mic = use_mic(self.cfg) and any(getattr(cap, "source", "") == "me" for cap in list(getattr(self.app, "captures", None) or []))
         answering = self.cfg["meeting_mode"] not in ("lecture", "work")
         voice = now - self.me_voice_at < max(2.0, since)     # the microphone heard the user after the question
         busy = q.get("ans_state") in ("thinking", "streaming")
@@ -10407,6 +10431,7 @@ class App:
             new = sanitize(new)
             changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
             changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
+            changed_subs = new["subtitles"] != self.cfg["subtitles"]
             changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
             if new["overlay_pos"] != self.cfg["overlay_pos"]:
                 try:
@@ -10428,6 +10453,11 @@ class App:
         self.sync_local()
         self._apply_features()
         self.apply_preview()
+        if changed_subs:
+            log("Subtitle mode " + ("on: only the computer's sound, only the translation" if self.cfg["subtitles"] else "off"))
+            eng = self.engine
+            if self.running and eng is not None and not self.recording:     # the microphone stops / starts being heard now
+                threading.Thread(target=self._restart_captures, args=(eng,), daemon=True, name="subs-audio").start()
         self.hub.publish("config", config=self.public_config(), proxy=self.shown_proxy())
         eng = self.engine
         if eng:
@@ -10745,15 +10775,16 @@ class App:
                 self.engine = Engine(self, self.session)
                 self.reported.clear()
                 self.audio_rec = MeetingAudio(self.session.path) if self.cfg.get("save_audio") else None
-                problems, mic, spk = self._start_captures(self.engine.on_audio, self.cfg["transcribe_me"], preview=True)
+                problems, mic, spk = self._start_captures(self.engine.on_audio, use_mic(self.cfg), preview=True)
                 self.engine.start_live(self.captures)
             except Exception as e:
                 log("start failed:", traceback.format_exc(), level="error")
                 return undo(friendly_audio_error(e))
             if not self.captures:
                 return undo(" ".join(problems) or "No audio device found.")
-            if not any(c.source == "them" for c in self.captures) and not self.cfg["answer_me"]:
-                return undo("The computer's sound (the interviewer's voice) cannot be captured, so nothing would be heard. "
+            if not any(c.source == "them" for c in self.captures) and (not self.cfg["answer_me"] or self.cfg["subtitles"]):
+                what = "the video's sound" if self.cfg["subtitles"] else "the interviewer's voice"
+                return undo(f"The computer's sound ({what}) cannot be captured, so nothing would be heard. "
                             "Choose your speakers or headphones in Setup › Audio, then press Start.")
             self._set_review(None)
             self.running = True
@@ -10769,7 +10800,7 @@ class App:
                              notes_full=self.session.notes_full if old is not None else "")
             threading.Thread(target=self.engine.warm, daemon=True).start()
             threading.Thread(target=self.engine.coach_brief, daemon=True, name="coach-brief").start()
-        log(f"Meeting started · microphone: {mic or '(off)'} · computer sound: {spk or '(none)'} · "
+        log(f"{'Subtitles' if self.cfg['subtitles'] else 'Meeting'} started · microphone: {mic or '(off)'} · computer sound: {spk or '(none)'} · "
             f"languages {'+'.join(meeting_langs(self.cfg))} -> {self.cfg['my_language']} · answers {self.cfg['answer_mode']}")
         for p_ in problems:
             self.hub.toast("warn", p_)
@@ -10812,7 +10843,7 @@ class App:
                         continue
                     spk_changed = retry or (now_ids[0] != last[0] and not self.cfg["speaker_device"])
                     mic_changed = retry or (now_ids[1] != last[1] and not self.cfg["mic_device"]
-                                            and self.cfg["transcribe_me"])
+                                            and use_mic(self.cfg))
                     last = now_ids
                     if spk_changed or mic_changed:
                         time.sleep(1.0)                       # let Windows finish switching
@@ -10839,7 +10870,7 @@ class App:
                     with self.lock:
                         if not self.running or self.engine is not engine:
                             return True
-                        problems, mic, spk = self._start_captures(engine.on_audio, self.cfg["transcribe_me"],
+                        problems, mic, spk = self._start_captures(engine.on_audio, use_mic(self.cfg),
                                                                   preview=True)
                     time.sleep(1.2)                          # (outside the lock: the meeting keeps working)
                     with self.lock:
