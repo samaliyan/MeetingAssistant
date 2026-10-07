@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   overlay:
@@ -23,10 +24,17 @@ jobs:
       - name: WebView2 runtime
         continue-on-error: true
         run: choco install webview2-runtime -y --no-progress
-      - name: Get the exe to test
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release download --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir exe
+      - name: Which build to test
+        id: rid
+        shell: bash
+        run: echo "run=$(cat diag-run-id.txt)" >> "$GITHUB_OUTPUT"; echo "name=$(cat diag-artifact.txt)" >> "$GITHUB_OUTPUT"
+      - name: Get the exe to test (built by that CI run)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.rid.outputs.name }}
+          run-id: ${{ steps.rid.outputs.run }}
+          github-token: ${{ github.token }}
+          path: exe
       - name: Overlay check
         continue-on-error: true
         env:
@@ -37,6 +45,6 @@ jobs:
         shell: bash
         run: |
           git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
-          git add -f diag-shots
+          rm -rf diag-shots-keep; git add -f diag-shots
           git commit -q -m "diag shots [skip ci]" || exit 0
           git push -q origin HEAD:diag/overlay

@@ -33,6 +33,14 @@ FEED_MEETING = """() => {
     ans_state: 'done', qtype: 'experience'}});
   return document.querySelector('#ovBox') ? document.querySelector('#ovBox').innerText.slice(0, 300) : 'NO #ovBox';
 }"""
+FEED_LINE = """() => {
+  const t = Date.now() / 1000;
+  handle({type: 'running', running: true, stopping: false, monitoring: false, started_at: t - 60});
+  handle({type: 'entry', entry: {id: 900003, source: 'them', t0: t - 6, t_end: t - 2, seg_ids: [], speaker: 0, lang: 'en',
+    text: 'Our team moved to the new data centre last month.', translation: 'تیم ما ماه گذشته به مرکز داده‌ی جدید منتقل شد.',
+    tr_state: 'done', ans_state: 'none'}});
+  return document.querySelector('#answerBody') ? document.querySelector('#answerBody').innerText.slice(0, 300) : 'NO #answerBody';
+}"""
 FEED_SUBS = """() => {
   const t = Date.now() / 1000;
   handle({type: 'entry', entry: {id: 900002, source: 'them', t0: t - 4, t_end: t - 1, seg_ids: [], speaker: 0, lang: 'en',
@@ -100,8 +108,8 @@ def check(name, ok, detail="", hard=True):
     line = f"[{'OK' if ok else ('FAIL' if hard else 'WARN')}] {name}" + (f": {detail}" if detail else "")
     LINES.append(line)
     print(line, flush=True)
-    if os.environ.get("GITHUB_ACTIONS"):
-        print(("::notice" if ok else "::warning") + " title=Overlay::" + line.replace("%", "%25").replace("\n", " "), flush=True)
+    if os.environ.get("GITHUB_ACTIONS") and not ok:                 # (GitHub shows at most 10 per kind: only problems)
+        print(("::error" if hard else "::warning") + " title=Overlay::" + line.replace("%", "%25").replace("\n", " "), flush=True)
     if not ok and hard:
         FAILS.append(name)
 
@@ -225,7 +233,7 @@ def scenario(name, exe, out, cfg):
     os.makedirs(data)
     with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as f:
         json.dump(cfg, f)
-    env = dict(os.environ, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={CDP}")
+    env = dict(os.environ, MA_WEBVIEW_DEBUG_PORT=str(CDP))   # (tests only: lets this check look inside the overlay)
     proc = subprocess.Popen([dst], cwd=work, env=env)
     try:
         port = key = None
@@ -282,6 +290,9 @@ def scenario(name, exe, out, cfg):
         check(f"{name}: PrintWindow picture has content", k > 0.3, f"{k:.2f}% (this capture can fail for web windows)", hard=False)
         r = inside(name, out, "6-inside-idle")
         check(f"{name}: overlay page loaded and connected", not r.get("error") and r.get("state", {}).get("cfg") and r.get("state", {}).get("online") is not False, json.dumps(r, ensure_ascii=False)[:300])
+        check(f"{name}: before the meeting it says it is on and what to do", "Overlay is on" in (r.get("text") or ""), (r.get("text") or "")[:120])
+        r = inside(name, out, "6b-inside-line-no-answer", FEED_LINE)
+        check(f"{name}: during the meeting it shows what they said, with the translation", "They said" in (r.get("text") or "") and "مرکز داده" in (r.get("text") or ""), json.dumps(r, ensure_ascii=False)[:300])
         r = inside(name, out, "7-inside-question-answer", FEED_MEETING)
         check(f"{name}: shows the question and the answer", "Data Guard" in (r.get("text") or ""), json.dumps(r, ensure_ascii=False)[:300])
         check(f"{name}: no page errors", not r.get("errors"), str(r.get("errors"))[:200])
@@ -346,6 +357,8 @@ def main():
     scenario("B-visible", exe, out, {"hide_from_share": False, "overlay_hide": False})
     print("\n" + "\n".join(LINES), flush=True)
     print("RESULT: " + ("OK" if not FAILS else "FAILED - " + "; ".join(FAILS)), flush=True)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::notice title=Overlay::{len(LINES) - len(FAILS)} of {len(LINES)} checks OK" + ("" if not FAILS else " - FAILED: " + "; ".join(FAILS))[:900], flush=True)
     with open(os.path.join(out, "RESULT.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(LINES) + "\nRESULT: " + ("OK" if not FAILS else "FAILED - " + "; ".join(FAILS)) + "\n")
     return 1 if FAILS else 0
