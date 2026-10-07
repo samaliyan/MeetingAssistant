@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Pillow
-        run: python -m pip install --quiet pillow
+        run: python -m pip install --quiet pillow playwright
       - name: WebView2 runtime
         continue-on-error: true
         run: choco install webview2-runtime -y --no-progress

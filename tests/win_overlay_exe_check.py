@@ -19,6 +19,54 @@ import urllib.request
 from ctypes import wintypes as wt
 
 from PIL import Image
+from playwright.sync_api import sync_playwright
+
+CDP = 9333
+NOW_JS = "Date.now() / 1000"
+FEED_MEETING = """() => {
+  const t = Date.now() / 1000;
+  handle({type: 'running', running: true, stopping: false, monitoring: false, started_at: t - 60});
+  handle({type: 'entry', entry: {id: 900001, source: 'them', t0: t - 9, t_end: t - 2, seg_ids: [], speaker: 0, lang: 'en',
+    text: 'Can you tell me about a project you led recently?',
+    translation: 'می‌توانید درباره‌ی پروژه‌ای که اخیراً رهبری کردید بگویید؟', tr_state: 'done',
+    answer: 'Sure. Last year I led the move of our main Oracle database to a Data Guard standby. I planned the switchover, tested it twice, and we finished with under five minutes of downtime.',
+    ans_state: 'done', qtype: 'experience'}});
+  return document.querySelector('#ovBox') ? document.querySelector('#ovBox').innerText.slice(0, 300) : 'NO #ovBox';
+}"""
+FEED_SUBS = """() => {
+  const t = Date.now() / 1000;
+  handle({type: 'entry', entry: {id: 900002, source: 'them', t0: t - 4, t_end: t - 1, seg_ids: [], speaker: 0, lang: 'en',
+    text: 'Where were you last night?', translation: 'دیشب کجا بودی؟', tr_state: 'done', ans_state: 'none'}});
+  handle({type: 'speaking', seg: 9100, source: 'them', t0: t, phase: 'speaking', text: 'I told you I was', live: true});
+  handle({type: 'speaking', seg: 9100, source: 'them', phase: 'speaking', translation: 'بهت گفتم که'});
+  return document.querySelector('#ovSub') ? document.querySelector('#ovSub').innerText : 'NO #ovSub';
+}"""
+
+
+def inside(name, out, step, feed=None):
+    """Looks inside the overlay page through WebView2's debugging port: its own picture (also when it is hidden from
+    screen capture), its text, page errors; feed=JS gives it meeting lines first."""
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP}", timeout=15000)
+            pages = [pg for c in br.contexts for pg in c.pages]
+            ov = next((pg for pg in pages if "overlay=1" in pg.url), None)
+            if ov is None:
+                return {"error": "overlay page not found among " + ", ".join(pg.url for pg in pages)}
+            errs = []
+            ov.on("pageerror", lambda e: errs.append(str(e)))
+            res = {"url": ov.url}
+            if feed:
+                res["fed"] = ov.evaluate(feed)
+                ov.wait_for_timeout(800)
+            res["text"] = ov.evaluate("() => document.body.innerText.slice(0, 300)")
+            res["state"] = ov.evaluate("() => ({cfg: !!(typeof S !== 'undefined' && S.cfg), online: typeof S !== 'undefined' ? S.online : null, subs: document.body.classList.contains('subs'), ov: document.body.classList.contains('ov')})")
+            ov.screenshot(path=os.path.join(out, f"{name}-{step}.png"))
+            res["errors"] = errs
+            return res
+    except Exception as e:
+        return {"error": str(e)[:300]}
+
 
 u, g = ctypes.windll.user32, ctypes.windll.gdi32
 u.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
@@ -177,7 +225,8 @@ def scenario(name, exe, out, cfg):
     os.makedirs(data)
     with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as f:
         json.dump(cfg, f)
-    proc = subprocess.Popen([dst], cwd=work)
+    env = dict(os.environ, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={CDP}")
+    proc = subprocess.Popen([dst], cwd=work, env=env)
     try:
         port = key = None
         for _ in range(90):
@@ -230,7 +279,13 @@ def scenario(name, exe, out, cfg):
         img = shot_window(h, os.path.join(out, f"{name}-1-overlay.png"))
         shot_screen(os.path.join(out, f"{name}-2-screen-with-overlay.png"))
         k = ink(img)
-        check(f"{name}: the overlay shows something (not one flat colour)", k > 0.3, f"{k:.2f}% of the picture is text/shapes")
+        check(f"{name}: PrintWindow picture has content", k > 0.3, f"{k:.2f}% (this capture can fail for web windows)", hard=False)
+        r = inside(name, out, "6-inside-idle")
+        check(f"{name}: overlay page loaded and connected", not r.get("error") and r.get("state", {}).get("cfg") and r.get("state", {}).get("online") is not False, json.dumps(r, ensure_ascii=False)[:300])
+        r = inside(name, out, "7-inside-question-answer", FEED_MEETING)
+        check(f"{name}: shows the question and the answer", "Data Guard" in (r.get("text") or ""), json.dumps(r, ensure_ascii=False)[:300])
+        check(f"{name}: no page errors", not r.get("errors"), str(r.get("errors"))[:200])
+        shot_screen(os.path.join(out, f"{name}-8-screen-with-answer.png"))
         # Ctrl+Alt+PageUp: more solid
         a0 = int(read_cfg(data).get("overlay_alpha", 65))
         keys(CTRL, ALT, 0x21)
@@ -242,8 +297,9 @@ def scenario(name, exe, out, cfg):
         time.sleep(2.5)
         s1 = read_cfg(data).get("subtitles")
         check(f"{name}: Ctrl+Alt+T turns subtitle mode on", s1 is True, str(s1))
-        img2 = shot_window(h, os.path.join(out, f"{name}-3-overlay-subtitles.png"))
-        check(f"{name}: overlay changed to subtitles", img2 is not None and img is not None and list(img2.resize((60, 20)).getdata()) != list(img.resize((60, 20)).getdata()), f"ink {ink(img2):.2f}%")
+        r = inside(name, out, "9-inside-subtitles", FEED_SUBS)
+        check(f"{name}: subtitle mode shows the subtitles", r.get("state", {}).get("subs") and "بهت گفتم" in (r.get("text") or ""), json.dumps(r, ensure_ascii=False)[:300])
+        shot_screen(os.path.join(out, f"{name}-10-screen-with-subtitles.png"))
         keys(CTRL, ALT, 0x54)
         time.sleep(2)
         check(f"{name}: Ctrl+Alt+T again turns it off", read_cfg(data).get("subtitles") is False)
@@ -290,6 +346,8 @@ def main():
     scenario("B-visible", exe, out, {"hide_from_share": False, "overlay_hide": False})
     print("\n" + "\n".join(LINES), flush=True)
     print("RESULT: " + ("OK" if not FAILS else "FAILED - " + "; ".join(FAILS)), flush=True)
+    with open(os.path.join(out, "RESULT.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(LINES) + "\nRESULT: " + ("OK" if not FAILS else "FAILED - " + "; ".join(FAILS)) + "\n")
     return 1 if FAILS else 0
 
 
