@@ -164,3 +164,40 @@ jobs:
           path: startup-report.txt
           if-no-files-found: ignore
           retention-days: 14
+
+  overlay:
+    name: Overlay on Windows (exe)
+    # the new exe's overlay as a user sees it: real keys (Ctrl+Alt+O / PageUp / T), flags, the main window minimized
+    # and back, and what the overlay shows inside (before a meeting, a line, a question with its answer, subtitles),
+    # with "hide from screen sharing" on and off. Fails when the overlay does not open or shows nothing.
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test tools (pictures, looking inside the web view)
+        run: python -m pip install --quiet pillow playwright
+
+      - name: WebView2 runtime
+        continue-on-error: true
+        run: choco install webview2-runtime -y --no-progress
+
+      - name: Get the new exe
+        uses: actions/download-artifact@v4
+        with:
+          name: MeetingAssistant-${{ github.sha }}-Windows-x64
+          path: new
+
+      - name: Use the overlay
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_overlay_exe_check.py new/MeetingAssistant.exe overlay-shots | Tee-Object -FilePath overlay-exe-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }

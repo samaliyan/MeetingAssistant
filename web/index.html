@@ -288,7 +288,16 @@ body.ov .a-rest{color:#e6eaf1}
 body.ov .a-text{color:#eef1f6}
 body.ov .a-fa{margin-top:8px}
 body.ov .a-fa p{color:#d3d9e3}
-body.ov .answer-empty{color:#c9d0db;opacity:.8}
+body.ov .answer-empty{color:#e3e8f0}
+.ov-idle{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px;color:#eef1f6;
+  opacity:max(.75,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.ov-idle b{font-size:1.05rem}
+.ov-idle span{font-size:.88rem;line-height:1.5;color:#dfe5ee;max-width:560px}
+.ov-idle .ov-keys{font-size:.78rem;color:#c9d2e0}
+.ov-said{opacity:max(.7,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.ov-said-h{font-size:.75rem;color:#c9d2e0;margin-bottom:2px}
+.ov-said-o{margin:0;color:#e9edf3;font-size:.95rem;line-height:1.5}
+.ov-said-t{margin:4px 0 0;color:#fff;font-size:1.08rem;line-height:1.55;font-family:var(--font-tr);font-weight:500}
 body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
 #ovCoach{white-space:pre-line;flex:0 1 auto;min-height:1.6em;max-height:45%;overflow-y:auto;overscroll-behavior:contain;font-size:.92rem;line-height:1.55;color:#dfe5ee;padding:4px 4px 0;border-top:1px solid rgba(255,255,255,.12);margin-top:4px;opacity:max(.6,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.45)}
 #ovCoach.alert{color:#f0c9a8}
@@ -1792,6 +1801,7 @@ function applyConfig(){
 /* ---------- running state ---------- */
 function renderRunning(){
   renderSubsSoon(); renderModeBar();
+  if(OVERLAY) renderAnswerIfIdle();                      // the overlay's waiting view follows the meeting starting / stopping
   const pill = $("#statusPill"), txt = $("#statusText"), btn = $("#startBtn");
   pill.className = "pill";
   const recOn = recActive(), prob = S.running ? liveProblem() : "";
@@ -1998,6 +2008,7 @@ function onSpeaking(m){
   }
   if(m.translation != null) keepBottom(() => { p.querySelector(".live-fa").textContent = m.translation; p.classList.toggle("has-tr", !!m.translation.trim()); }, false);
   renderSubsSoon(); fitSoon();
+  if(OVERLAY) renderAnswerIfIdle();
 }
 setInterval(() => { const now = Date.now(); let gone = false;
   S.pend.forEach((p, k) => { if(now - +p.dataset.born > 330000){ p.remove(); S.pend.delete(k); gone = true; } });
@@ -2537,7 +2548,7 @@ function setAnswerText(el, t){          // first sentence bold: the user can sta
 function renderAnswer(){
   const body = $("#answerBody");
   const e = S.panelId != null ? S.entries.get(S.panelId) : null;
-  if(!e || !e.answer){
+  if(!e || !e.answer || (OVERLAY && !featOn("answers"))){      // (answers off: the overlay shows what is said, never an old answer)
     body.dataset.key = "";
     const hearing = S.running && [...S.pend.values()].some(p => p.dataset.src === "them");
     const thinking = [...S.entries.values()].some(x => x.ans_state === "thinking");
@@ -2545,6 +2556,7 @@ function renderAnswer(){
     const failed = !thinking && tried && tried.ans_state === "error";
     body.innerHTML = failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source, tried.speaker))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>Press <kbd>F2</kbd> to try again. The log (bottom right) says why.</span></div>`
       : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>Writing an answer…</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
+      : OVERLAY ? ovIdle()
       : hearing ? `<div class="answer-empty listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><b>Listening to the question…</b><span>The answer appears here as soon as they finish.</span></div>`
       : `<div class="answer-empty">${icon("sparkles")}<b>No question yet</b><span>When the other side asks something, the answer to say appears here.<br>Press <kbd>F2</kbd> to answer the last thing they said.</span></div>`;
     return;
@@ -2595,9 +2607,27 @@ function updMore(){                                   // more text below: a fade
 $("#answerBody").addEventListener("scroll", updMore);
 new MutationObserver(() => requestAnimationFrame(updMore)).observe($("#answerBody"), {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["style"]});
 window.addEventListener("resize", updMore);
+/* The overlay while no answer is shown: never an empty box. Before the meeting it says it is on and what to do; during
+   the meeting it shows the sentence being said now (or the last one from the other side) with its translation. */
+function ovIdle(){
+  if(!S.running && !recActive())
+    return `<div class="ov-idle"><b>Overlay is on</b><span>Start the meeting in the main window (F9). Then what they say${featOn("translate") ? " and its translation" : ""}${featOn("answers") ? ", and the answer to say," : ""} appear here.</span><span class="ov-keys">Ctrl+Alt+O close · Ctrl+Alt+M move · Ctrl+Alt+T subtitles</span></div>`;
+  let live = null;
+  S.pend.forEach(p => {
+    if(p.dataset.src === "me") return;
+    const tx = (p.querySelector(".live-text").textContent || "").trim(), fa = (p.querySelector(".live-fa").textContent || "").trim();
+    if((tx || fa) && (!live || +p.dataset.t > live.t)) live = {t: +p.dataset.t, tx, fa};
+  });
+  const last = lastThem();
+  const show = live ? {tx: live.tx, fa: live.fa, live: true} : last ? {tx: last.text, fa: hasTr(last) ? last.translation : "", live: false} : null;
+  if(!show) return `<div class="ov-idle"><b>Listening…</b><span>What they say appears here${featOn("answers") ? "; when they ask something, the answer to say" : ""}.</span></div>`;
+  return `<div class="ov-said"><div class="ov-said-h">${show.live ? "They are saying…" : "They said"}</div>` +
+    (show.tx ? `<p class="ov-said-o" dir="auto">${esc(show.tx)}</p>` : "") +
+    (show.fa ? `<p class="ov-said-t" ${trAttr()}>${esc(show.fa)}</p>` : "") + `</div>`;
+}
 function renderAnswerIfIdle(){
   const e = S.panelId != null ? S.entries.get(S.panelId) : null;
-  if(!e || !e.answer) renderAnswer();
+  if(!e || !e.answer || (OVERLAY && !featOn("answers"))) renderAnswer();
 }
 function renderThinking(){
   const cur = S.panelId != null ? S.entries.get(S.panelId) : null;

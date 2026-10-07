@@ -13894,6 +13894,17 @@ def _hide_capture_test(pid):
                 pass
 
 
+def webview_test_port(webview):
+    """Tests only (never set for users): MA_WEBVIEW_DEBUG_PORT opens the web view's debugging port, so the Windows
+    check can look inside the hidden window and the overlay (their pictures cannot be taken from the screen)."""
+    port = os.environ.get("MA_WEBVIEW_DEBUG_PORT", "")
+    if port.isdigit():
+        try:
+            webview.settings["REMOTE_DEBUGGING_PORT"] = int(port)
+        except Exception:
+            pass
+
+
 def run_window_helper(argv):
     """`--window URL --storage FOLDER --status FILE`: shows the page in a window that is hidden from screen sharing."""
     def opt(name, default=""):
@@ -13922,6 +13933,7 @@ def run_window_helper(argv):
         webview.create_window("Notes", url, width=1280, height=860, min_size=(900, 600), text_select=True)
         worker_t = threading.Thread(target=worker, daemon=True, name="hide-keeper")
         worker_t.start()
+        webview_test_port(webview)
         webview.start(gui="edgechromium", storage_path=storage or None, private_mode=False)
         closed_normally = True
     except Exception as e:
@@ -14171,6 +14183,7 @@ def run_overlay_helper(argv):
             webview.create_window(OV_TITLE, url, **kw)
         threading.Thread(target=worker, daemon=True, name="overlay-worker").start()
         watch_parent(int(opt("--parent", "0") or 0) if opt("--parent", "0").isdigit() else 0, stop, status)
+        webview_test_port(webview)
         webview.start(gui="edgechromium", storage_path=storage or None, private_mode=False)
     except Exception as e:
         failed = True

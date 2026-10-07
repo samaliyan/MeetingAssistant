@@ -1312,6 +1312,23 @@ def test_subtitle_mode_is_a_mode_for_videos(app):
         a.closing.set()
 
 
+def test_webview_debug_port_only_for_tests(app, monkeypatch):
+    class WV:
+        settings = {}
+    monkeypatch.delenv("MA_WEBVIEW_DEBUG_PORT", raising=False)
+    app.webview_test_port(WV)
+    assert "REMOTE_DEBUGGING_PORT" not in WV.settings                  # users: never opened
+    monkeypatch.setenv("MA_WEBVIEW_DEBUG_PORT", "9333")
+    app.webview_test_port(WV)
+    assert WV.settings["REMOTE_DEBUGGING_PORT"] == 9333
+    monkeypatch.setenv("MA_WEBVIEW_DEBUG_PORT", "x; rm")
+    WV.settings = {}
+    app.webview_test_port(WV)
+    assert WV.settings == {}                                           # only a number is taken
+    page = open(os.path.join(os.path.dirname(app.__file__), "web", "index.html"), encoding="utf-8").read()
+    assert "function ovIdle()" in page and "Overlay is on" in page     # the overlay never sits empty
+
+
 def test_second_piece_after_the_first_was_answered(app):
     import time
     eng, sess, calls = _engine(app)
