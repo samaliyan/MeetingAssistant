@@ -1,0 +1,42 @@
+name: Diag overlay (temporary)
+
+# Temporary: runs the released exe's overlay on Windows and commits the pictures to this branch for review.
+on:
+  push:
+    branches: ["diag/overlay"]
+    paths-ignore: ["diag-shots/**"]
+
+permissions:
+  contents: write
+
+jobs:
+  overlay:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pillow
+        run: python -m pip install --quiet pillow
+      - name: WebView2 runtime
+        continue-on-error: true
+        run: choco install webview2-runtime -y --no-progress
+      - name: Get the exe to test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir exe
+      - name: Overlay check
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: python tests/win_overlay_exe_check.py exe/MeetingAssistant.exe diag-shots
+      - name: Keep the pictures on this branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "ci"; git config user.email "ci@users.noreply.github.com"
+          git add -f diag-shots
+          git commit -q -m "diag shots [skip ci]" || exit 0
+          git push -q origin HEAD:diag/overlay
