@@ -1,0 +1,44 @@
+[OK] A-hidden: program started
+[OK] A-hidden: main window open: 1 window(s)
+[OK] A-hidden: Ctrl+Alt+O opens the overlay: after 1.1 s
+[OK] A-hidden: click-through, see-through, on top: 0x80d00a8
+[OK] A-hidden: hidden from screen capture = True: 0x11
+[OK] A-hidden: size and place on the screen: 634x276 at 195,12
+[OK] A-hidden: main window minimized: [True]
+[WARN] A-hidden: PrintWindow picture has content: 0.00% (this capture can fail for web windows)
+[FAIL] A-hidden: overlay page loaded and connected: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[FAIL] A-hidden: before the meeting it says it is on and what to do
+[FAIL] A-hidden: during the meeting it shows what they said, with the translation: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[FAIL] A-hidden: shows the question and the answer: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[OK] A-hidden: no page errors: None
+[OK] A-hidden: Ctrl+Alt+PageUp makes it more solid: 65 -> 70
+[OK] A-hidden: Ctrl+Alt+T turns subtitle mode on: True
+[FAIL] A-hidden: subtitle mode shows the subtitles: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[OK] A-hidden: Ctrl+Alt+T again turns it off
+[OK] A-hidden: Ctrl+Alt+O again closes it
+[OK] A-hidden: main window back: [False]
+[OK] A-hidden: Overlay button opens it: {'ok': True, 'on': True}
+[OK] A-hidden: no overlay errors in the log
+[OK] B-visible: program started
+[OK] B-visible: main window open: 1 window(s)
+[OK] B-visible: Ctrl+Alt+O opens the overlay: after 1.1 s
+[OK] B-visible: click-through, see-through, on top: 0x80d00a8
+[OK] B-visible: hidden from screen capture = False: 0x0
+[OK] B-visible: size and place on the screen: 634x276 at 195,12
+[OK] B-visible: main window minimized: [True]
+[OK] B-visible: PrintWindow picture has content: 2.92% (this capture can fail for web windows)
+[OK] B-visible: overlay page loaded and connected: {"url": "http://127.0.0.1:17650/?overlay=1", "text": "Overlay is on\nStart the meeting in the main window (F9). Then what they say and its translation, and the answer to say, appear here.\nCtrl+Alt+O close · Ctrl+Alt+M move · Ctrl+Alt+T subtitles", "state": {"cfg": true, "online": true, "subs": fals
+[OK] B-visible: before the meeting it says it is on and what to do: Overlay is on
+Start the meeting in the main window (F9). Then what they say and its translation, and the answer to say, 
+[OK] B-visible: during the meeting it shows what they said, with the translation: {"url": "http://127.0.0.1:17650/?overlay=1", "fed": "They said\n\nOur team moved to the new data centre last month.\n\nتیم ما ماه گذشته به مرکز داده‌ی جدید منتقل شد.", "text": "They said\n\nOur team moved to the new data centre last month.\n\nتیم ما ماه گذشته به مرکز داده‌ی جدید منتقل شد.", "state":
+[OK] B-visible: shows the question and the answer: {"url": "http://127.0.0.1:17650/?overlay=1", "fed": "Can you tell me about a project you led recently?\n\nمی‌توانید درباره‌ی پروژه‌ای که اخیراً رهبری کردید بگویید؟\n\nSure. Last year I led the move of our main Oracle database to a Data Guard standby. I planned the switchover, tested it twice, and we
+[OK] B-visible: no page errors: []
+[OK] B-visible: Ctrl+Alt+PageUp makes it more solid: 65 -> 70
+[OK] B-visible: Ctrl+Alt+T turns subtitle mode on: True
+[OK] B-visible: subtitle mode shows the subtitles: {"url": "http://127.0.0.1:17650/?overlay=1", "fed": "می‌توانید درباره‌ی پروژه‌ای که اخیراً رهبری کردید بگویید؟\nتیم ما ماه گذشته به مرکز داده‌ی جدید منتقل شد.", "text": "دیشب کجا بودی؟\nبهت گفتم که", "state": {"cfg": true, "online": true, "subs": true, "ov": true}, "errors": []}
+[OK] B-visible: Ctrl+Alt+T again turns it off
+[OK] B-visible: Ctrl+Alt+O again closes it
+[OK] B-visible: main window back: [False]
+[OK] B-visible: Overlay button opens it: {'ok': True, 'on': True}
+[OK] B-visible: no overlay errors in the log
+RESULT: FAILED - A-hidden: overlay page loaded and connected; A-hidden: before the meeting it says it is on and what to do; A-hidden: during the meeting it shows what they said, with the translation; A-hidden: shows the question and the answer; A-hidden: subtitle mode shows the subtitles
