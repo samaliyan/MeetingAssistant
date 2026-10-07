@@ -35,11 +35,21 @@ jobs:
           run-id: ${{ steps.rid.outputs.run }}
           github-token: ${{ github.token }}
           path: exe
+      - name: Older releases to compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v6.26 --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir v626
+          gh release download v6.23 --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir v623
       - name: Overlay check
         continue-on-error: true
         env:
           PYTHONUTF8: "1"
-        run: python tests/win_overlay_exe_check.py exe/MeetingAssistant.exe diag-shots
+          MA_CHECK_C: "1"
+        run: |
+          python tests/win_overlay_exe_check.py exe/MeetingAssistant.exe diag-shots
+          python tests/win_overlay_exe_check.py v626/MeetingAssistant.exe diag-shots/v626
+          python tests/win_overlay_exe_check.py v623/MeetingAssistant.exe diag-shots/v623
       - name: Keep the pictures on this branch
         if: always()
         shell: bash

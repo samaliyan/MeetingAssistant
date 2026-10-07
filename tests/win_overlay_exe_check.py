@@ -355,6 +355,8 @@ def main():
     os.makedirs(out, exist_ok=True)
     scenario("A-hidden", exe, out, {"hide_from_share": True, "overlay_hide": True})
     scenario("B-visible", exe, out, {"hide_from_share": False, "overlay_hide": False})
+    if os.environ.get("MA_CHECK_C"):
+        scenario("C-mainhidden", exe, out, {"hide_from_share": True, "overlay_hide": False})
     print("\n" + "\n".join(LINES), flush=True)
     print("RESULT: " + ("OK" if not FAILS else "FAILED - " + "; ".join(FAILS)), flush=True)
     if os.environ.get("GITHUB_ACTIONS"):
