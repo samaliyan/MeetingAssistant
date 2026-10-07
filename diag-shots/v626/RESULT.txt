@@ -1,0 +1,64 @@
+[OK] A-hidden: program started
+[OK] A-hidden: main window open: 1 window(s)
+[OK] A-hidden: Ctrl+Alt+O opens the overlay: after 1.1 s
+[OK] A-hidden: click-through, see-through, on top: 0x80d00a8
+[OK] A-hidden: hidden from screen capture = True: 0x11
+[OK] A-hidden: size and place on the screen: 634x276 at 195,12
+[OK] A-hidden: main window minimized: [True]
+[WARN] A-hidden: PrintWindow picture has content: 0.00% (this capture can fail for web windows)
+[FAIL] A-hidden: overlay page loaded and connected: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[FAIL] A-hidden: before the meeting it says it is on and what to do
+[FAIL] A-hidden: during the meeting it shows what they said, with the translation: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[FAIL] A-hidden: shows the question and the answer: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[OK] A-hidden: no page errors: None
+[OK] A-hidden: Ctrl+Alt+PageUp makes it more solid: 65 -> 70
+[OK] A-hidden: Ctrl+Alt+T turns subtitle mode on: True
+[FAIL] A-hidden: subtitle mode shows the subtitles: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[OK] A-hidden: Ctrl+Alt+T again turns it off
+[OK] A-hidden: Ctrl+Alt+O again closes it
+[OK] A-hidden: main window back: [False]
+[OK] A-hidden: Overlay button opens it: {'ok': True, 'on': True}
+[OK] A-hidden: no overlay errors in the log
+[OK] B-visible: program started
+[OK] B-visible: main window open: 1 window(s)
+[OK] B-visible: Ctrl+Alt+O opens the overlay: after 1.1 s
+[OK] B-visible: click-through, see-through, on top: 0x80d00a8
+[OK] B-visible: hidden from screen capture = False: 0x0
+[OK] B-visible: size and place on the screen: 634x276 at 195,12
+[OK] B-visible: main window minimized: [True]
+[OK] B-visible: PrintWindow picture has content: 0.49% (this capture can fail for web windows)
+[FAIL] B-visible: overlay page loaded and connected: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[FAIL] B-visible: before the meeting it says it is on and what to do
+[FAIL] B-visible: during the meeting it shows what they said, with the translation: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[FAIL] B-visible: shows the question and the answer: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[OK] B-visible: no page errors: None
+[OK] B-visible: Ctrl+Alt+PageUp makes it more solid: 65 -> 70
+[OK] B-visible: Ctrl+Alt+T turns subtitle mode on: True
+[FAIL] B-visible: subtitle mode shows the subtitles: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[OK] B-visible: Ctrl+Alt+T again turns it off
+[OK] B-visible: Ctrl+Alt+O again closes it
+[OK] B-visible: main window back: [False]
+[OK] B-visible: Overlay button opens it: {'ok': True, 'on': True}
+[OK] B-visible: no overlay errors in the log
+[OK] C-mainhidden: program started
+[OK] C-mainhidden: main window open: 1 window(s)
+[OK] C-mainhidden: Ctrl+Alt+O opens the overlay: after 1.1 s
+[OK] C-mainhidden: click-through, see-through, on top: 0x80d00a8
+[OK] C-mainhidden: hidden from screen capture = False: 0x0
+[OK] C-mainhidden: size and place on the screen: 634x276 at 195,12
+[OK] C-mainhidden: main window minimized: [True]
+[WARN] C-mainhidden: PrintWindow picture has content: 0.00% (this capture can fail for web windows)
+[FAIL] C-mainhidden: overlay page loaded and connected: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[FAIL] C-mainhidden: before the meeting it says it is on and what to do
+[FAIL] C-mainhidden: during the meeting it shows what they said, with the translation: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[FAIL] C-mainhidden: shows the question and the answer: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[OK] C-mainhidden: no page errors: None
+[OK] C-mainhidden: Ctrl+Alt+PageUp makes it more solid: 65 -> 70
+[OK] C-mainhidden: Ctrl+Alt+T turns subtitle mode on: True
+[FAIL] C-mainhidden: subtitle mode shows the subtitles: {"error": "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9333\n"}
+[OK] C-mainhidden: Ctrl+Alt+T again turns it off
+[OK] C-mainhidden: Ctrl+Alt+O again closes it
+[OK] C-mainhidden: main window back: [False]
+[OK] C-mainhidden: Overlay button opens it: {'ok': True, 'on': True}
+[OK] C-mainhidden: no overlay errors in the log
+RESULT: FAILED - A-hidden: overlay page loaded and connected; A-hidden: before the meeting it says it is on and what to do; A-hidden: during the meeting it shows what they said, with the translation; A-hidden: shows the question and the answer; A-hidden: subtitle mode shows the subtitles; B-visible: overlay page loaded and connected; B-visible: before the meeting it says it is on and what to do; B-visible: during the meeting it shows what they said, with the translation; B-visible: shows the question and the answer; B-visible: subtitle mode shows the subtitles; C-mainhidden: overlay page loaded and connected; C-mainhidden: before the meeting it says it is on and what to do; C-mainhidden: during the meeting it shows what they said, with the translation; C-mainhidden: shows the question and the answer; C-mainhidden: subtitle mode shows the subtitles

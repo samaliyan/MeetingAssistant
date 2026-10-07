@@ -1,0 +1,8 @@
+2026-10-07 10:34:16 [warn] the last meeting could not be read (Continue is not offered): [Errno 2] No such file or directory: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\ma_ov_hxi0z2vx\\Dat…
+2026-10-07 10:34:16 [info] Meeting Assistant 6.26 started at http://127.0.0.1:17650/ · Python 3.12.10 · HTTP/2 on · soundfile ok
+2026-10-07 10:34:16 [info] Windows speed settings: no_throttling=True, hybrid=False, cores=2, fast_cores=2
+2026-10-07 10:34:17 [info] Window hidden from screen sharing (exclude)
+2026-10-07 10:34:20 [info] Local model engine: faster-whisper 1.2.1
+2026-10-07 10:34:20 [info] Local AI engine: llama.cpp 0.3.36
+2026-10-07 10:34:33 [info] Subtitle mode on: only the computer's sound, only the translation
+2026-10-07 10:34:36 [info] Subtitle mode off

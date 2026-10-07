@@ -41,4 +41,25 @@ Start the meeting in the main window (F9). Then what they say and its translatio
 [OK] B-visible: main window back: [False]
 [OK] B-visible: Overlay button opens it: {'ok': True, 'on': True}
 [OK] B-visible: no overlay errors in the log
-RESULT: FAILED - A-hidden: overlay page loaded and connected; A-hidden: before the meeting it says it is on and what to do; A-hidden: during the meeting it shows what they said, with the translation; A-hidden: shows the question and the answer; A-hidden: subtitle mode shows the subtitles
+[OK] C-mainhidden: program started
+[OK] C-mainhidden: main window open: 1 window(s)
+[OK] C-mainhidden: Ctrl+Alt+O opens the overlay: after 1.1 s
+[OK] C-mainhidden: click-through, see-through, on top: 0x80d00a8
+[OK] C-mainhidden: hidden from screen capture = False: 0x0
+[OK] C-mainhidden: size and place on the screen: 634x276 at 195,12
+[OK] C-mainhidden: main window minimized: [True]
+[WARN] C-mainhidden: PrintWindow picture has content: 0.00% (this capture can fail for web windows)
+[FAIL] C-mainhidden: overlay page loaded and connected: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[FAIL] C-mainhidden: before the meeting it says it is on and what to do
+[FAIL] C-mainhidden: during the meeting it shows what they said, with the translation: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[FAIL] C-mainhidden: shows the question and the answer: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[OK] C-mainhidden: no page errors: None
+[OK] C-mainhidden: Ctrl+Alt+PageUp makes it more solid: 65 -> 70
+[OK] C-mainhidden: Ctrl+Alt+T turns subtitle mode on: True
+[FAIL] C-mainhidden: subtitle mode shows the subtitles: {"error": "overlay page not found among http://127.0.0.1:17650/"}
+[OK] C-mainhidden: Ctrl+Alt+T again turns it off
+[OK] C-mainhidden: Ctrl+Alt+O again closes it
+[OK] C-mainhidden: main window back: [False]
+[OK] C-mainhidden: Overlay button opens it: {'ok': True, 'on': True}
+[OK] C-mainhidden: no overlay errors in the log
+RESULT: FAILED - A-hidden: overlay page loaded and connected; A-hidden: before the meeting it says it is on and what to do; A-hidden: during the meeting it shows what they said, with the translation; A-hidden: shows the question and the answer; A-hidden: subtitle mode shows the subtitles; C-mainhidden: overlay page loaded and connected; C-mainhidden: before the meeting it says it is on and what to do; C-mainhidden: during the meeting it shows what they said, with the translation; C-mainhidden: shows the question and the answer; C-mainhidden: subtitle mode shows the subtitles
