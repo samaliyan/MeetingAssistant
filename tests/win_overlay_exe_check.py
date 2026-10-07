@@ -2,7 +2,8 @@
 
     python tests/win_overlay_exe_check.py MeetingAssistant.exe OUTDIR
 
-Two set-ups: (A) "hide from screen sharing" on for the window and the overlay (as most users have it), (B) both off.
+Three set-ups: (A) "hide from screen sharing" on for the window and the overlay (as most users have it), (B) both off,
+(C) the main window hidden and the overlay not, so that pictures of the screen show it.
 In each: starts the exe, presses the real keys (Ctrl+Alt+O on, Ctrl+Alt+PageUp, Ctrl+Alt+T, Ctrl+Alt+O off), checks the
 window flags, that the main window is minimized and comes back, and takes pictures of what the overlay really shows
 (PrintWindow, which also works when it is hidden from screen capture) and of the whole screen. A picture that is one flat
@@ -355,6 +356,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     scenario("A-hidden", exe, out, {"hide_from_share": True, "overlay_hide": True})
     scenario("B-visible", exe, out, {"hide_from_share": False, "overlay_hide": False})
+    scenario("C-mainhidden", exe, out, {"hide_from_share": True, "overlay_hide": False})   # (the empty-overlay bug was here)
     print("\n" + "\n".join(LINES), flush=True)
     print("RESULT: " + ("OK" if not FAILS else "FAILED - " + "; ".join(FAILS)), flush=True)
     if os.environ.get("GITHUB_ACTIONS"):

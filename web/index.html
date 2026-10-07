@@ -1580,7 +1580,7 @@ function basename(p){ return String(p||"").split(/[\\/]/).pop(); }
 /* ---------- events from the program ---------- */
 let offlineTimer = null, sseDelay = 3000;
 function connect(){
-  const es = new EventSource("/events");                    // the key travels in a cookie, not in the address
+  const es = new EventSource(OVERLAY ? "/events?ov=1" : "/events");   // the key travels in a cookie; ov=1: the program sees the overlay's page is there
   es.onopen = () => { sseDelay = 3000;  S.online = true; S.everOnline = true; clearTimeout(offlineTimer); $("#offline").hidden = true; };
   es.onerror = () => {
     S.online = false;

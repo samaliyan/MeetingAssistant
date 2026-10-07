@@ -10122,6 +10122,10 @@ class Hub:
             self.empty_since = None
         return q
 
+    def overlay_pages(self):
+        with self.lock:
+            return sum(1 for q in self.clients if getattr(q, "overlay", False))
+
     def unsubscribe(self, q):
         with self.lock:
             self.clients.discard(q)
@@ -13445,7 +13449,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/events":
             if not token_ok(key, app.token):
                 return self._send(403, "{}")
-            return self._events()
+            return self._events(overlay=params.get("ov", [""])[0] == "1")
         if path.startswith("/static/"):
             name = os.path.basename(path)
             types_ = {".woff2": "font/woff2", ".png": "image/png", ".svg": "image/svg+xml"}
@@ -13506,7 +13510,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, json.dumps({"ok": False, "error": "Internal error: " + short(e, 100)}))
         return self._send(200, out)
 
-    def _events(self):
+    def _events(self, overlay=False):
         app = self.app
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -13515,6 +13519,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         q = app.hub.subscribe()
+        q.overlay = overlay                       # the overlay's own page (the program checks that it really loaded)
         if time.time() - app.last_ping > 10:
             app.warm_async()
         try:
@@ -13592,6 +13597,9 @@ def trim_window_profile():
 # ----------------------------------------------------------------------------
 HIDE_STATUS_PATH = os.path.join(DATA_DIR, ".hide.json")
 HIDDEN_STORAGE = os.path.join(DATA_DIR, ".window_hidden")
+# The overlay has its OWN web storage: with the hidden main window open, a second web view on the same folder could not
+# start its page, so the overlay was an empty grey box (found on a real Windows machine, with every version since 6.7).
+OVERLAY_STORAGE = os.path.join(DATA_DIR, ".window_overlay")
 WDA_MONITOR, WDA_EXCLUDEFROMCAPTURE = 0x1, 0x11
 WIN_HIDE_BUILD = 19041            # Windows 10 version 2004: the first that can truly remove a window from capture
 _WIN_BUILD = []
@@ -14454,7 +14462,7 @@ class Overlay:
             pass
         x, y, w, h = self.geometry()
         cmd = ([sys.executable] if FROZEN else [sys.executable, os.path.abspath(__file__)]) + \
-            ["--overlay", self.app.url + "&overlay=1", "--storage", HIDDEN_STORAGE, "--status", OVERLAY_STATUS_PATH,
+            ["--overlay", self.app.url + "&overlay=1", "--storage", OVERLAY_STORAGE, "--status", OVERLAY_STATUS_PATH,
              "--geom", f"{x},{y},{w},{h}", "--data", DATA_DIR, "--parent", str(os.getpid())]
         try:
             self.proc = subprocess.Popen(cmd, env=helper_env(False), close_fds=True)   # ended by stop() / shutdown
@@ -14498,6 +14506,7 @@ class Overlay:
     def _finish_start(self):
         self.stop_flag.clear()
         threading.Thread(target=self._keeper, daemon=True, name="overlay-keeper").start()
+        threading.Thread(target=self._page_check, daemon=True, name="overlay-page").start()
         self.app.hub.publish("overlay", on=True)
         return ""
 
@@ -14530,6 +14539,19 @@ class Overlay:
         if was:
             self.app.hub.publish("overlay", on=False)
         return ""
+
+    def _page_check(self, wait=15.0):
+        """The window is up; its page must load too (otherwise it is an empty box). Says so plainly when it does not."""
+        end = time.time() + wait
+        while time.time() < end and not self.stop_flag.wait(0.5):
+            if self.app.hub.overlay_pages():
+                return True
+        if self.on and not self.stop_flag.is_set() and not self.app.hub.overlay_pages():
+            log("Overlay: the window is open but its page did not load (it stays empty)", level="warn")
+            self.app.hub.toast("error", "The overlay window opened but its content did not load, so it is empty. "
+                               "Press Ctrl+Alt+O twice to try again. If it stays empty, copy the log (bottom right) and send it.")
+            return False
+        return True
 
     def _keeper(self):
         """While it is on: keep the style (a page reload can reset it) and notice if the window was closed."""
