@@ -1254,6 +1254,29 @@ def test_overlay_keys_and_new_defaults(app):
     assert app.DEFAULTS["auto_screen"] is False and app.DEFAULTS["debrief_scores"] is True and app.DEFAULTS["job_ad"] == ""
 
 
+def test_subtitle_mode_setting_key_and_page(app):
+    import os
+    assert app.DEFAULTS["subtitles"] is False
+    assert app.sanitize({"subtitles": "true"})["subtitles"] is True
+    assert app.sanitize({"subtitles": "nonsense"})["subtitles"] is False
+    keys = list(app.OV_KEYS)
+    # the new key is last, so the ids of the older keys (their place in the list) do not change
+    assert keys == ["toggle", "more", "less", "screen", "answer", "coach", "up", "down", "prev", "next", "mark", "say", "subs"]
+    assert app.OV_KEYS["subs"] == (0x54, "T") and "subs" not in app.OV_MEETING_KEYS
+    vks = [vk for vk, _ in app.OV_KEYS.values()]
+    assert len(vks) == len(set(vks))                                   # no key used twice
+    a = app.App()
+    try:
+        assert a.api_save_config(subtitles=True)["ok"] and a.cfg["subtitles"] is True
+        assert app.load_config()["subtitles"] is True                    # kept in the settings file
+        a.api_save_config(subtitles=False)
+        assert app.load_config()["subtitles"] is False
+    finally:
+        a.closing.set()
+    page = open(os.path.join(os.path.dirname(app.__file__), "web", "index.html"), encoding="utf-8").read()
+    assert 'id="subBtn"' in page and 'data-key="subtitles"' in page and 'sb.id = "ovSub"' in page
+
+
 def test_second_piece_after_the_first_was_answered(app):
     import time
     eng, sess, calls = _engine(app)

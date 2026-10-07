@@ -204,9 +204,14 @@ button.chip:hover{filter:brightness(.97)}
 .entry.cont .meta .who,.entry.cont .meta .time,.entry.cont .meta .tag,.entry.cont .meta .edited{display:none}
 .entry.cont .meta{position:absolute;right:10px;top:4px;z-index:1}
 .entry.cont .orig{margin-top:0}
-.entry.cont.has-play .orig{padding-right:2.6rem}                 /* the ▶ on a grouped line never sits on the text */
-.entry.cont.latest:not(.answered) .orig{padding-right:9rem}
-.entry.cont.latest:not(.answered).has-play .orig{padding-right:11.5rem}
+/* a grouped line keeps its buttons (top right) off the text: room for the buttons that are visible (the flag always,
+   the pen on the newest line, "Answer this" until it is answered, the ▶ after the meeting) - Persian text starts there */
+.entry.cont{--rsv:5.6rem}                                          /* (measured: flag + the pen's place) */
+.entry.cont.has-play{--rsv:8.2rem}
+.entry.cont.latest:not(.answered){--rsv:14rem}
+.entry.cont.latest:not(.answered).has-play{--rsv:16.6rem}
+.entry.cont .orig{padding-right:var(--rsv)}
+body.subs .entry.cont.has-tr .fa{margin-right:var(--rsv)}    /* subtitle mode: the translation is the first text */
 .entry.turn-start{margin-top:6px}
 .ctxbar{position:absolute;left:14px;right:22px;z-index:6;background:var(--surface);border:1px solid var(--them);border-inline-start-width:4px;border-radius:12px;box-shadow:var(--shadow-lg);padding:8px 12px;cursor:pointer;max-height:42%;overflow:auto}
 .ctxbar .cx-h{display:flex;align-items:center;gap:8px;font-size:.78rem;font-weight:700;color:var(--them)}
@@ -290,7 +295,22 @@ body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
 #ovCoach .say{display:block;margin-top:3px;color:#eef1f6;font-weight:500}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
 body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · Ctrl+Alt+M: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
-#ovBtn.on{color:var(--accent);border-color:var(--accent)}
+#ovBtn.on,#subBtn.on{color:var(--accent);border-color:var(--accent)}
+/* subtitle mode: a line shows only its translation (the original is kept, and shown again when the mode is off) */
+body.subs .entry.has-tr:not([data-editing]) .orig{display:none}
+body.subs .entry.has-tr .fa{font-size:1.08em;margin-top:0}
+body.subs .entry.pending.has-tr .live-text{display:none}
+/* the overlay as film subtitles: the last two lines, large, at the bottom */
+#ovSub{display:none}
+body.ov.subs #ovBox > :not(#ovSub){display:none!important}
+body.ov.subs #ovSub{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:6px;overflow:hidden;padding:2px 4px 4px;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 1.6em);mask-image:linear-gradient(to bottom,transparent 0,#000 1.6em)}   /* a long line fades out at the top */
+#ovSub .sl{max-width:100%;text-align:center;font-size:calc(1.5rem * var(--scale,1));line-height:1.5;font-weight:600;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.85);opacity:max(.6,calc(var(--ovtext,85) / 100));white-space:pre-line;overflow-wrap:anywhere}
+#ovSub .sl.tr{font-family:var(--font-tr)}
+#ovSub .sl.old{font-size:calc(1.15rem * var(--scale,1));font-weight:500;color:#dfe5ee;-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+#ovSub .sl.src{font-weight:400;color:#cfd6e2}
+#ovSub .sl.live::after{content:" …";opacity:.6}
+#ovSub .sub-empty{color:#c9d0db;opacity:.75;font-size:.9rem;text-align:center}
 .coach{max-height:34vh;overflow-y:auto;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.88rem}
 .coach.compact #coHow,.coach.compact #coChips,.coach.compact #coSay,.coach.compact .co-actions{display:none}
 .co-more{margin-inline-start:auto;min-height:28px;padding:2px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--accent-text);font:inherit;font-size:.86rem;font-weight:600;cursor:pointer}
@@ -856,6 +876,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <button class="btn ghost" id="sayBtn" hidden title="Say mode: speak in your language, get the sentence to say in the meeting language. Mute yourself in Teams or Zoom first. (F6, or Ctrl+Alt+J from any program during a meeting)"><span data-icon="speak"></span><span class="hide-sm hide-md" id="sayLabel">Say it</span><kbd class="hide-sm">F6</kbd></button>
     <button class="btn ghost" id="markBtn" hidden title="Mark the latest moment as important — it goes into the summary and the export (F7, or Ctrl+Alt+K from any program during a meeting)"><span data-icon="flag"></span><span class="hide-sm hide-md">Mark</span><kbd class="hide-sm">F7</kbd></button>
     <button class="btn ghost" id="ovBtn" title="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it (Ctrl+Alt+O, even from another program)"><span data-icon="eye"></span><span class="hide-sm">Overlay</span></button>
+    <button class="btn ghost" id="subBtn" aria-pressed="false" title="Subtitles: show only the translation of what is said, like film subtitles — here and in the overlay (Ctrl+Alt+T while the overlay is on)"><span data-icon="text"></span><span class="hide-sm">Subtitles</span></button>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
     <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm">Shift+F9</kbd></button>
@@ -1310,8 +1331,9 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <label for="fOvT" style="margin-top:8px">Overlay: how strong the words are <b id="ovTVal">85%</b></label>
         <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="60" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
+        <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Subtitles: only the translation</b><span>Like film subtitles: each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom (no answers). A line that is not translated (for example it is already in your language) shows what was said. Also the Subtitles button, or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
-        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd> (drag it with the mouse, press again to lock), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> with the arrows; <kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller.</div>
+        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd> (drag it with the mouse, press again to lock), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> with the arrows; <kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller.</div>
       </div>
       <div class="field">
         <span class="label">Screen sharing</span>
@@ -1725,6 +1747,7 @@ function applyConfig(){
   document.documentElement.style.setProperty("--scale", c.text_size/100);
   document.documentElement.style.setProperty("--answer-size", c.answer_size+"px");
   document.documentElement.style.setProperty("--ovtext", c.overlay_text || 85);
+  document.body.classList.toggle("subs", !!c.subtitles); renderSubBtn(); renderSubsSoon();
   const t = $("#topicLine");
   const topic1 = (c.context || "").trim().split("\n")[0];
   t.innerHTML = topic1 ? esc(topic1) : `No meeting topic yet · <button id="addTopic">Add one</button>`;
@@ -1743,6 +1766,7 @@ function applyConfig(){
 
 /* ---------- running state ---------- */
 function renderRunning(){
+  renderSubsSoon();
   const pill = $("#statusPill"), txt = $("#statusText"), btn = $("#startBtn");
   pill.className = "pill";
   const recOn = recActive(), prob = S.running ? liveProblem() : "";
@@ -1893,7 +1917,7 @@ function insertSorted(el, quiet){
 
 function onSpeaking(m){
   let p = S.pend.get(m.seg);
-  if(m.phase === "discard"){ if(p){ p.remove(); S.pend.delete(m.seg); renderEmpty(); renderAnswerIfIdle(); groupTurns(); updateCtx(); } return; }
+  if(m.phase === "discard"){ if(p){ p.remove(); S.pend.delete(m.seg); renderEmpty(); renderAnswerIfIdle(); groupTurns(); updateCtx(); renderSubsSoon(); } return; }
   if(!p){
     if(m.t0 == null) return;                           // a late update for a line that is already finished
     p = document.createElement("article");
@@ -1919,7 +1943,8 @@ function onSpeaking(m){
     p.classList.add("has-text");
     p.querySelector(".mode").innerHTML = `<span class="live-tag" title="${m.live ? "Written while they speak" : "Updated every " + (S.speechMode?.every || 2) + " s while they speak — the final text comes when they pause"}">live</span>`;
   }
-  if(m.translation != null) keepBottom(() => { p.querySelector(".live-fa").textContent = m.translation; }, false);
+  if(m.translation != null) keepBottom(() => { p.querySelector(".live-fa").textContent = m.translation; p.classList.toggle("has-tr", !!m.translation.trim()); }, false);
+  renderSubsSoon();
 }
 setInterval(() => { const now = Date.now(); let gone = false;
   S.pend.forEach((p, k) => { if(now - +p.dataset.born > 330000){ p.remove(); S.pend.delete(k); gone = true; } });
@@ -2000,6 +2025,7 @@ function fillEntry(el, e){
     else if(xs === "error" && !e.explain){ x.textContent = "Explanation failed."; x.dir = "ltr"; }
     else { x.dir = myLang().rtl ? "rtl" : "ltr"; x.lang = myLang().code; x.textContent = e.explain; }
   }
+  el.classList.toggle("has-tr", hasTr(e));                  // subtitle mode shows only this translation
   const fa = el.querySelector(".fa");
   fa.hidden = e.tr_state === "off";
   fa.className = "fa"; fa.removeAttribute("dir"); fa.removeAttribute("lang");
@@ -2043,7 +2069,7 @@ function upsertEntry(e, silent, batch){
   (e.seg_ids||[]).forEach(id => { const p = S.pend.get(id); if(p){ p.remove(); S.pend.delete(id); } });
   let el = document.getElementById("e"+e.id);
   const added = !el;
-  if(batch){ if(!el){ el = entryShell(e); insertSorted(el, true); } fillEntry(el, e); return; }
+  if(batch){ if(!el){ el = entryShell(e); insertSorted(el, true); } fillEntry(el, e); renderSubsSoon(); return; }
   keepBottom(() => {
     if(!el){ el = entryShell(e); insertSorted(el); }
     fillEntry(el, e);
@@ -2080,6 +2106,7 @@ function upsertEntry(e, silent, batch){
   if(!has) renderAnswerIfIdle();
   renderSumBtn();
   if(added){ markLatest(); groupTurns(); updateCtx(); updateNav(); } else housekeepSoon();
+  renderSubsSoon();
 }
 function iAmSpeaking(){ return S.running && Date.now() - S.meAt < 2500; }
 function showQueued(){
@@ -2104,6 +2131,58 @@ const PHASES = {intro: "Introduction", background: "Your background", technical:
 const QLABEL = {describe: "Describe / talk", candidate_q: "Your questions", salary: "Salary", availability: "Availability", intro: "Introduction", motivation: "Motivation",
                 weakness: "Weakness", strength: "Strengths", behavioural: "Behavioural", coding: "Coding / task", design: "Design",
                 troubleshoot: "Troubleshooting", experience: "Experience", concept: "Concept", opinion: "Opinion", yesno: "Yes / no"};
+/* ---------- subtitle mode: only the translation, like film subtitles ---------- */
+function hasTr(e){ return !!e && e.tr_state !== "off" && !!String(e.translation || "").trim(); }
+function renderSubBtn(){
+  const b = $("#subBtn"); if(!b) return;
+  const on = !!(S.cfg && S.cfg.subtitles);
+  b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+}
+var subsAt = 0;                                 // (var: safe even if called before this line ran)
+function renderSubsSoon(){ if(!OVERLAY || subsAt) return; subsAt = requestAnimationFrame(() => { subsAt = 0; renderSubs(); }); }
+function subItems(){
+  // finished lines: the other side always; my own lines only when they were translated
+  const fin = [...S.entries.values()].filter(e => (e.source !== "me" || hasTr(e)) && String(e.text || e.translation || "").trim())
+    .sort((a, b) => a.t0 - b.t0).slice(-2)
+    .map(e => hasTr(e) ? {t: String(e.translation).trim(), tr: true, at: e.t0} : {t: String(e.text || "").trim(), tr: false, at: e.t0});
+  // the sentence still being spoken: its live translation, or what was heard until the translation comes
+  let live = null;
+  S.pend.forEach(p => {
+    const fa = (p.querySelector(".live-fa").textContent || "").trim(), tx = (p.querySelector(".live-text").textContent || "").trim();
+    if(p.dataset.src === "me" && !fa) return;
+    if(!fa && !tx) return;
+    if(!live || +p.dataset.t > live.at) live = fa ? {t: fa, tr: true, at: +p.dataset.t, live: true} : {t: tx, tr: false, at: +p.dataset.t, live: true};
+  });
+  const all = live ? fin.filter(x => x.at < live.at).concat([live]) : fin;
+  return all.slice(-2);
+}
+function renderSubs(){
+  const box = $("#ovSub"); if(!box || !S.cfg || !S.cfg.subtitles) return;
+  const items = subItems();
+  const key = JSON.stringify([!!S.running, items.map(x => [x.t, x.tr, !!x.live])]);
+  if(box.dataset.k === key) return;
+  box.dataset.k = key;
+  box.textContent = "";
+  if(!items.length){
+    const d = document.createElement("div"); d.className = "sub-empty";
+    d.textContent = S.running ? "Subtitles · waiting for speech…" : "Subtitles · they appear here when a meeting runs (Ctrl+Alt+T: back to the answers)";
+    box.append(d); return;
+  }
+  items.forEach((x, i) => {
+    const d = document.createElement("div");
+    d.className = "sl" + (x.tr ? " tr" : " src") + (i < items.length - 1 ? " old" : "") + (x.live ? " live" : "");
+    d.dir = "auto"; if(x.tr){ const ml = myLang(); d.lang = ml.code; }
+    d.textContent = x.t;
+    box.append(d);
+  });
+}
+$("#subBtn").onclick = () => {
+  if(!S.cfg) return;
+  const on = !S.cfg.subtitles;
+  S.cfg.subtitles = on; document.body.classList.toggle("subs", on); renderSubBtn();
+  queueSave({subtitles: on});
+  toast("info", on ? "Subtitles on: only the translation is shown, here and in the overlay." : "Subtitles off.");
+};
 function renderOverlayBtn(){ const b = $("#ovBtn"); if(b) b.classList.toggle("on", !!S.overlay); }
 $("#jobPrepBtn").onclick = () => { closeDrawer(); openJobPrep(); };
 $("#ovBtn").onclick = async () => {
@@ -2116,7 +2195,8 @@ if(OVERLAY){                    // this page is the see-through window: only the
   const box = document.createElement("div"); box.id = "ovBox";
   const oc = document.createElement("div"); oc.id = "ovCoach"; oc.hidden = true;
   const os = document.createElement("div"); os.id = "ovScreen"; os.hidden = true;
-  box.append($("#sayCard"), $("#newQ"), $("#answerBody"), os, oc);
+  const sb = document.createElement("div"); sb.id = "ovSub"; sb.setAttribute("aria-live", "polite");
+  box.append($("#sayCard"), $("#newQ"), $("#answerBody"), os, oc, sb);
   setInterval(() => { if(S.ovScreenUntil && Date.now() > S.ovScreenUntil){ S.ovScreenUntil = 0; os.hidden = true; $("#answerBody").style.display = ""; } }, 1000);
   [...document.body.children].forEach(c => { if(c.tagName !== "SCRIPT") c.style.display = "none"; });
   document.body.prepend(box);
