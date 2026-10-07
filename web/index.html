@@ -210,8 +210,9 @@ button.chip:hover{filter:brightness(.97)}
 .entry.cont.has-play{--rsv:8.2rem}
 .entry.cont.latest:not(.answered){--rsv:14rem}
 .entry.cont.latest:not(.answered).has-play{--rsv:16.6rem}
-.entry.cont .orig{padding-right:var(--rsv)}
-body.subs .entry.cont.has-tr .fa{margin-right:var(--rsv)}    /* subtitle mode: the translation is the first text */
+.entry.cont .orig,.entry.cont.pending .live-text{padding-right:var(--rsv)}
+body.subs .entry.cont.has-tr .fa,body.subs .entry.cont.pending.has-tr .live-fa{margin-right:var(--rsv)}   /* subtitle mode: the translation is the first text */
+.entry.cont.pending{--rsv:0px}        /* (measured below, like every grouped line: exactly the room its shown labels need) */
 .entry.turn-start{margin-top:6px}
 .ctxbar{position:absolute;left:14px;right:22px;z-index:6;background:var(--surface);border:1px solid var(--them);border-inline-start-width:4px;border-radius:12px;box-shadow:var(--shadow-lg);padding:8px 12px;cursor:pointer;max-height:42%;overflow:auto}
 .ctxbar .cx-h{display:flex;align-items:center;gap:8px;font-size:.78rem;font-weight:700;color:var(--them)}
@@ -295,7 +296,17 @@ body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
 #ovCoach .say{display:block;margin-top:3px;color:#eef1f6;font-weight:500}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
 body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · Ctrl+Alt+M: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
-#ovBtn.on,#subBtn.on{color:var(--accent);border-color:var(--accent)}
+#ovBtn.on{color:var(--accent);border-color:var(--accent)}
+#subBtn.on{color:#fff;background:var(--accent);border-color:var(--accent)}
+.modebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 16px 0;padding:9px 14px;border-radius:12px;
+  background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent-text)}
+.modebar[hidden]{display:none}
+.modebar .mb-icon{display:inline-flex}
+.modebar .mb-text{flex:1 1 320px;min-width:0;font-size:.92rem;line-height:1.5}
+.modebar .mb-text span{color:var(--text-2)}
+.note-box{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;margin-bottom:10px;border-radius:10px;background:var(--accent-soft);color:var(--accent-text);font-size:.88rem;line-height:1.5}
+.note-box[hidden]{display:none}
+body.subs #mMe{display:none}
 /* subtitle mode: a line shows only its translation (the original is kept, and shown again when the mode is off) */
 body.subs .entry.has-tr:not([data-editing]) .orig{display:none}
 body.subs .entry.has-tr .fa{font-size:1.08em;margin-top:0}
@@ -876,13 +887,20 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <button class="btn ghost" id="sayBtn" hidden title="Say mode: speak in your language, get the sentence to say in the meeting language. Mute yourself in Teams or Zoom first. (F6, or Ctrl+Alt+J from any program during a meeting)"><span data-icon="speak"></span><span class="hide-sm hide-md" id="sayLabel">Say it</span><kbd class="hide-sm">F6</kbd></button>
     <button class="btn ghost" id="markBtn" hidden title="Mark the latest moment as important — it goes into the summary and the export (F7, or Ctrl+Alt+K from any program during a meeting)"><span data-icon="flag"></span><span class="hide-sm hide-md">Mark</span><kbd class="hide-sm">F7</kbd></button>
     <button class="btn ghost" id="ovBtn" title="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it (Ctrl+Alt+O, even from another program)"><span data-icon="eye"></span><span class="hide-sm">Overlay</span></button>
-    <button class="btn ghost" id="subBtn" aria-pressed="false" title="Subtitles: show only the translation of what is said, like film subtitles — here and in the overlay (Ctrl+Alt+T while the overlay is on)"><span data-icon="text"></span><span class="hide-sm">Subtitles</span></button>
+    <button class="btn ghost" id="subBtn" aria-pressed="false" title="Subtitle mode: for a film, video or audio on this computer. Only its sound is used (not your microphone), only the translation is shown, no answers. Press again for meeting mode. (Ctrl+Alt+T while the overlay is on)"><span data-icon="text"></span><span class="hide-sm" id="subBtnLabel">Subtitles</span></button>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
     <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm">Shift+F9</kbd></button>
     <button class="btn primary" id="startBtn"><span data-icon="play"></span><span id="startLabel">Start</span><kbd class="hide-sm">F9</kbd></button>
   </header>
 
+  <div class="modebar" id="modeBar" hidden role="status">
+    <span class="mb-icon" data-icon="text"></span>
+    <div class="mb-text"><b>Subtitle mode</b> — for a film, video or audio playing on this computer.
+      <span id="mbState"></span></div>
+    <button class="btn sm" id="mbOverlay"><span data-icon="eye"></span><span id="mbOverlayLabel">Show over the video</span></button>
+    <button class="btn sm ghost" id="mbLeave">Back to meeting mode</button>
+  </div>
   <div class="banner" id="banner" hidden></div>
 
   <main class="layout">
@@ -996,6 +1014,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <!-- MEETING -->
     <section class="pane" data-pane="features">
       <div class="help" style="margin-bottom:10px">Turn on only what you use. A part that is off is hidden, sends nothing and needs no service. <b>Speech to text</b> is always on.</div>
+      <div class="note-box" id="featSubsNote" hidden><span data-icon="info"></span><span><b>Subtitle mode is on.</b> Only translation, the overlay and files work now; the other parts are paused. Your choices below are kept and work again when you press <b>Subtitles</b> to go back to meeting mode.</span></div>
       <div class="presets" role="group" aria-label="Ready choices">
         <button class="btn sm" data-preset="text"><span data-icon="text"></span><span>Text only</span></button>
         <button class="btn sm" data-preset="translate"><span data-icon="globe"></span><span>Text + translation</span></button>
@@ -1331,7 +1350,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <label for="fOvT" style="margin-top:8px">Overlay: how strong the words are <b id="ovTVal">85%</b></label>
         <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="60" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
-        <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Subtitles: only the translation</b><span>Like film subtitles: each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom (no answers). A line that is not translated (for example it is already in your language) shows what was said. Also the Subtitles button, or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
+        <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Subtitle mode (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. Also the Subtitles button, or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
         <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd> (drag it with the mouse, press again to lock), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> with the arrows; <kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller.</div>
       </div>
@@ -1695,7 +1714,10 @@ const FEATS = [
   ["detect", "Meeting reminder", "When a Zoom, Teams or Google Meet meeting opens, the program offers to start.", []],
 ];
 const PRESETS = {text: {files: true, marks: true, detect: true}, translate: {translate: true, files: true, marks: true, detect: true}, all: null};   // null = everything on
-const featOn = k => !S.cfg || !S.cfg.features || S.cfg.features[k] !== false;
+const userFeatOn = k => !S.cfg || !S.cfg.features || S.cfg.features[k] !== false;      // the user's own choice
+const SUBS_KEEP = ["translate", "overlay", "files"];
+// what is on right now: subtitle mode (a film or video) pauses everything but translation, the overlay and files
+const featOn = k => S.cfg && S.cfg.subtitles ? (k === "translate" || (SUBS_KEEP.includes(k) && userFeatOn(k))) : userFeatOn(k);
 function featNeed(tasks){                                    // the services a part needs, as one short line
   const st = (S.cfg && S.cfg.tasks) || {};
   const bad = tasks.filter(t => st[t] && !st[t].ok);
@@ -1706,12 +1728,13 @@ function featNeed(tasks){                                    // the services a p
 }
 function renderFeatures(){
   const box = $("#featList"); if(!box || !S.cfg) return;
-  box.innerHTML = FEATS.map(([k, name, what, tasks]) => `<label class="feat"><span class="ft"><b>${esc(name)}</b><span>${esc(what)}</span>${featOn(k) ? featNeed(tasks) : ""}</span>
-    <span class="toggle"><input type="checkbox" data-feat="${k}" ${featOn(k) ? "checked" : ""}><span class="switch"></span></span></label>`).join("");
+  $("#featSubsNote").hidden = !S.cfg.subtitles;
+  box.innerHTML = FEATS.map(([k, name, what, tasks]) => `<label class="feat"><span class="ft"><b>${esc(name)}</b><span>${esc(what)}</span>${userFeatOn(k) ? featNeed(tasks) : ""}</span>
+    <span class="toggle"><input type="checkbox" data-feat="${k}" ${userFeatOn(k) ? "checked" : ""}><span class="switch"></span></span></label>`).join("");
   paintIcons();
   box.querySelectorAll("[data-feat]").forEach(cb => cb.onchange = () => setFeatures({[cb.dataset.feat]: cb.checked}));
   box.querySelectorAll("[data-goto]").forEach(b => b.onclick = ev => { ev.preventDefault(); selectTab(b.dataset.goto); });
-  const cur = FEATS.map(([k]) => featOn(k));
+  const cur = FEATS.map(([k]) => userFeatOn(k));
   $$("[data-preset]").forEach(b => { const p = PRESETS[b.dataset.preset];
     b.classList.toggle("on", FEATS.every(([k], i) => cur[i] === (p === null ? true : !!p[k]))); });
 }
@@ -1731,6 +1754,7 @@ $$("[data-preset]").forEach(b => b.onclick = () => {
 });
 function applyFeatures(){
   for(const [k] of FEATS) document.body.classList.toggle("f-" + k + "-off", !featOn(k));
+  fitSoon(true);
   const coachShown = featOn("coach") && S.cfg?.coach;
   document.body.classList.toggle("f-panel-off", !featOn("answers") && !coachShown && !featOn("say") && !featOn("notes"));
   const ct = document.querySelector(".coach-title"); if(ct) ct.textContent = coachShown ? "Coach" : featOn("say") ? "Say it" : "My notes";
@@ -1753,7 +1777,7 @@ function applyConfig(){
   t.innerHTML = topic1 ? esc(topic1) : `No meeting topic yet · <button id="addTopic">Add one</button>`;
   t.title = c.context || "";
   const at = $("#addTopic"); if(at) at.onclick = () => openDrawer("meeting");
-  $("#legend").innerHTML = `<span title="${esc(label("them"))}: computer sound (the other side)"><i style="background:var(--them)"></i>${esc(label("them"))}</span><span title="${esc(label("me"))}: your microphone"><i style="background:var(--me)"></i>${esc(label("me"))}</span>`;
+  $("#legend").innerHTML = `<span title="${esc(label("them"))}: computer sound (the other side)"><i style="background:var(--them)"></i>${esc(label("them"))}</span>` + (c.subtitles ? "" : `<span title="${esc(label("me"))}: your microphone"><i style="background:var(--me)"></i>${esc(label("me"))}</span>`);   // (subtitle mode: no microphone)
   $("#keyDot").hidden = c.ready !== false;
   $("#testBadge").hidden = !c.answer_me;
   $("#mMe").querySelector(".meter-label").textContent = label("me");
@@ -1762,11 +1786,12 @@ function applyConfig(){
   S.entries.forEach(e => { const el=document.getElementById("e"+e.id); if(el) fillEntry(el, e); });
   S.pend.forEach(p => { p.querySelector(".who").textContent = label(p.dataset.src); p.querySelector(".avatar").textContent = initials(label(p.dataset.src)); });
   renderEmpty(); renderAnswer();
+  renderRunning(); renderTitle();                    // the Start button and the title say which mode this is
 }
 
 /* ---------- running state ---------- */
 function renderRunning(){
-  renderSubsSoon();
+  renderSubsSoon(); renderModeBar();
   const pill = $("#statusPill"), txt = $("#statusText"), btn = $("#startBtn");
   pill.className = "pill";
   const recOn = recActive(), prob = S.running ? liveProblem() : "";
@@ -1780,7 +1805,7 @@ function renderRunning(){
   else { txt.textContent = "Ready"; }
   btn.className = "btn " + (S.running ? "stop" : "primary");
   btn.querySelector("[data-icon]").innerHTML = icon(S.running ? "stop" : "play");
-  $("#startLabel").textContent = S.running ? "Stop" : "Start";
+  $("#startLabel").textContent = S.running ? "Stop" : (S.cfg && S.cfg.subtitles ? "Start subtitles" : "Start");
   btn.disabled = S.stopping || S.busy || recOn;
   const rb = $("#resumeBtn"), ri = S.resume;
   rb.hidden = !ri || S.running || S.stopping || recOn;
@@ -1852,7 +1877,35 @@ feed.addEventListener("scroll", () => { if(nearBottom()) $("#jump").hidden = tru
 $("#jump").onclick = () => { feed.scrollTop = feed.scrollHeight; $("#jump").hidden = true; };
 
 /* ---------- conversation flow: turns and the "last thing they said" bar ---------- */
+/* A grouped line has its buttons (or "speaking… LIVE") at the top right, over the first line of text. The text keeps
+   exactly the room of what is shown there (which depends on the line, the parts that are on, after the meeting …),
+   measured once per change of state, not on every word. */
+var fitVer = 0, fitAt = 0;                          // (var: safe if called before this line ran)
+function fitSoon(all){ if(all) fitVer++; if(OVERLAY || fitAt) return; fitAt = requestAnimationFrame(() => { fitAt = 0; fitRooms(); }); }
+function fitRooms(){
+  const bodyKey = fitVer + "|" + document.body.className;
+  for(const el of list.children){
+    if(!el.classList || !el.classList.contains("entry")) continue;
+    const latest = el.classList.contains("latest"), pend = el.classList.contains("pending");
+    const key = bodyKey + "|" + el.className + "|" + (pend ? (el.querySelector(".state").textContent + el.querySelector(".mode").textContent) : "");
+    if(el._fitKey === key) continue;
+    el._fitKey = key;
+    if(!el.classList.contains("cont")){ el.style.removeProperty("--rsv"); continue; }
+    const meta = el.querySelector(".meta"), body = el.querySelector(".body");
+    const shown = [...meta.children].filter(b => {
+      if(b.hidden || getComputedStyle(b).display === "none") return false;
+      if(pend) return b.classList.contains("state") || b.classList.contains("mode");
+      if(b.tagName !== "BUTTON") return false;
+      return b.classList.contains("mark") || b.classList.contains("play") ||
+             (latest && (b.classList.contains("edit") || (b.classList.contains("act") && !el.classList.contains("answered"))));
+    }).filter(b => b.getBoundingClientRect().width > 0);
+    const left = shown.length ? Math.min(...shown.map(b => b.getBoundingClientRect().left)) : 0;
+    const room = shown.length ? Math.max(0, Math.ceil(body.getBoundingClientRect().right - left + 6)) : 0;
+    el.style.setProperty("--rsv", room + "px");
+  }
+}
 function groupTurns(){
+  fitSoon();
   let prev = null;
   for(const el of list.children){
     if(!el.classList || !el.classList.contains("entry")) continue;
@@ -1944,7 +1997,7 @@ function onSpeaking(m){
     p.querySelector(".mode").innerHTML = `<span class="live-tag" title="${m.live ? "Written while they speak" : "Updated every " + (S.speechMode?.every || 2) + " s while they speak — the final text comes when they pause"}">live</span>`;
   }
   if(m.translation != null) keepBottom(() => { p.querySelector(".live-fa").textContent = m.translation; p.classList.toggle("has-tr", !!m.translation.trim()); }, false);
-  renderSubsSoon();
+  renderSubsSoon(); fitSoon();
 }
 setInterval(() => { const now = Date.now(); let gone = false;
   S.pend.forEach((p, k) => { if(now - +p.dataset.born > 330000){ p.remove(); S.pend.delete(k); gone = true; } });
@@ -1972,7 +2025,7 @@ function entryShell(e){
 const PLAY = {audio: null, stopAt: 0, btn: null, seq: 0};
 function setPlayLabel(b, on){ if(b){ b.title = on ? "Stop" : "Play this line"; b.setAttribute("aria-label", b.title); } }
 function canPlay(e){ return !S.running && !!S.hasAudio && !!e.t_end; }        // only when this meeting really has its sound
-function refreshPlay(){ S.entries.forEach(e => { const el = document.getElementById("e" + e.id); const b = el && el.querySelector(".play"); if(b){ b.hidden = !canPlay(e); el.classList.toggle("has-play", !b.hidden); } }); }
+function refreshPlay(){ S.entries.forEach(e => { const el = document.getElementById("e" + e.id); const b = el && el.querySelector(".play"); if(b){ b.hidden = !canPlay(e); el.classList.toggle("has-play", !b.hidden); } }); fitSoon(); }
 async function playLine(id, btn){
   if(PLAY.btn === btn && PLAY.audio && (!PLAY.audio.paused || PLAY.loading)){ stopPlay(); return; }   // a second click stops
   const seq = ++PLAY.seq;                     // a later click wins over an older answer still on its way
@@ -2062,7 +2115,7 @@ function replayEntries(list){
 let housekeepAt = 0;
 function housekeepSoon(){                                  // a streaming word does not need the whole page re-checked
   if(housekeepAt) return;
-  housekeepAt = requestAnimationFrame(() => { housekeepAt = 0; markLatest(); groupTurns(); updateCtx(); updateNav(); });
+  housekeepAt = requestAnimationFrame(() => { housekeepAt = 0; markLatest(); groupTurns(); updateCtx(); updateNav(); fitSoon(); });
 }
 function upsertEntry(e, silent, batch){
   S.entries.set(e.id, e);
@@ -2137,6 +2190,29 @@ function renderSubBtn(){
   const b = $("#subBtn"); if(!b) return;
   const on = !!(S.cfg && S.cfg.subtitles);
   b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+  $("#subBtnLabel").textContent = on ? "Subtitles: on" : "Subtitles";
+  renderModeBar();
+}
+function renderModeBar(){
+  const bar = $("#modeBar"); if(!bar || OVERLAY) return;
+  const on = !!(S.cfg && S.cfg.subtitles);
+  bar.hidden = !on; if(!on) return;
+  const ml = myLang().name;
+  $("#mbState").textContent = S.running
+    ? `Listening only to the computer's sound (not your microphone) and showing the ${ml} translation.`
+    : `Press Start subtitles, then play it. Only the computer's sound is used (not your microphone); you see only the ${ml} translation.`;
+  const ob = $("#mbOverlay"); ob.hidden = !featOn("overlay");
+  $("#mbOverlayLabel").textContent = S.overlay ? "Overlay is on" : "Show over the video";
+}
+$("#mbLeave").onclick = () => setSubtitles(false);
+$("#mbOverlay").onclick = () => { if(!S.overlay) $("#ovBtn").click(); };
+function setSubtitles(on){
+  if(!S.cfg) return;
+  S.cfg.subtitles = on; document.body.classList.toggle("subs", on);
+  applyConfig();
+  queueSave({subtitles: on});
+  toast("info", on ? "Subtitle mode: only the computer's sound (the video) is used and only the translation is shown." + (S.running ? " Your microphone is no longer written down." : "")
+                   : "Meeting mode again: your microphone, answers and the other parts work as before.");
 }
 var subsAt = 0;                                 // (var: safe even if called before this line ran)
 function renderSubsSoon(){ if(!OVERLAY || subsAt) return; subsAt = requestAnimationFrame(() => { subsAt = 0; renderSubs(); }); }
@@ -2165,7 +2241,7 @@ function renderSubs(){
   box.textContent = "";
   if(!items.length){
     const d = document.createElement("div"); d.className = "sub-empty";
-    d.textContent = S.running ? "Subtitles · waiting for speech…" : "Subtitles · they appear here when a meeting runs (Ctrl+Alt+T: back to the answers)";
+    d.textContent = S.running ? "Subtitles · waiting for the video's sound…" : "Subtitles · press Start subtitles, then play the video (Ctrl+Alt+T: back to meeting mode)";
     box.append(d); return;
   }
   items.forEach((x, i) => {
@@ -2176,14 +2252,8 @@ function renderSubs(){
     box.append(d);
   });
 }
-$("#subBtn").onclick = () => {
-  if(!S.cfg) return;
-  const on = !S.cfg.subtitles;
-  S.cfg.subtitles = on; document.body.classList.toggle("subs", on); renderSubBtn();
-  queueSave({subtitles: on});
-  toast("info", on ? "Subtitles on: only the translation is shown, here and in the overlay." : "Subtitles off.");
-};
-function renderOverlayBtn(){ const b = $("#ovBtn"); if(b) b.classList.toggle("on", !!S.overlay); }
+$("#subBtn").onclick = () => { if(S.cfg) setSubtitles(!S.cfg.subtitles); };
+function renderOverlayBtn(){ const b = $("#ovBtn"); if(b) b.classList.toggle("on", !!S.overlay); renderModeBar(); }
 $("#jobPrepBtn").onclick = () => { closeDrawer(); openJobPrep(); };
 $("#ovBtn").onclick = async () => {
   const r = await api("overlay", {});
@@ -2408,6 +2478,16 @@ function renderEmpty(){
         : `<h3>Reading the recording…</h3><p>Lines and their ${esc(myLang().name)} translation appear here as the file is transcribed.${S.rec?.speakers ? " Speaker names are added after all lines are written." : ""}</p>`}</div>`;
     return;
   }
+  if(S.cfg.subtitles){
+    box.innerHTML = S.running
+      ? `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><h3>Listening to the computer's sound…</h3><p>Play the film, video or audio. Each sentence appears here in ${esc(myLang().name)} as soon as it is spoken.</p></div>`
+      : `<div class="empty-card"><div class="empty-icon">${icon("text")}</div><h3>Subtitle mode</h3>
+         <p>1. Press <b>Start subtitles</b>.<br>2. Play the film, video or audio on this computer.<br>3. The ${esc(myLang().name)} translation appears here — or over the video with <b>Show over the video</b>.</p>
+         <p class="help">Your microphone is not used. To go back to meetings, press <b>Subtitles</b> again.</p>
+         <div class="empty-actions"><button class="btn primary lg" id="bigStart">${icon("play")}Start subtitles<kbd>F9</kbd></button></div></div>`;
+    const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
+    return;
+  }
   if(S.running){
     box.innerHTML = `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
       <h3>Listening…</h3><p>Lines appear here as soon as someone finishes a sentence.${featOn("translate") ? ` The ${esc(myLang().name)} translation follows right away.` : ""}${featOn("answers") ? " Suggested answers appear in the panel." : ""}</p></div>`;
@@ -2540,7 +2620,7 @@ $("#ansNext").onclick = () => stepAnswer(1);
 
 /* ---------- title, pause ---------- */
 function renderTitle(){
-  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : "Live transcript";
+  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : (S.cfg && S.cfg.subtitles ? "Subtitles" : "Live transcript");
 }
 async function togglePause(){
   if(!S.running || S.pausing) return;

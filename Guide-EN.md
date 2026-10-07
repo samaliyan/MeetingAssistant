@@ -1,11 +1,20 @@
-# Meeting Assistant — User Guide (version 6.25)
+# Meeting Assistant — User Guide (version 6.26)
 
-## Version 6.25: subtitles
+## Version 6.26: subtitle mode (film, video, audio)
 
-- **Subtitles (only the translation)**: press the **Subtitles** button at the top. Each line shows only its translation, like film subtitles. The see-through window (overlay) shows the last two lines in large letters at the bottom instead of the answer; a sentence still being spoken is translated there as it comes.
-- Turn it on and off any time: the same button, **Ctrl+Alt+T** while the overlay is on, or Setup › Display › **Subtitles: only the translation**.
-- A line that is not translated (for example it is already in your language) shows what was said. The original is kept: it comes back when subtitles are off, and it is in the meeting file.
-- To also get no suggested answers: Setup › Features › **Text + translation**.
+For a film, video or audio playing on this computer, when you want its translation like subtitles.
+
+1. Press **Subtitles** at the top. The button turns solid and says **Subtitles: on**, and a blue bar at the top says you are in subtitle mode.
+2. Press **Start subtitles**.
+3. Play the film or video. Each sentence's translation appears in the window. To see the subtitles over the video itself, press **Show over the video** in the blue bar.
+4. To go back to meetings, press **Back to meeting mode** in the blue bar (or **Subtitles** again).
+
+In subtitle mode:
+- Only the computer's sound (the video) is heard. **Your microphone is not used** and what you say is not written.
+- Only the translation is shown. A sentence that is not translated (for example it is already in your language) shows what was said.
+- Suggested answers, the coach, screen reading and the other meeting helpers are paused. Your choices in Setup › Features are not changed and work again in meeting mode.
+- The translator knows the lines are dialogue from a film or video and writes short, natural subtitles.
+- You can switch during playback too; while the overlay is on, with **Ctrl+Alt+T**.
 
 ## Version 6.19: eight new helpers
 

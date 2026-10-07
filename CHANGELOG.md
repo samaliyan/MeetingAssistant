@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.26]
+
+**Subtitles is now a real mode for films, videos and audio — not only a different look.** Press **Subtitles** (it turns solid: **Subtitles: on**) and the program works for something playing on this computer instead of a meeting:
+
+- **Only the computer's sound** is heard. Your microphone is not used and what you say is not written (switching during a session reopens the sound at once, without the microphone; switching back takes it again).
+- **Only the translation** is shown, in the window and in large letters at the bottom of the overlay. The translator is told the lines are film or video dialogue, so it writes short, natural subtitles.
+- Answers, coach, screen reading, notes, marks, "say it in my language", the meeting reminder and the after-meeting summary are **paused**, so Start needs only speech to text and translation. Your choices in Setup › Features are not changed: they work again when you go back. The Features tab says so while subtitle mode is on.
+- **You always see which mode you are in:** a blue bar at the top ("Subtitle mode — for a film, video or audio playing on this computer…") with **Show over the video** and **Back to meeting mode**; the Start button says **Start subtitles**; the empty screen gives the three steps; the title says **Subtitles**; the "Me" microphone meter and legend are hidden.
+
+**The buttons of a line never cover its text** (also the "speaking… LIVE" label of a sentence still being spoken). The room is now measured from the buttons that are really shown on each line, so it is right in every mode and with any parts turned off. 146 automated tests.
+
 ## [6.25]
 
 **Subtitles: only the translation, like film subtitles.** A new **Subtitles** button (also Setup › Display, and **Ctrl+Alt+T** while the overlay is on) turns it on and off at any time. In the window, each line shows only its translation; a line that is not translated (for example it is already in your language) shows what was said, and the original comes back when the mode is off (it is always kept in the meeting file). The see-through window (overlay) then shows the last two lines in large letters at the bottom instead of the answer, and the sentence still being spoken appears there as soon as its translation comes. To have no suggested answers at all, use Setup › Features › Text + translation.
