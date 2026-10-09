@@ -58,13 +58,20 @@ def inside(name, out, step, feed=None):
     try:
         with sync_playwright() as pw:
             br = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP + 1}", timeout=15000)   # the overlay's own port
-            pages = [pg for c in br.contexts for pg in c.pages]
-            ov = next((pg for pg in pages if "overlay=1" in pg.url), None)
+            t0 = time.time()
+            ov, pages = None, []
+            while time.time() - t0 < 20:                    # on a slow machine the page may still be on its way
+                pages = [pg for c in br.contexts for pg in c.pages]
+                ov = next((pg for pg in pages if "overlay=1" in pg.url), None)
+                if ov is not None:
+                    break
+                time.sleep(0.5)
             if ov is None:
-                return {"error": "overlay page not found among " + ", ".join(pg.url for pg in pages)}
+                return {"error": "overlay page not found in 20 s among " + ", ".join(pg.url for pg in pages)}
+            ov.wait_for_function("() => typeof S !== 'undefined' && !!S.cfg", timeout=15000)
             errs = []
             ov.on("pageerror", lambda e: errs.append(str(e)))
-            res = {"url": ov.url}
+            res = {"url": ov.url, "page_after": round(time.time() - t0, 1)}
             if feed:
                 res["fed"] = ov.evaluate(feed)
                 ov.wait_for_timeout(800)

@@ -22,7 +22,7 @@ import time
 import urllib.request
 from ctypes import wintypes as wt
 
-RUNS = 3
+RUNS = int(os.environ.get("MA_STARTUP_RUNS") or 3)
 TMP = tempfile.gettempdir()
 u = ctypes.windll.user32
 PROTO = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
@@ -76,6 +76,25 @@ def why_still_running(data, port, key):
         out.append("pages connected: " + json.dumps(res)[:300])
     except Exception as e:
         out.append("pages connected: no answer (" + str(e)[:80] + ")")
+    pids = []
+    for pid_s in subprocess.run(["powershell", "-NoProfile", "-Command",
+                                 "(Get-Process MeetingAssistant -ErrorAction SilentlyContinue).Id"],
+                                capture_output=True, text=True, timeout=60).stdout.split():
+        pids.append(int(pid_s))
+    for pid in pids:                                         # every top-level window of the program, shown or not
+        wins = []
+
+        def cb(hwnd, _lp, pid=pid, wins=wins):
+            p = wt.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+            if p.value == pid:
+                buf = ctypes.create_unicode_buffer(120)
+                u.GetWindowTextW(hwnd, buf, 120)
+                if buf.value or u.IsWindowVisible(hwnd):
+                    wins.append(f"{'visible' if u.IsWindowVisible(hwnd) else 'hidden'} '{buf.value}'")
+            return True
+        u.EnumWindows(PROTO(cb), 0)
+        out.append(f"windows of {pid}: " + (", ".join(wins[:8]) or "none"))
     ps = subprocess.run(["powershell", "-NoProfile", "-Command",
                          "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'MeetingAssistant|msedgewebview2' } | "
                          "ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)\" }"],
@@ -89,7 +108,8 @@ def kill_all():
     time.sleep(2)
 
 
-def run_once(exe):
+def run_once(exe, early_close=False):
+    """early_close: the window is closed the moment it appears (its page may still be loading)."""
     r = {"port": None, "window": None, "unpacked": None, "overlay": None, "exit": None, "left_temp": None, "error": "", "why": None}
     work = tempfile.mkdtemp(prefix="ma_start_")
     dst = os.path.join(work, "MeetingAssistant.exe")
@@ -125,17 +145,18 @@ def run_once(exe):
                 r["error"] = "the window did not open in 150 s"
             return r
         port, key = open(os.path.join(data, ".port"), encoding="utf-8").read().split()[:2]
-        # the see-through window (overlay): opened and closed through the program's own API
-        try:
-            t1 = time.perf_counter()
-            res = call(port, key, "overlay", {"on": True})
-            if res.get("ok") and res.get("on"):
-                r["overlay"] = time.perf_counter() - t1
-            else:
-                r["error"] = "overlay: " + str(res.get("error"))[:160]
-            call(port, key, "overlay", {"on": False})
-        except Exception as e:
-            r["error"] = "overlay: " + str(e)[:160]
+        if not early_close:
+            # the see-through window (overlay): opened and closed through the program's own API
+            try:
+                t1 = time.perf_counter()
+                res = call(port, key, "overlay", {"on": True})
+                if res.get("ok") and res.get("on"):
+                    r["overlay"] = time.perf_counter() - t1
+                else:
+                    r["error"] = "overlay: " + str(res.get("error"))[:160]
+                call(port, key, "overlay", {"on": False})
+            except Exception as e:
+                r["error"] = "overlay: " + str(e)[:160]
         # close the window like a user: the program must then quit by itself and clean its temp folder
         st = read_json(os.path.join(data, ".hide.json")) or {}
         pid = int(st.get("pid") or 0)
@@ -199,6 +220,17 @@ def main():
                  )
             if r.get("why") and label == "NEW":
                 note(f"run {i + 1} NEW, why it is still running:\n" + "\n".join(r["why"]))
+    # closed at once, while its page may still be loading: it must quit by itself too (before 6.29 it could wait
+    # for that page for ever, invisible)
+    early = {label: [] for label, _ in exes}
+    for i in range(2):
+        for label, exe in exes:
+            r = run_once(exe, early_close=True)
+            early[label].append(r)
+            note(f"closed at once {i + 1} {label}: window after {fmt(r['window'])}, quit {fmt(r['exit'])} after closing, "
+                 f"temp folders left {fmt(r['left_temp'], '')}" + (f"  !! {r['error']}" if r["error"] else ""))
+            if r.get("why") and label == "NEW":
+                note(f"closed at once {i + 1} NEW, why it is still running:\n" + "\n".join(r["why"]))
     print("\nmedian of the runs:")
     for label, _ in exes:
         rs = results[label]
@@ -212,6 +244,8 @@ def main():
         fails.append("the new exe did not open its hidden window every time")
     if not all(r["exit"] is not None for r in new):
         fails.append("the new exe did not quit cleanly after its window was closed")
+    if not all(r["exit"] is not None for r in early["NEW"]):
+        fails.append("the new exe did not quit when its window was closed at once")
     if any(r["left_temp"] for r in new):
         fails.append("the new exe left its temp folder behind")
     old = results.get("OLD")

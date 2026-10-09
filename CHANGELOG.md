@@ -2,6 +2,10 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.29]
+
+**Fixed: the program could stay running, invisible, after its window was closed.** Found by the new Windows check: when the window was closed before its page had finished loading (on a slow computer the first start can take several seconds), the program waited for that page for ever — it never quit, kept its port, and the window process could hang too. Now the program also quits 12 s after its window's process has ended, and the window process ends at the latest 10 s after its window is closed. The Windows check now closes the window at once, while it is still loading, and requires the program to quit by itself. 153 automated tests.
+
 ## [6.28]
 
 **A new mode: In person — someone in front of you, or a phone on speaker.** At the top there is now a switch with three modes: **Meeting** (Teams, Zoom, Meet: the computer's sound is the other side, the microphone is you), **In person** and **Video** (the subtitle mode of 6.26). In person:
