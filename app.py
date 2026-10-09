@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.27"
+VERSION = "6.28"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -226,8 +226,10 @@ DEFAULTS = {
     "answer_size": 24,           # px
     "overlay_alpha": 65,         # % how solid the see-through answer window is (30..100)
     "overlay_text": 85,          # % how strong the words in it are (30..100)
-    "subtitles": False,          # subtitle mode: a film / video / audio on this computer -> only its translation, like
-                                 # film subtitles; the microphone is not used; answers, coach and the like are paused
+    "subtitles": False,          # = work_mode "video" (kept for the older settings, the Subtitles switch and Ctrl+Alt+T)
+    "work_mode": "meeting",      # meeting: online call (computer sound = them, microphone = me)
+                                 # inperson: someone in front of me / a phone on speaker (only the microphone; voices told apart)
+                                 # video: a film / video on this computer (only its sound, only its translation)
     "overlay_hide": True,        # hide the see-through window from screen sharing
     "overlay_pos": "top",        # top | bottom of the screen
     # other services (OpenAI-compatible) and which service does what
@@ -296,18 +298,34 @@ SUBS_KEEP = ("translate", "overlay", "files")      # the parts that work in subt
 def feat(cfg, name):
     """Is this part of the program turned on? (Everything is on unless the user turned it off.)
     Subtitle mode (a film or video, not a meeting) pauses every part except translation, the overlay and files;
-    the user's own on / off choices are kept and apply again when subtitle mode is turned off."""
+    in-person mode pauses "say it in my language" (the microphone hears everyone there).
+    The user's own on / off choices are kept and apply again in the other modes."""
     if cfg.get("subtitles"):
         if name == "translate":
             return True
         if name not in SUBS_KEEP:
             return False
+    if cfg.get("work_mode") == "inperson" and name == "say":
+        return False
     return bool((cfg.get("features") or {}).get(name, True))
 
 
 def use_mic(cfg):
-    """Is the user's microphone written down? Not in subtitle mode: only the computer's sound (the video) is heard."""
-    return bool(cfg.get("transcribe_me")) and not cfg.get("subtitles")
+    """Is the microphone heard? Meeting: if 'Transcribe my voice' is on. In person: always (everyone is heard through
+    it). Video: never (only the computer's sound)."""
+    mode = cfg.get("work_mode") or ("video" if cfg.get("subtitles") else "meeting")
+    if mode == "video":
+        return False
+    return True if mode == "inperson" else bool(cfg.get("transcribe_me"))
+
+
+def use_loop(cfg):
+    """Is the computer's sound heard? Not in person: there the other person is in the room or on a phone speaker."""
+    return (cfg.get("work_mode") or "meeting") != "inperson"
+
+
+def in_person(cfg):
+    return cfg.get("work_mode") == "inperson"
 
 
 def coach_on(cfg):
@@ -377,6 +395,7 @@ MODES = {
 CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
            "about_source": ("text", "file"), "overlay_pos": ("top", "bottom"), "meeting_mode": tuple(MODES),
+           "work_mode": ("meeting", "inperson", "video"),
            "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
 RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100), "overlay_text": (30, 100),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
@@ -650,6 +669,9 @@ def sanitize(cfg):
             if k in CHOICES and v not in CHOICES[k]:
                 v = default
         out[k] = v
+    if "work_mode" not in cfg and out["subtitles"]:
+        out["work_mode"] = "video"                     # a settings file from before the modes
+    out["subtitles"] = out["work_mode"] == "video"
     out["providers"] = clean_providers(cfg.get("providers"))
     out["languages"] = clean_langs(cfg.get("languages"))
     if out["my_language"] not in LANGS:
@@ -7790,7 +7812,7 @@ class Engine:
         local = self.local_preview_on()
         if spec and (not local or (not fixed_lang(self.cfg) and self.lang_sure < 2)):
             return
-        if source != "them" or not (local or self.cfg["live_preview"]) or self.live_mode(source):
+        if source != ("me" if in_person(self.cfg) else "them") or not (local or self.cfg["live_preview"]) or self.live_mode(source):
             return
         with self.pv_lock:
             if seg_id in self.done_segs:
@@ -7920,8 +7942,8 @@ class Engine:
 
     def _preview_translate(self, key, source, text, min_new=3):
         """Translation of the unfinished sentence - refreshed whenever a few new words arrived."""
-        if source != "them" and not (self.cfg["translate_me"] or self.cfg["answer_me"]):
-            return
+        if source != "them" and not in_person(self.cfg) and not (self.cfg["translate_me"] or self.cfg["answer_me"]):
+            return          # (in person the microphone hears the other person too: who it was is known at the end)
         if not feat(self.cfg, "translate"):
             return
         if fixed_lang(self.cfg) == self.cfg["my_language"]:
@@ -7987,7 +8009,10 @@ class Engine:
             elif kind in ("segment", "discard"):
                 self._mark_done([seg_id])
             return
-        if source == "me" and kind in ("start", "preview", "segment"):
+        person = in_person(self.cfg) and source == "me" and not self.file_mode
+        if person and kind == "segment" and not self.paused and getattr(self.app, "voices", None) is not None:
+            self.app.voices.add_segment(seg_id, kw["audio"], kw["t0"], kw["t_end"])   # who said it: decided beside
+        if source == "me" and kind in ("start", "preview", "segment") and not person:
             self.me_voice_at = time.time()                   # the user is speaking (before any text exists)
         if self.live_mode(source):
             if kind == "segment" and not self.paused:        # kept for a while: if the live service fails,
@@ -8025,8 +8050,12 @@ class Engine:
                     and self.cfg["stt_provider"] == "local" and st.get("covered", 0) >= kw["dur"] - 0.3
                     and (fixed_lang(self.cfg) or self.lang_sure >= 2)):
                 # the last live update already heard the whole sentence: it IS the final text (no waiting)
-                return self.accept_text(source, st["text"], self.lang_guess, kw["t0"], kw["t_end"], [seg_id],
-                                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "local", "model": "live"})
+                args = (source, st["text"], self.lang_guess, kw["t0"], kw["t_end"], [seg_id],
+                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "local", "model": "live"})
+                if person:                                   # (who said it is still being decided: not on the sound thread)
+                    threading.Thread(target=self.accept_text, args=args, daemon=True).start()
+                    return
+                return self.accept_text(*args)
             self.hub.publish("speaking", seg=seg_id, source=source, t0=kw["t0"], phase="transcribing")
             job = {"segs": [seg_id], "source": source, "audio": kw["audio"], "t0": kw["t0"],
                    "t_end": kw["t_end"], "dur": kw["dur"], "tries": 0, "t_queued": time.time()}
@@ -8042,6 +8071,8 @@ class Engine:
     def stt_targets(self, source):
         """(service, model) pairs for speech-to-text, in order of preference."""
         c = self.cfg
+        if source == "me" and in_person(c):
+            source = "them"                                # in person the microphone also hears the other person
         pid, model = c["stt_provider"], c["stt_model"]
         out = []
         prov = self.app.provider(pid)
@@ -8318,6 +8349,11 @@ class Engine:
 
     def accept_text(self, source, text, lang, t0, t_end, segs, timing, speaker=None):
         """A finished sentence (from any service): show it, translate it, maybe answer it."""
+        voices = getattr(self.app, "voices", None)
+        if source == "me" and in_person(self.cfg) and not self.file_mode and voices is not None:
+            source, speaker = voices.who(t0, t_end, segs)   # in person: me, or which of the others
+            if source == "me":
+                self.me_voice_at = time.time()
         job = {"source": source, "t0": t0, "t_end": t_end, "segs": segs}
         self._mark_done(segs)
         for s_ in segs:
@@ -9677,6 +9713,231 @@ def speakers_for_rows(rows, audio_iter, base, prints, k=0, cancel=None, progress
 _file_seg_ids = itertools.count(10_000_000)
 
 
+# ---- in-person mode: who is speaking into the one microphone (live; voice prints on this computer) ----------------
+VOICE_PATH = os.path.join(DATA_DIR, "voiceprint.json")
+ME_SAME = 0.50           # likeness to my voice print above which a sentence is mine
+OTHER_SAME = 0.45        # likeness to a known other voice above which it is that person again
+MAX_OTHERS = 6
+
+
+def voice_model_path():
+    return os.path.join(MODELS_DIR, SPK_MODEL["id"], SPK_MODEL["file"])
+
+
+class VoiceID:
+    """In-person mode: one microphone hears me and the others. Every sentence gets a voice print and is decided:
+    1. it was said while I held the key (Right Ctrl, or the on-screen button)  -> me (and my print learns from it);
+    2. it is like my voice print                                                 -> me;
+    3. otherwise another person: the same as an earlier voice, or a new one     -> Person 1, Person 2 ...
+    My print is learned once (10 s, Setup › Audio), from the key, and from every correction on a line."""
+
+    def __init__(self, path=None, prints=None):
+        self.path = path or VOICE_PATH
+        self.lock = threading.RLock()
+        self._prints = prints                   # (tests give their own); else loaded on first use
+        self.model_error = ""
+        self.me, self.me_n = None, 0
+        self.others = []                        # [[centroid, count], ...] for this session
+        self.segs = {}                          # seg id -> decision record
+        self.recent = collections.deque(maxlen=300)
+        self.holds = collections.deque(maxlen=300)   # [start, end or None] while I hold the key
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voices")
+        self._load()
+
+    # -- my voice print, kept between sessions --
+    def _load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            v = np.asarray(d.get("print") or [], dtype=np.float32)
+            if v.size >= 64 and np.isfinite(v).all() and np.linalg.norm(v) > 0:
+                self.me, self.me_n = v / np.linalg.norm(v), int(d.get("n") or 1)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save(self):
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"print": [round(float(x), 6) for x in self.me], "n": self.me_n, "t": time.time()}, f)
+            os.replace(tmp, self.path)
+        except (OSError, TypeError):
+            pass
+
+    def learned(self):
+        return self.me is not None
+
+    def forget(self):
+        with self.lock:
+            self.me, self.me_n = None, 0
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+
+    def learn_me(self, e, weight=None):
+        if e is None:
+            return
+        with self.lock:
+            if self.me is None:
+                self.me, self.me_n = e.copy(), 1
+            else:
+                w = weight if weight is not None else max(0.05, 1.0 / (self.me_n + 1))
+                v = (1 - w) * self.me + w * e
+                self.me, self.me_n = v / max(1e-9, float(np.linalg.norm(v))), self.me_n + 1
+            self._save()
+
+    # -- the model --
+    def prints(self):
+        if self._prints is not None:
+            return self._prints
+        path = voice_model_path()
+        if not os.path.isfile(path):
+            self.model_error = "the voice model is not downloaded yet"
+            return None
+        try:
+            self._prints = VoicePrints(path)
+            self.model_error = ""
+        except Exception as e:
+            self.model_error = short(e, 120)
+            self._prints = None
+        return self._prints
+
+    def embed(self, audio):
+        pr = self.prints()
+        if pr is None or audio is None or len(audio) < 12800:          # under 0.8 s: too short for a voice print
+            return None
+        try:
+            return pr(np.asarray(audio[-16000 * 20:], dtype=np.float32))
+        except Exception as e:
+            log("voice print failed:", short(e, 120), level="debug")
+            return None
+
+    # -- the key: "this is me" --
+    def hold(self, on, t=None):
+        t = t or time.time()
+        with self.lock:
+            if on:
+                if not self.holds or self.holds[-1][1] is not None:
+                    self.holds.append([t, None])
+            elif self.holds and self.holds[-1][1] is None:
+                self.holds[-1][1] = t
+
+    def holding(self):
+        return bool(self.holds) and self.holds[-1][1] is None
+
+    def held_frac(self, t0, t_end):
+        dur = max(0.05, t_end - t0)
+        now = time.time()
+        with self.lock:
+            got = sum(max(0.0, min(t_end, b if b is not None else now) - max(t0, a)) for a, b in self.holds)
+        return got / dur
+
+    # -- a session --
+    def new_session(self):
+        with self.lock:
+            self.others, self.segs = [], {}
+            self.recent.clear()
+
+    def _other(self, e):
+        """The other person this voice belongs to (0 = Person 1 ...), a new one when it is like nobody yet."""
+        best, bi = -1.0, -1
+        for i, (c, n) in enumerate(self.others):
+            sim = float(c @ e)
+            if sim > best:
+                best, bi = sim, i
+        if bi >= 0 and (best >= OTHER_SAME or len(self.others) >= MAX_OTHERS):
+            c, n = self.others[bi]
+            v = c * n + e
+            self.others[bi] = [v / max(1e-9, float(np.linalg.norm(v))), n + 1]
+            return bi
+        self.others.append([e.copy(), 1])
+        return len(self.others) - 1
+
+    def decide(self, audio, t0, t_end):
+        """('me' | 'them', person number, voice print or None) for one sentence."""
+        if self.held_frac(t0, t_end) >= 0.5:
+            e = self.embed(audio)
+            self.learn_me(e)
+            return "me", 0, e
+        e = self.embed(audio)
+        with self.lock:
+            if e is None:                                   # too short or no model: like the sentence just before
+                prev = next((r for r in reversed(self.recent) if r.get("who") and t0 - r["t_end"] < 4.0), None)
+                return (prev["who"], prev["spk"], None) if prev else ("them", 0, None)
+            if self.me is not None and float(self.me @ e) >= ME_SAME:
+                self.learn_me(e, 0.05)
+                return "me", 0, e
+            return "them", self._other(e), e
+
+    def add_segment(self, seg_id, audio, t0, t_end):
+        rec = {"t0": t0, "t_end": t_end, "who": None, "spk": 0, "emb": None, "ev": threading.Event()}
+        with self.lock:
+            self.segs[seg_id] = rec
+            self.recent.append(rec)
+            if len(self.segs) > 400:
+                for k in list(self.segs)[:100]:
+                    self.segs.pop(k, None)
+
+        def run():
+            try:
+                rec["who"], rec["spk"], rec["emb"] = self.decide(audio, t0, t_end)
+            except Exception as e:
+                log("voice decision failed:", short(e, 120), level="warn")
+                rec["who"], rec["spk"] = "them", 0
+            finally:
+                rec["ev"].set()
+        self.pool.submit(run)
+        return rec
+
+    def who(self, t0, t_end, segs=(), wait=3.0):
+        """The decision for a finished sentence: from its own pieces of sound, or (live services, which have other
+        ids) from the pieces that overlap it in time."""
+        with self.lock:
+            recs = [self.segs[s] for s in segs if s in self.segs]
+            if not recs:
+                recs = [r for r in self.recent if min(t_end, r["t_end"]) - max(t0, r["t0"]) > 0.4 * max(0.1, r["t_end"] - r["t0"])]
+        end = time.time() + wait
+        for r in recs:
+            r["ev"].wait(max(0.0, end - time.time()))
+        done = [r for r in recs if r["who"]]
+        if not done:
+            return ("me", 0) if self.held_frac(t0, t_end) >= 0.5 else ("them", 0)
+        weight = {}
+        for r in done:
+            k = (r["who"], r["spk"] if r["who"] == "them" else 0)
+            weight[k] = weight.get(k, 0.0) + max(0.1, r["t_end"] - r["t0"])
+        return max(weight, key=weight.get)
+
+    def fix(self, segs, who):
+        """The user said whose line it is: the voice prints learn from it."""
+        with self.lock:
+            embs = [self.segs[s]["emb"] for s in segs if s in self.segs and self.segs[s]["emb"] is not None]
+        spk = 0
+        for e in embs:
+            if who == "me":
+                self.learn_me(e, 0.3)
+            else:
+                with self.lock:
+                    spk = self._other(e)
+        return spk
+
+    def enroll(self, pieces):
+        """'Learn my voice': prints of the pieces I read (each a few seconds), averaged into my print."""
+        embs = [e for e in (self.embed(p) for p in pieces) if e is not None]
+        if not embs:
+            return False
+        v = np.mean(np.stack(embs), axis=0)
+        with self.lock:
+            self.me, self.me_n = v / max(1e-9, float(np.linalg.norm(v))), max(5, len(embs))
+            self._save()
+        return True
+
+    def status(self):
+        return {"learned": self.me is not None, "model": os.path.isfile(voice_model_path()) or self._prints is not None,
+                "error": self.model_error, "holding": self.holding(), "others": len(self.others)}
+
+
 DOWNLOADS_DIR = os.path.join(DATA_DIR, "downloads")
 
 
@@ -10298,7 +10559,11 @@ class App:
         self.recording = None        # a recording being transcribed
         LOCAL.listeners.append(self._local_changed)
         LLM.on_change = self._llm_changed
+        self.voices = VoiceID()                # in-person mode: who is speaking (my voice print is kept on this computer)
+        self.voice_learn = None
         threading.Thread(target=self._ticker, daemon=True, name="ticker").start()
+        if sys.platform == "win32":
+            threading.Thread(target=self._hold_key_watch, daemon=True, name="hold-key").start()
         self._news_check_later()
         threading.Thread(target=self.sync_local, daemon=True, name="local-sync").start()
 
@@ -10353,6 +10618,7 @@ class App:
         s = self.session or self.last_session
         eng = self.engine                                   # (read once: a finishing meeting may clear it meanwhile)
         return {"type": "hello", "version": VERSION, "log": list(LOG_LINES)[-300:], "log_path": LOG_PATH, "config": self.public_config(),
+                "voice": self.voices.status(),
                 "running": self.running, "stopping": self.stopping,
                 "monitoring": self.monitor_until > time.time(),
                 "started_at": self.started_at, "entries": s.ordered() if s else [],
@@ -10421,6 +10687,11 @@ class App:
             self.hub.publish("say_mode", on=False)
 
     def api_save_config(self, **values):
+        if "subtitles" in values and "work_mode" not in values:          # the Subtitles switch, Ctrl+Alt+T
+            on = values["subtitles"]
+            on = on.strip().lower() in ("1", "true", "yes", "on") if isinstance(on, str) else bool(on)
+            values = dict(values, work_mode="video" if on else
+                          ("meeting" if self.cfg.get("work_mode") == "video" else self.cfg.get("work_mode", "meeting")))
         with self.lock:
             new = dict(self.cfg)
             for k, v in values.items():
@@ -10435,7 +10706,7 @@ class App:
             new = sanitize(new)
             changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
             changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
-            changed_subs = new["subtitles"] != self.cfg["subtitles"]
+            changed_subs = new["work_mode"] != self.cfg["work_mode"]
             changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
             if new["overlay_pos"] != self.cfg["overlay_pos"]:
                 try:
@@ -10458,7 +10729,9 @@ class App:
         self._apply_features()
         self.apply_preview()
         if changed_subs:
-            log("Subtitle mode " + ("on: only the computer's sound, only the translation" if self.cfg["subtitles"] else "off"))
+            log({"video": "Subtitle mode on: only the computer's sound, only the translation",
+                 "inperson": "In-person mode on: only the microphone; voices told apart",
+                 "meeting": "Meeting mode"}[self.cfg["work_mode"]])
             eng = self.engine
             if self.running and eng is not None and not self.recording:     # the microphone stops / starts being heard now
                 threading.Thread(target=self._restart_captures, args=(eng,), daemon=True, name="subs-audio").start()
@@ -10640,21 +10913,25 @@ class App:
             close_pa(self.pa)
             self.pa = None
 
-    def _start_captures(self, sink, want_mic, preview=False):
+    def _start_captures(self, sink, want_mic, preview=False, want_loop=True):
+        """want_loop=False (in-person mode): only the microphone; it then also gets the live text while someone speaks."""
         pa = self._open_pa()
         mic, loop = resolve_devices(pa, self.cfg, want_mic)
+        if not want_loop:
+            loop = None
         problems = []
         if want_mic and mic is None:
             problems.append("No microphone found.")
-        if loop is None:
+        if loop is None and want_loop:
             problems.append("Could not capture the computer's sound — check the speaker device in Setup › Audio.")
+        live_src = "them" if want_loop else "me"          # the source whose speech gets live text (the other side)
         for dev, src in ((mic, "me"), (loop, "them")):
             if dev is not None and (src == "them" or want_mic):
                 c = AudioCapture(pa, dev, src, self.cfg["sensitivity"], sink)
                 c.set_gain(self.cfg["mic_gain"])
                 ar = getattr(self, "audio_rec", None)
                 c.saver = ar.write if ar is not None else None
-                if preview and src == "them":
+                if preview and src == live_src:
                     c.preview_every, c.preview_min = self.preview_plan()
                     c.spec_final = self.spec_plan()
                 self.captures.append(c)
@@ -10769,6 +11046,7 @@ class App:
                         old.dirty = True
                 else:
                     self.session = Session(self.cfg)
+                    self.voices.new_session()              # the other voices are new people in a new session
                     self.stats = Stats()                   # delays shown are per meeting
                     with _usage_lock:
                         USAGE.clear()                      # counts are per meeting
@@ -10779,14 +11057,19 @@ class App:
                 self.engine = Engine(self, self.session)
                 self.reported.clear()
                 self.audio_rec = MeetingAudio(self.session.path) if self.cfg.get("save_audio") else None
-                problems, mic, spk = self._start_captures(self.engine.on_audio, use_mic(self.cfg), preview=True)
+                problems, mic, spk = self._start_captures(self.engine.on_audio, use_mic(self.cfg), preview=True,
+                                                          want_loop=use_loop(self.cfg))
                 self.engine.start_live(self.captures)
             except Exception as e:
                 log("start failed:", traceback.format_exc(), level="error")
                 return undo(friendly_audio_error(e))
             if not self.captures:
                 return undo(" ".join(problems) or "No audio device found.")
-            if not any(c.source == "them" for c in self.captures) and (not self.cfg["answer_me"] or self.cfg["subtitles"]):
+            if in_person(self.cfg):
+                if not any(c.source == "me" for c in self.captures):
+                    return undo("The microphone cannot be heard, and in-person mode listens only to it. "
+                                "Choose it in Setup › Audio, then press Start.")
+            elif not any(c.source == "them" for c in self.captures) and (not self.cfg["answer_me"] or self.cfg["subtitles"]):
                 what = "the video's sound" if self.cfg["subtitles"] else "the interviewer's voice"
                 return undo(f"The computer's sound ({what}) cannot be captured, so nothing would be heard. "
                             "Choose your speakers or headphones in Setup › Audio, then press Start.")
@@ -10845,7 +11128,7 @@ class App:
                     now_ids = default_endpoint_ids()
                     if not now_ids or (now_ids == last and not retry):
                         continue
-                    spk_changed = retry or (now_ids[0] != last[0] and not self.cfg["speaker_device"])
+                    spk_changed = retry or (now_ids[0] != last[0] and not self.cfg["speaker_device"] and use_loop(self.cfg))
                     mic_changed = retry or (now_ids[1] != last[1] and not self.cfg["mic_device"]
                                             and use_mic(self.cfg))
                     last = now_ids
@@ -10875,14 +11158,16 @@ class App:
                         if not self.running or self.engine is not engine:
                             return True
                         problems, mic, spk = self._start_captures(engine.on_audio, use_mic(self.cfg),
-                                                                  preview=True)
+                                                                  preview=True, want_loop=use_loop(self.cfg))
                     time.sleep(1.2)                          # (outside the lock: the meeting keeps working)
                     with self.lock:
                         if not self.running or self.engine is not engine:
                             return True
-                        them_ok = any(c.source == "them" and c.is_alive() and not c.error for c in self.captures)
+                        need = "me" if in_person(self.cfg) else "them"       # in person only the microphone is heard
+                        them_ok = any(c.source == need and c.is_alive() and not c.error for c in self.captures)
                         if not them_ok:
-                            raise OSError((problems and problems[0]) or "the speaker device did not start")
+                            raise OSError((problems and problems[0]) or "the " + ("microphone" if need == "me" else "speaker device")
+                                          + " did not start")
                         engine.start_live(self.captures, retry_dead=True)
                         if engine.paused:                    # still paused: nothing may be sent
                             for lv in engine.live.values():
@@ -11393,6 +11678,136 @@ class App:
                 s.save_if_dirty()
             except Exception as e:
                 log("save failed:", short(e, 120), level="warn")
+
+    # ---- in-person mode: whose voice -------------------------------------------------------------------------
+    def _hold_key_watch(self):
+        """In-person mode, during a session: while Right Ctrl is held, what the microphone hears is me."""
+        import ctypes
+        u = ctypes.windll.user32
+        u.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        down = False
+        while not self.closing.wait(0.04):
+            try:
+                now = bool(self.running and in_person(self.cfg) and u.GetAsyncKeyState(0xA3) & 0x8000)   # VK_RCONTROL
+            except Exception:
+                return
+            if now != down:
+                down = now
+                self.voices.hold(now)
+                self.hub.publish("voice", **self.voices.status())
+
+    def api_voice_hold(self, on=True):
+        """The on-screen 'hold while I speak' button (the same as holding Right Ctrl)."""
+        self.voices.hold(bool(on))
+        self.hub.publish("voice", **self.voices.status())
+        return {"ok": True, **self.voices.status()}
+
+    def api_voice_status(self):
+        return {"ok": True, **self.voices.status(), "learning": dict(self.voice_learn or {})}
+
+    def api_voice_forget(self):
+        self.voices.forget()
+        log("Voice print forgotten")
+        self.hub.publish("voice", **self.voices.status())
+        return {"ok": True, **self.voices.status()}
+
+    def api_voice_learn(self, seconds=10):
+        """'Learn my voice': the microphone listens for a few seconds while I read a sentence aloud."""
+        with self.lock:
+            if self.running or self.stopping or self.recording:
+                return {"ok": False, "error": "Stop first. Or, during an in-person session, hold Right Ctrl while you speak: it learns from that too."}
+            if self.voice_learn and self.voice_learn.get("state") in ("download", "listen"):
+                return {"ok": True, "busy": True}
+            if pyaudio is None:
+                return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+            try:
+                import onnxruntime  # noqa: F401
+            except Exception:
+                return {"ok": False, "error": "Voice recognition is not included in this copy of the program (onnxruntime)."}
+            self.voice_learn = {"state": "download" if not os.path.isfile(voice_model_path()) else "listen", "left": 0}
+        secs = max(6, min(30, int(seconds or 10)))
+        threading.Thread(target=self._voice_learn_run, args=(secs,), daemon=True, name="voice-learn").start()
+        return {"ok": True, "busy": True}
+
+    def _voice_learn_run(self, secs):
+        def emit(**kw):
+            self.voice_learn = dict(self.voice_learn or {}, **kw)
+            self.hub.publish("voice", **self.voices.status(), learning=dict(self.voice_learn))
+        try:
+            if not os.path.isfile(voice_model_path()):
+                emit(state="download", note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…")
+                dl = ModelDownload(SPK_MODEL, detect_proxy(self.cfg["proxy"])[0],
+                                   lambda st: emit(note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
+                os.makedirs(MODELS_DIR, exist_ok=True)
+                dl.run()
+                if not os.path.isfile(voice_model_path()):
+                    return emit(state="error", note="The voice model could not be downloaded (" + short(dl.state.get("error") or "no answer", 120)
+                                + "). Hugging Face may need a VPN or proxy (Setup › Services › Network).")
+            pieces = []
+
+            def sink(kind, source, seg_id, **kw):
+                if kind == "segment" and source == "me":
+                    pieces.append(kw["audio"])
+            with self.lock:
+                if self.running or self.stopping:
+                    return emit(state="error", note="A session started meanwhile. Try again after it.")
+                self._stop_captures()
+                problems, mic, _spk = self._start_captures(sink, True, want_loop=False)
+            if not any(c.source == "me" for c in self.captures):
+                self._stop_captures()
+                return emit(state="error", note=" ".join(problems) or "No microphone found.")
+            end = time.time() + secs
+            while time.time() < end and not self.closing.is_set():
+                emit(state="listen", left=max(0, round(end - time.time())), note="")
+                time.sleep(0.5)
+            with self.lock:
+                self._stop_captures()                         # (stopping hands over the sentence still being read)
+            speech = sum(len(p) for p in pieces) / 16000
+            if speech < 4.0:
+                return emit(state="error", note=f"Only {speech:.0f} s of your voice was heard. Read the sentence aloud, closer to the microphone, and try again.")
+            if not self.voices.enroll(pieces):
+                return emit(state="error", note="Your voice could not be learned: " + (self.voices.model_error or "too short"))
+            log(f"Voice print learned from {speech:.0f} s of speech")
+            emit(state="done", note=f"Your voice is learned ({speech:.0f} s).")
+        except Exception as e:
+            log("learn my voice:", traceback.format_exc(), level="warn")
+            emit(state="error", note="Your voice could not be learned: " + short(e, 120))
+            try:
+                with self.lock:
+                    if not self.running:
+                        self._stop_captures()
+            except Exception:
+                pass
+
+    def api_line_who(self, entry_id=None, who="me"):
+        """In person: 'this line is mine' / 'this is the other person'. The line changes and the voice prints learn."""
+        if who not in ("me", "them"):
+            return {"ok": False, "error": "Unknown choice."}
+        s = self._shown_session()
+        if not s or not isinstance(entry_id, int) or isinstance(entry_id, bool):
+            return {"ok": False, "error": "That line is not in the transcript any more."}
+        e = s.get(entry_id)
+        if not e:
+            return {"ok": False, "error": "That line is not in the transcript any more."}
+        spk = self.voices.fix(e.get("seg_ids") or [], who)
+        fields = {"source": who, "speaker": spk if who == "them" else 0}
+        eng = self.helper()
+        c = self.cfg
+        lang = e.get("lang") or ""
+        want_tr = eng is not None and (who == "them" or c["translate_me"]) and feat(c, "translate") \
+            and lang != c["my_language"] and not (e.get("translation") or "").strip()
+        if want_tr:
+            fields["tr_state"] = "pending"
+        if who == "me":
+            fields["ans_state"] = "off" if e.get("ans_state") in ("thinking", "none") else e.get("ans_state")
+        e = s.update(entry_id, **fields)
+        self.hub.publish("entry", entry=e)
+        self._session_changed(s)
+        if want_tr and eng is not None and not eng._submit_tr(entry_id):
+            e = s.update(entry_id, tr_state="error")
+            self.hub.publish("entry", entry=e)
+        self.hub.publish("voice", **self.voices.status())
+        return {"ok": True, "entry": e}
 
     def api_mark(self, entry_id=None, on=None):
         """F7 / Ctrl+Alt+K: the newest line is marked as an important moment; with entry_id: that line (on/off)."""

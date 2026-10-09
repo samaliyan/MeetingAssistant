@@ -2,6 +2,19 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.28]
+
+**A new mode: In person — someone in front of you, or a phone on speaker.** At the top there is now a switch with three modes: **Meeting** (Teams, Zoom, Meet: the computer's sound is the other side, the microphone is you), **In person** and **Video** (the subtitle mode of 6.26). In person:
+
+- **Only the microphone is used** — it hears you and the other person (or the phone on speaker). The computer's sound is not used.
+- **The program tells the voices apart by their sound.** Press **Learn my voice** once (read one sentence for 10 seconds; it is kept only on this computer, in Data\voiceprint.json, and **Forget my voice** deletes it). Then each line says who said it: **Me**, **Person 1**, **Person 2**… Without learning, hold **Right Ctrl** (or the **Hold while I speak** button) while you speak: those words are yours, and the program learns your voice from them.
+- **One click fixes a wrong line:** **Not me** / **This is me** on the line moves it (and translates it if needed); the program learns from the correction.
+- What the others say is translated, and suggested answers work as in a meeting. A sentence still being spoken shows **Someone** until it ends and the speaker is known. "Say it in my language" is off in this mode (there is no meeting to speak into).
+- The blue bar at the top says which mode you are in and what to do; Start says **Start listening**; the title says **Conversation**.
+- The voice model (about 27 MB, the same one used for speakers in recordings) is downloaded the first time you learn your voice.
+
+**The top bar never runs off the window.** On a smaller window (or during a meeting, when Pause, Mark and the meters appear), the Stop button could be pushed out of sight. Now the bar first hides the key hints, then shows the mode switch and some buttons as icons only (their tooltips still say what they do), until everything fits. 152 automated tests.
+
 ## [6.27]
 
 **The overlay works with "Hide this window from screen sharing" on.** Checked on a real Windows machine with the released exe: when the main window was hidden from screen sharing, the see-through window opened (and its keys worked) but stayed an empty grey box — in every version back to at least 6.23. The hidden main window and the overlay shared one web storage folder, and the overlay's page could not start in it. The overlay now has its own (Data\.window_overlay). The program also checks that the overlay's page really loaded; if not, it says so instead of showing an empty box.

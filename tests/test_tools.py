@@ -1274,7 +1274,7 @@ def test_subtitle_mode_setting_key_and_page(app):
     finally:
         a.closing.set()
     page = open(os.path.join(os.path.dirname(app.__file__), "web", "index.html"), encoding="utf-8").read()
-    assert 'id="subBtn"' in page and 'data-key="subtitles"' in page and 'sb.id = "ovSub"' in page
+    assert 'data-mode="video"' in page and 'data-mode="inperson"' in page and 'data-key="subtitles"' in page and 'sb.id = "ovSub"' in page
 
 
 def test_subtitle_mode_is_a_mode_for_videos(app):
@@ -1287,7 +1287,7 @@ def test_subtitle_mode_is_a_mode_for_videos(app):
     assert app.use_mic(cfg) is False                                   # only the computer's sound (the video)
     assert "film" in app.translate_system(cfg)
     # the user's own choices are untouched and apply again in meeting mode
-    meet = app.sanitize(dict(cfg, subtitles=False))
+    meet = app.sanitize(dict(cfg, work_mode="meeting"))                 # (the mode is the work_mode; subtitles follows it)
     assert meet["features"]["translate"] is False and app.feat(meet, "translate") is False
     assert app.feat(meet, "answers") is True and app.use_mic(meet) is True and "film" not in app.translate_system(meet)
     assert app.use_mic(app.sanitize({"transcribe_me": False})) is False
@@ -1357,6 +1357,142 @@ def test_overlay_has_its_own_storage_and_its_page_is_checked(app):
         a.closing.set()
     page = open(os.path.join(os.path.dirname(app.__file__), "web", "index.html"), encoding="utf-8").read()
     assert 'OVERLAY ? "/events?ov=1" : "/events"' in page
+
+
+def _fake_voices(seed=1):
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    names = ["me", "a", "b"]
+    base = {k: (lambda v: v / np.linalg.norm(v))(rng.normal(size=256)) for k in names}
+
+    def voice(name, secs=2.0):
+        a = np.zeros(int(16000 * secs), np.float32)
+        a[0] = names.index(name) + 1                         # (the fake model reads who it is from here)
+        return a
+
+    def prints(audio):
+        v = base[names[int(audio[0]) - 1]] + rng.normal(scale=0.02, size=256)
+        return (v / np.linalg.norm(v)).astype(np.float32)
+    return voice, prints
+
+
+def test_voice_id_tells_me_from_the_others(app, tmp_path):
+    import numpy as np
+    voice, prints = _fake_voices()
+    path = str(tmp_path / "vp.json")
+    vid = app.VoiceID(path=path, prints=prints)
+    assert not vid.learned()
+    # my voice not learned yet: everyone is "another person", grouped by voice
+    assert vid.decide(voice("a"), 0, 2)[:2] == ("them", 0)
+    assert vid.decide(voice("b"), 3, 5)[:2] == ("them", 1)
+    assert vid.decide(voice("a"), 6, 8)[:2] == ("them", 0)
+    # held key: me, and my print is learned from it
+    vid.hold(True, 9.0)
+    assert vid.decide(voice("me"), 9.2, 11)[:2] == ("me", 0)
+    vid.hold(False, 11.5)
+    assert vid.learned() and not vid.holding()
+    # now my voice is known without the key; the others stay who they were
+    assert vid.decide(voice("me"), 20, 22)[:2] == ("me", 0)
+    assert vid.decide(voice("b"), 23, 25)[:2] == ("them", 1)
+    # kept between sessions (on this computer)
+    vid2 = app.VoiceID(path=path, prints=prints)
+    assert vid2.learned()
+    vid2.new_session()
+    # finished sentences: by their own pieces of sound, or (live services) by time
+    vid2.add_segment(7, voice("a"), 30, 32)
+    assert vid2.who(30, 32, [7]) == ("them", 0)
+    vid2.add_segment(8, voice("me"), 33, 35)
+    assert vid2.who(33.1, 34.9, []) == ("me", 0)
+    vid2.add_segment(9, np.zeros(4000, np.float32), 35.2, 35.5)       # too short for a voice print: like the one before
+    assert vid2.who(35.2, 35.5, [9]) == ("me", 0)
+    # a correction teaches it
+    vid2.add_segment(10, voice("b"), 40, 42)
+    assert vid2.who(40, 42, [10]) == ("them", 1)
+    assert vid2.fix([10], "them") == 1
+    # 'learn my voice' (10 s of reading) and forget
+    vid3 = app.VoiceID(path=str(tmp_path / "vp3.json"), prints=prints)
+    assert vid3.enroll([voice("me", 3), voice("me", 3), voice("me", 3)]) and vid3.learned()
+    assert vid3.decide(voice("me"), 0, 2)[0] == "me" and vid3.decide(voice("a"), 3, 5)[0] == "them"
+    assert vid3.enroll([np.zeros(1000, np.float32)]) is False            # nothing usable: not learned from it
+    vid3.forget()
+    assert not vid3.learned() and not os.path.exists(str(tmp_path / "vp3.json"))
+    assert app.VoiceID(path=str(tmp_path / "vp3.json"), prints=prints).learned() is False
+
+
+def test_work_modes_hear_the_right_sound(app):
+    meet, person, video = (app.sanitize({"work_mode": m}) for m in ("meeting", "inperson", "video"))
+    assert (app.use_mic(meet), app.use_loop(meet)) == (True, True)
+    assert (app.use_mic(person), app.use_loop(person)) == (True, False)       # only the microphone
+    assert (app.use_mic(video), app.use_loop(video)) == (False, True)         # only the computer's sound
+    assert app.use_mic(app.sanitize({"work_mode": "inperson", "transcribe_me": False})) is True
+    assert video["subtitles"] is True and person["subtitles"] is False
+    assert app.sanitize({"subtitles": True})["work_mode"] == "video"           # a settings file from before the modes
+    assert app.sanitize({"work_mode": "nonsense"})["work_mode"] == "meeting"
+    assert app.feat(person, "say") is False and app.feat(person, "answers") is True and app.feat(person, "translate") is True
+    a = app.App()
+    try:
+        a.api_save_config(work_mode="inperson")
+        assert a.cfg["work_mode"] == "inperson" and a.cfg["subtitles"] is False
+        a.api_save_config(subtitles=True)                                      # the Subtitles switch / Ctrl+Alt+T
+        assert a.cfg["work_mode"] == "video"
+        a.api_save_config(subtitles=False)
+        assert a.cfg["work_mode"] == "meeting"
+        a.api_save_config(work_mode="inperson")
+        a.api_save_config(subtitles=False)                                     # turning video off never leaves in-person
+        assert a.cfg["work_mode"] == "inperson"
+        assert app.load_config()["work_mode"] == "inperson"
+        a.api_save_config(work_mode="meeting")
+    finally:
+        a.closing.set()
+
+
+def test_in_person_lines_get_their_speaker(app, tmp_path):
+    eng, sess, calls = _engine(app)
+    try:
+        eng.cfg.update(app.sanitize({"work_mode": "inperson"}))
+        voice, prints = _fake_voices(2)
+        eng.app.voices = app.VoiceID(path=str(tmp_path / "vp.json"), prints=prints)
+        eng.app.voices.add_segment(4001, voice("a"), 100, 102)
+        eng.accept_text("me", "How long have you worked with Oracle?", "en", 100, 102, [4001],
+                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "x", "model": "x"})
+        e = sess.ordered()[-1]
+        assert e["source"] == "them" and (e["speaker"] or 0) == 0 and e["tr_state"] == "pending"   # the other person: translated
+        eng.app.voices.hold(True, 103.0)
+        eng.app.voices.add_segment(4002, voice("me"), 103.2, 105)
+        eng.accept_text("me", "About twelve years.", "en", 103.2, 105, [4002],
+                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "x", "model": "x"})
+        eng.app.voices.hold(False, 105.5)
+        assert sess.ordered()[-1]["source"] == "me"
+        eng.cfg.update(app.sanitize({"work_mode": "meeting"}))
+        eng.accept_text("me", "In a meeting my microphone is me.", "en", 110, 112, [4003],
+                        {"pause": 0.0, "queue": 0.0, "stt": 0.0, "service": "x", "model": "x"})
+        assert sess.ordered()[-1]["source"] == "me"
+    finally:
+        eng.stop_event.set()
+
+
+def test_line_who_fixes_a_line_and_teaches_the_voice(app, tmp_path):
+    a = app.App()
+    try:
+        voice, prints = _fake_voices(3)
+        a.voices = app.VoiceID(path=str(tmp_path / "vp.json"), prints=prints)
+        a.voices.add_segment(51, voice("me"), 10, 12)
+        a.voices.who(10, 12, [51])
+        a.session = app.Session(a.cfg)
+        e = a.session.add("them", 10, 12, "I worked there for six years.", "en", [51], 0)
+        r = a.api_line_who(e["id"], "me")
+        assert r["ok"] and r["entry"]["source"] == "me" and a.voices.learned()     # learned from the correction
+        assert a.voices.decide(voice("me"), 20, 22)[0] == "me"
+        r = a.api_line_who(e["id"], "them")
+        assert r["ok"] and r["entry"]["source"] == "them"
+        assert a.api_line_who(999999, "me")["ok"] is False and a.api_line_who(e["id"], "x")["ok"] is False
+        assert a.api_voice_status()["learned"] is True
+        a.api_voice_hold(True)
+        assert a.voices.holding()
+        a.api_voice_hold(False)
+        assert not a.voices.holding()
+    finally:
+        a.closing.set()
 
 
 def test_second_piece_after_the_first_was_answered(app):
