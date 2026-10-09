@@ -2904,3 +2904,32 @@ def test_quits_when_the_window_ended_before_its_page_loaded(app):
     finally:
         app.HIDDEN_PROC[:] = old
         a.closing.set()
+
+
+def test_hidden_window_closed_right_away_is_not_a_failure(app):
+    """The user closed the hidden window before the program saw it open (its process ended with code 0): no visible
+    window is opened instead, and the program knows its window process (so it quits by itself)."""
+    old = (app.hidden_window_possible, app.subprocess.Popen, app.read_hide_status, app.note_hide_failure, list(app.HIDDEN_PROC))
+    fails = []
+
+    class P:
+        def __init__(self, rc):
+            self.rc = rc
+
+        def poll(self):
+            return self.rc
+
+        def terminate(self):
+            pass
+    try:
+        app.hidden_window_possible = lambda: True
+        app.read_hide_status = lambda: None
+        app.note_hide_failure = lambda msg: fails.append(msg)
+        app.subprocess.Popen = lambda *a, **k: P(0)
+        assert app.open_hidden_window("http://x") is True and not fails
+        assert app.HIDDEN_PROC and app.HIDDEN_PROC[-1].poll() == 0
+        app.subprocess.Popen = lambda *a, **k: P(4)                    # a real failure: still reported
+        assert app.open_hidden_window("http://x") is False and fails and "code 4" in fails[0]
+    finally:
+        (app.hidden_window_possible, app.subprocess.Popen, app.read_hide_status, app.note_hide_failure) = old[:4]
+        app.HIDDEN_PROC[:] = old[4]

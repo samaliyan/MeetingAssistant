@@ -14735,6 +14735,12 @@ def open_hidden_window(url, independent=False):
             note_hide_failure(st["error"] or "Windows did not hide the window.")
             return False
         rc = p.poll()
+        if rc == 0:
+            # it ended normally: it was shown, and closed (by the user) before we saw it - not a failure, so no
+            # visible window instead; the program quits by itself as its window is gone
+            log("The hidden window was closed right after it opened")
+            HIDDEN_PROC[:] = [p]
+            return True
         if rc is not None:
             note_hide_failure(f"The hidden window closed at once (code {rc}).")
             return False

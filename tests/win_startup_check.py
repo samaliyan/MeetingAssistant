@@ -214,7 +214,7 @@ def main():
         for label, exe in exes:
             r = run_once(exe)
             results[label].append(r)
-            note(f"run {i + 1} {label}: running after {fmt(r['port'])}, window after {fmt(r['window'])}, "
+            (note if r["error"] and label == "NEW" else print)(f"run {i + 1} {label}: running after {fmt(r['port'])}, window after {fmt(r['window'])}, "
                   f"unpacked {fmt(r['unpacked'], '')}x, overlay {fmt(r['overlay'])}, quit {fmt(r['exit'])} after "
                   f"closing, temp folders left {fmt(r['left_temp'], '')}" + (f"  !! {r['error']}" if r["error"] else ""),
                  )
@@ -227,7 +227,7 @@ def main():
         for label, exe in exes:
             r = run_once(exe, early_close=True)
             early[label].append(r)
-            note(f"closed at once {i + 1} {label}: window after {fmt(r['window'])}, quit {fmt(r['exit'])} after closing, "
+            (note if r["error"] and label == "NEW" else print)(f"closed at once {i + 1} {label}: window after {fmt(r['window'])}, quit {fmt(r['exit'])} after closing, "
                  f"temp folders left {fmt(r['left_temp'], '')}" + (f"  !! {r['error']}" if r["error"] else ""))
             if r.get("why") and label == "NEW":
                 note(f"closed at once {i + 1} NEW, why it is still running:\n" + "\n".join(r["why"]))
