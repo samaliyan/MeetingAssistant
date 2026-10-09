@@ -11702,6 +11702,17 @@ class App:
         self.hub.publish("voice", **self.voices.status())
         return {"ok": True, **self.voices.status()}
 
+    def api_debug_clients(self):
+        """For the Windows startup check: which pages are still connected (the program quits 12 s after none is)."""
+        h = self.hub
+        with h.lock:
+            n, ov = len(h.clients), sum(1 for q in h.clients if getattr(q, "overlay", False))
+        es = h.empty_since
+        return {"ok": True, "pages": n, "overlay_pages": ov, "ever": h.ever,
+                "empty_for": round(time.time() - es, 1) if es else None, "running": self.running,
+                "stopping": self.stopping, "recording": bool(self.recording), "closing": self.closing.is_set(),
+                "overlay_on": bool(getattr(self.overlay, "on", False))}
+
     def api_voice_status(self):
         return {"ok": True, **self.voices.status(), "learning": dict(self.voice_learn or {})}
 
