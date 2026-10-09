@@ -313,8 +313,14 @@ def scenario(name, exe, out, cfg):
         check(f"{name}: subtitle mode shows the subtitles", r.get("state", {}).get("subs") and "بهت گفتم" in (r.get("text") or ""), json.dumps(r, ensure_ascii=False)[:300])
         shot_screen(os.path.join(out, f"{name}-10-screen-with-subtitles.png"))
         keys(CTRL, ALT, 0x54)
-        time.sleep(2)
-        check(f"{name}: Ctrl+Alt+T again turns it off", read_cfg(data).get("subtitles") is False)
+        s2 = None
+        for _ in range(32):                                  # saved within a few seconds (a busy machine is slower)
+            time.sleep(0.25)
+            c2 = read_cfg(data)
+            s2 = (c2.get("subtitles"), c2.get("work_mode"))
+            if s2[0] is False:
+                break
+        check(f"{name}: Ctrl+Alt+T again turns it off", s2[0] is False and s2[1] == "meeting", str(s2))
         # Ctrl+Alt+O: the overlay goes, the main window comes back
         keys(CTRL, ALT, 0x4F)
         gone = False
