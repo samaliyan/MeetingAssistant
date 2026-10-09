@@ -63,13 +63,34 @@ def call(port, key, name, body=None, timeout=90):
         return json.loads(r.read())
 
 
+def why_still_running(data, port, key):
+    """Evidence for a program that did not quit: what it wrote last, its windows and its processes."""
+    out = []
+    try:
+        with open(os.path.join(data, "app.log"), encoding="utf-8", errors="replace") as f:
+            out += ["log: " + ln.rstrip()[:220] for ln in f.readlines()[-14:]]
+    except OSError as e:
+        out.append(f"log: not readable ({e})")
+    try:
+        res = call(port, key, "debug_clients", timeout=5)
+        out.append("pages connected: " + json.dumps(res)[:300])
+    except Exception as e:
+        out.append("pages connected: no answer (" + str(e)[:80] + ")")
+    ps = subprocess.run(["powershell", "-NoProfile", "-Command",
+                         "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'MeetingAssistant|msedgewebview2' } | "
+                         "ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)\" }"],
+                        capture_output=True, text=True, timeout=60)
+    out += ["proc: " + ln[:200] for ln in ps.stdout.splitlines()[:12]]
+    return out
+
+
 def kill_all():
     subprocess.run(["taskkill", "/F", "/T", "/IM", "MeetingAssistant.exe"], capture_output=True)
     time.sleep(2)
 
 
 def run_once(exe):
-    r = {"port": None, "window": None, "unpacked": None, "overlay": None, "exit": None, "left_temp": None, "error": ""}
+    r = {"port": None, "window": None, "unpacked": None, "overlay": None, "exit": None, "left_temp": None, "error": "", "why": None}
     work = tempfile.mkdtemp(prefix="ma_start_")
     dst = os.path.join(work, "MeetingAssistant.exe")
     shutil.copy2(exe, dst)
@@ -131,6 +152,7 @@ def run_once(exe):
         except subprocess.TimeoutExpired:
             r["error"] = (r["error"] + "; " if r["error"] else "") + \
                 "did not quit within 90 s after its window was closed (a warning box may be open)"
+            r["why"] = why_still_running(data, port, key)
             return r
         time.sleep(1.5)
         r["left_temp"] = len(meis() - before)
@@ -147,7 +169,7 @@ def note(line):
     """Also shown on the GitHub page of the run (an annotation), where it can be read without the log."""
     print(line, flush=True)
     if os.environ.get("GITHUB_ACTIONS"):
-        print("::notice title=Startup::" + line.replace("%", "%25").replace("\n", " "), flush=True)
+        print("::notice title=Startup::" + line.replace("%", "%25").replace("\n", "%0A"), flush=True)
 
 
 def fmt(v, unit="s"):
@@ -175,6 +197,8 @@ def main():
                   f"unpacked {fmt(r['unpacked'], '')}x, overlay {fmt(r['overlay'])}, quit {fmt(r['exit'])} after "
                   f"closing, temp folders left {fmt(r['left_temp'], '')}" + (f"  !! {r['error']}" if r["error"] else ""),
                  )
+            if r.get("why") and label == "NEW":
+                note(f"run {i + 1} NEW, why it is still running:\n" + "\n".join(r["why"]))
     print("\nmedian of the runs:")
     for label, _ in exes:
         rs = results[label]

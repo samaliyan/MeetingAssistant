@@ -157,6 +157,7 @@ body:not(.capturing) .meters{display:none}
 .who{font-weight:650;font-size:.86rem}
 .entry.them .who{color:var(--them)}
 .entry.me .who{color:var(--me)}
+.entry.someone .avatar{background:var(--surface-3);color:var(--muted)} .entry.someone .who{color:var(--muted)}
 .time{font-variant-numeric:tabular-nums}
 .tag{font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--muted);letter-spacing:.04em}
 .meta .act{margin-left:auto;opacity:0;transition:opacity .15s}
@@ -306,7 +307,15 @@ body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
 body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · Ctrl+Alt+M: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
 #ovBtn.on{color:var(--accent);border-color:var(--accent)}
-#subBtn.on{color:#fff;background:var(--accent);border-color:var(--accent)}
+.modeseg{display:inline-flex;border:1px solid var(--border,#d0d5dd);border-radius:10px;padding:2px;gap:2px;background:var(--surface-2,transparent)}
+.modeseg button{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--text-2);font:inherit;font-size:.86rem;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer}
+.modeseg button[aria-checked="true"]{background:var(--accent);color:#fff}
+.modeseg button:not([aria-checked="true"]):hover{background:var(--accent-soft);color:var(--accent-text)}
+.modeseg svg{width:16px;height:16px}
+#mbHold.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.whofix{font-size:.74rem;padding:1px 8px;opacity:.75}
+.whofix:hover{opacity:1}
+body.inperson #mThem{display:none}
 .modebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 16px 0;padding:9px 14px;border-radius:12px;
   background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent-text)}
 .modebar[hidden]{display:none}
@@ -523,6 +532,12 @@ body.f-prep-off #glossFill{display:none!important}
 .sc-note:empty,.sc-heard:empty,.sc-text:empty,.sc-meaning:empty{display:none}
 #sayBtn.on{color:#fff;background:var(--danger);border-color:var(--danger)}
 @media (max-width:1600px){.topbar .hide-md{display:none}}
+/* the header never runs off the window: fitHeader() adds these steps one by one until everything fits */
+.topbar.f1 .btn:not(#startBtn) kbd,.topbar.f1 .subtitle{display:none}
+.topbar.f2 .modeseg .hide-sm{display:none} .topbar.f2 .modeseg button{padding:5px 8px}
+.topbar.f3 #pauseLabel,.topbar.f3 #ovBtn .hide-sm,.topbar.f3 #setupBtn .hide-sm,.topbar.f3 #resumeBtn .hide-sm,.topbar.f3 .meter-label,.topbar.f3 .brand-text{display:none}
+.topbar.f4 #startBtn kbd,.topbar.f4 .meters{display:none} .topbar.f4{gap:6px}
+.topbar.f5{padding-left:8px;padding-right:8px} .topbar.f5 .btn{padding-left:8px;padding-right:8px}
 .entry .mark{opacity:.35}
 .entry:hover .mark,.entry .mark.on{opacity:1}
 .entry .mark.on{color:var(--amber)}
@@ -896,7 +911,11 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <button class="btn ghost" id="sayBtn" hidden title="Say mode: speak in your language, get the sentence to say in the meeting language. Mute yourself in Teams or Zoom first. (F6, or Ctrl+Alt+J from any program during a meeting)"><span data-icon="speak"></span><span class="hide-sm hide-md" id="sayLabel">Say it</span><kbd class="hide-sm">F6</kbd></button>
     <button class="btn ghost" id="markBtn" hidden title="Mark the latest moment as important — it goes into the summary and the export (F7, or Ctrl+Alt+K from any program during a meeting)"><span data-icon="flag"></span><span class="hide-sm hide-md">Mark</span><kbd class="hide-sm">F7</kbd></button>
     <button class="btn ghost" id="ovBtn" title="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it (Ctrl+Alt+O, even from another program)"><span data-icon="eye"></span><span class="hide-sm">Overlay</span></button>
-    <button class="btn ghost" id="subBtn" aria-pressed="false" title="Subtitle mode: for a film, video or audio on this computer. Only its sound is used (not your microphone), only the translation is shown, no answers. Press again for meeting mode. (Ctrl+Alt+T while the overlay is on)"><span data-icon="text"></span><span class="hide-sm" id="subBtnLabel">Subtitles</span></button>
+    <div class="modeseg" id="modeSeg" role="radiogroup" aria-label="What are you doing?">
+      <button data-mode="meeting" role="radio" title="Online meeting (Teams, Zoom, Meet): the computer's sound is the other side, your microphone is you"><span data-icon="headphones"></span><span class="hide-sm">Meeting</span></button>
+      <button data-mode="inperson" role="radio" title="In person, or a phone on speaker: only the microphone is used and the program tells the voices apart"><span data-icon="mic"></span><span class="hide-sm">In person</span></button>
+      <button data-mode="video" role="radio" title="A film or video on this computer: only its sound, only its translation, like subtitles (Ctrl+Alt+T while the overlay is on)"><span data-icon="text"></span><span class="hide-sm">Video</span></button>
+    </div>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
     <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm">Shift+F9</kbd></button>
@@ -904,9 +923,11 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   </header>
 
   <div class="modebar" id="modeBar" hidden role="status">
-    <span class="mb-icon" data-icon="text"></span>
-    <div class="mb-text"><b>Subtitle mode</b> — for a film, video or audio playing on this computer.
-      <span id="mbState"></span></div>
+    <span class="mb-icon" id="mbIcon"></span>
+    <div class="mb-text"><b id="mbTitle"></b> — <span id="mbWhat"></span>
+      <span id="mbState"></span> <span id="mbVoice"></span></div>
+    <button class="btn sm" id="mbLearn" hidden><span data-icon="mic"></span><span id="mbLearnLabel">Learn my voice</span></button>
+    <button class="btn sm" id="mbHold" hidden title="Hold this button (or Right Ctrl) while you speak: those words are yours"><span data-icon="mic"></span>Hold while I speak</button>
     <button class="btn sm" id="mbOverlay"><span data-icon="eye"></span><span id="mbOverlayLabel">Show over the video</span></button>
     <button class="btn sm ghost" id="mbLeave">Back to meeting mode</button>
   </div>
@@ -1147,6 +1168,12 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="help">Makes your own voice louder or quieter inside the program (it does not change Windows). Raise it if your voice is weak, lower it if you are too loud.</div>
       </div>
       <label class="toggle"><input type="checkbox" data-key="transcribe_me"><span class="switch"></span><span class="tt"><b>Transcribe my voice</b><span>Your own words are written and saved too.</span></span></label>
+      <div class="field" id="voiceField" style="margin-top:14px">
+        <span class="label">Your voice (in-person mode)</span>
+        <div class="help">In person one microphone hears everyone. The program tells your voice from the others by its sound (kept only on this computer). Learn it once; while you speak you can also hold <kbd>Right Ctrl</kbd> — that line is yours, and it learns from it. A wrong line: press <b>This is me</b> / <b>Not me</b> on it.</div>
+        <div class="help" id="voiceState" style="margin-top:6px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm" id="voiceLearnBtn"><span data-icon="mic"></span><span id="voiceLearnLabel">Learn my voice (10 s)</span></button><button class="btn sm ghost" id="voiceForgetBtn">Forget my voice</button></div>
+      </div>
       <label class="toggle"><input type="checkbox" data-key="save_audio"><span class="switch"></span><span class="tt"><b>Keep the sound of meetings</b><span>Starts with the next meeting. After the meeting, the ▶ button on a line plays what was said, while that meeting is on screen (about 7 MB an hour, saved next to the meeting file). Nothing is kept while the meeting is paused. Ask the other side if recording is allowed.</span></span></label>
 
     </section>
@@ -1620,6 +1647,7 @@ function handle(m){
     case "session": return newSession(m);
     case "speech_mode": S.speechMode = m; renderFooter(); renderSttMode(); return;
     case "overlay": S.overlay = !!m.on; renderOverlayBtn(); return;
+    case "voice": { const t = Object.assign({}, m); delete t.type; S.voice = Object.assign({}, S.voice, t); renderModeBar(); renderVoiceField(); renderEmpty(); return; }
     case "ov_cmd":
       if(OVERLAY){
         const sc = $("#ovScreen"), oc = $("#ovCoach"), down = m.cmd === "down";
@@ -1684,7 +1712,7 @@ function onHello(m){
   S.llm = m.llm || {}; if(!OVERLAY) loadLlm();
   S.paused = !!m.paused; S.summary = m.summary || ""; S.feedback = m.feedback || ""; S.fbScores = m.feedback_scores || {}; S.fbStats = null; S.hide = m.hide || null; S.resume = m.resume || null; S.sumState = ""; S.rec = m.recording; renderRec();
   S.recName = m.recording && ["starting","reading","finishing","downloading","speakers"].includes(m.recording.state) ? m.recording.name : (/recording_/.test(basename(S.sessionFile)) ? "saved" : "");
-  S.hasAudio = !!m.has_audio;
+  S.hasAudio = !!m.has_audio; S.voice = m.voice || {};
   if(notesTimer && $("#myNotes").dataset.file === (m.session_file || "")) m.my_notes = $("#myNotes").value;   // a reconnect never undoes typing
   else flushNotes();
   S.names = m.names || {}; S.myNotes = m.my_notes || ""; S.notesFull = m.notes_full || ""; S.sayMode = !!m.say_mode; fillNotes();
@@ -1726,7 +1754,9 @@ const PRESETS = {text: {files: true, marks: true, detect: true}, translate: {tra
 const userFeatOn = k => !S.cfg || !S.cfg.features || S.cfg.features[k] !== false;      // the user's own choice
 const SUBS_KEEP = ["translate", "overlay", "files"];
 // what is on right now: subtitle mode (a film or video) pauses everything but translation, the overlay and files
-const featOn = k => S.cfg && S.cfg.subtitles ? (k === "translate" || (SUBS_KEEP.includes(k) && userFeatOn(k))) : userFeatOn(k);
+const featOn = k => S.cfg && S.cfg.subtitles ? (k === "translate" || (SUBS_KEEP.includes(k) && userFeatOn(k)))
+  : (curMode() === "inperson" && k === "say") ? false : userFeatOn(k);     // (in person the microphone hears everyone: no "say it")
+function curMode(){ return S.cfg ? (S.cfg.work_mode || (S.cfg.subtitles ? "video" : "meeting")) : "meeting"; }
 function featNeed(tasks){                                    // the services a part needs, as one short line
   const st = (S.cfg && S.cfg.tasks) || {};
   const bad = tasks.filter(t => st[t] && !st[t].ok);
@@ -1789,11 +1819,11 @@ function applyConfig(){
   $("#legend").innerHTML = `<span title="${esc(label("them"))}: computer sound (the other side)"><i style="background:var(--them)"></i>${esc(label("them"))}</span>` + (c.subtitles ? "" : `<span title="${esc(label("me"))}: your microphone"><i style="background:var(--me)"></i>${esc(label("me"))}</span>`);   // (subtitle mode: no microphone)
   $("#keyDot").hidden = c.ready !== false;
   $("#testBadge").hidden = !c.answer_me;
-  $("#mMe").querySelector(".meter-label").textContent = label("me");
+  $("#mMe").querySelector(".meter-label").textContent = curMode() === "inperson" ? "Microphone" : label("me");   // in person the microphone hears everyone
   $("#mThem").querySelector(".meter-label").textContent = label("them");
   // refresh names in the transcript
   S.entries.forEach(e => { const el=document.getElementById("e"+e.id); if(el) fillEntry(el, e); });
-  S.pend.forEach(p => { p.querySelector(".who").textContent = label(p.dataset.src); p.querySelector(".avatar").textContent = initials(label(p.dataset.src)); });
+  S.pend.forEach(p => { const l = p.dataset.someone ? "Someone" : label(p.dataset.src); p.querySelector(".who").textContent = l; p.querySelector(".avatar").textContent = initials(l); });
   renderEmpty(); renderAnswer();
   renderRunning(); renderTitle();                    // the Start button and the title say which mode this is
 }
@@ -1815,7 +1845,7 @@ function renderRunning(){
   else { txt.textContent = "Ready"; }
   btn.className = "btn " + (S.running ? "stop" : "primary");
   btn.querySelector("[data-icon]").innerHTML = icon(S.running ? "stop" : "play");
-  $("#startLabel").textContent = S.running ? "Stop" : (S.cfg && S.cfg.subtitles ? "Start subtitles" : "Start");
+  $("#startLabel").textContent = S.running ? "Stop" : ({video: "Start subtitles", inperson: "Start listening"}[curMode()] || "Start");
   btn.disabled = S.stopping || S.busy || recOn;
   const rb = $("#resumeBtn"), ri = S.resume;
   rb.hidden = !ri || S.running || S.stopping || recOn;
@@ -1906,7 +1936,7 @@ function fitRooms(){
       if(b.hidden || getComputedStyle(b).display === "none") return false;
       if(pend) return b.classList.contains("state") || b.classList.contains("mode");
       if(b.tagName !== "BUTTON") return false;
-      return b.classList.contains("mark") || b.classList.contains("play") ||
+      return b.classList.contains("mark") || b.classList.contains("play") || b.classList.contains("whofix") ||
              (latest && (b.classList.contains("edit") || (b.classList.contains("act") && !el.classList.contains("answered"))));
     }).filter(b => b.getBoundingClientRect().width > 0);
     const left = shown.length ? Math.min(...shown.map(b => b.getBoundingClientRect().left)) : 0;
@@ -1969,6 +1999,24 @@ $("#ctxBar").addEventListener("click", ev => {
 });
 feed.addEventListener("scroll", updateCtx, {passive: true});
 window.addEventListener("resize", updateCtx);
+const HDR_STEPS = ["f1", "f2", "f3", "f4", "f5"];
+function headerOverflows(h){
+  const hr = h.getBoundingClientRect(), right = hr.right - parseFloat(getComputedStyle(h).paddingRight) + 1;
+  const bt = h.querySelector(".brand-text");
+  if(bt && getComputedStyle(bt).display !== "none" && bt.scrollWidth > bt.clientWidth + 1) return true;   // the name runs under the next item
+  return [...h.children].some(k => !k.hidden && getComputedStyle(k).display !== "none" && k.getBoundingClientRect().right > right);
+}
+let hdrAt = 0;
+function fitHeader(){
+  hdrAt = 0;
+  const h = $("header.topbar"); if(!h) return;
+  h.classList.remove(...HDR_STEPS);
+  for(const c of HDR_STEPS){ if(!headerOverflows(h)) break; h.classList.add(c); }
+}
+function fitHeaderSoon(){ if(!hdrAt) hdrAt = requestAnimationFrame(fitHeader); }
+window.addEventListener("resize", fitHeaderSoon);
+// a button appearing or a longer word (Live 00:03, Stop, Paused…) can make the header too wide
+new MutationObserver(fitHeaderSoon).observe($("header.topbar"), {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["hidden"]});
 
 function insertSorted(el, quiet){
   const t = +el.dataset.t;
@@ -1984,9 +2032,14 @@ function onSpeaking(m){
   if(!p){
     if(m.t0 == null) return;                           // a late update for a line that is already finished
     p = document.createElement("article");
-    p.className = "entry pending " + m.source;
-    p.dataset.t = m.t0; p.dataset.src = m.source; p.dataset.born = Date.now(); p.dataset.who = m.speaker > 0 ? "s" + m.speaker : "";
-    p.innerHTML = `<div class="avatar">${esc(initials(label(m.source)))}</div><div class="body"><div class="meta"><span class="who">${esc(label(m.source))}</span><em class="state"></em><span class="mode"></span></div><p class="live-text" dir="auto"></p><div class="live-fa" ${trAttr()}></div><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><div class="skel"><i></i><i></i></div></div>`;
+    // in person the microphone hears everyone: who it was is known when the sentence ends, until then it is "Someone"
+    // (shown like the other side, so the overlay and the answer panel follow it too)
+    const someone = m.source === "me" && curMode() === "inperson";
+    p.className = "entry pending " + (someone ? "them someone" : m.source);
+    p.dataset.t = m.t0; p.dataset.src = someone ? "them" : m.source; p.dataset.born = Date.now(); p.dataset.who = someone ? "?" : m.speaker > 0 ? "s" + m.speaker : "";
+    if(someone) p.dataset.someone = "1";
+    const pl = someone ? "Someone" : label(m.source);
+    p.innerHTML = `<div class="avatar">${esc(initials(pl))}</div><div class="body"><div class="meta"><span class="who">${esc(pl)}</span><em class="state"></em><span class="mode"></span></div><p class="live-text" dir="auto"></p><div class="live-fa" ${trAttr()}></div><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><div class="skel"><i></i><i></i></div></div>`;
     S.pend.set(m.seg, p);
     keepBottom(() => insertSorted(p), true);
     renderEmpty(); if(m.source === "them") renderAnswerIfIdle();
@@ -2019,6 +2072,7 @@ function entryShell(e){
   el.id = "e"+e.id; el.dataset.t = e.t0;
   el.innerHTML = `<div class="avatar"></div><div class="body">
     <div class="meta"><span class="who"></span><span class="time"></span><span class="tag" hidden></span><span class="edited" hidden>edited</span>
+      <button class="btn sm ghost whofix" hidden></button>
       <button class="btn sm ghost act" title="Suggest an answer to this line">${icon("zap")}Answer this</button>
       <button class="btn icon ghost play" title="Play this line" aria-label="Play this line" hidden>${icon("play")}</button>
       <button class="btn icon ghost mark" title="Mark as an important moment (F7)" aria-label="Mark as an important moment" aria-pressed="false">${icon("flag")}</button>
@@ -2080,6 +2134,11 @@ function fillEntry(el, e){
   el.querySelector(".act").lastChild.textContent = e.answer ? "Answer again" : "Answer this";
   if(!el.dataset.editing) el.querySelector(".orig").textContent = e.text;
   el.querySelector(".edited").hidden = !e.edited;
+  const wf = el.querySelector(".whofix");                   // in person: one click fixes who said it (and teaches the voices)
+  wf.hidden = curMode() !== "inperson";
+  wf.textContent = e.source === "me" ? "Not me" : "This is me";
+  wf.title = e.source === "me" ? "This line was said by the other person — move it to them (it is translated)" : "I said this line — move it to me";
+  wf.onclick = async () => { wf.disabled = true; const r = await api("line_who", {entry_id: e.id, who: e.source === "me" ? "them" : "me"}); wf.disabled = false; if(!r.ok) toast("warn", r.error || "Could not change it."); };
   const ex = el.querySelector(".explain"), xs = e.ex_state || "none";
   ex.hidden = xs === "none";
   if(!ex.hidden){
@@ -2197,34 +2256,87 @@ const QLABEL = {describe: "Describe / talk", candidate_q: "Your questions", sala
                 troubleshoot: "Troubleshooting", experience: "Experience", concept: "Concept", opinion: "Opinion", yesno: "Yes / no"};
 /* ---------- subtitle mode: only the translation, like film subtitles ---------- */
 function hasTr(e){ return !!e && e.tr_state !== "off" && !!String(e.translation || "").trim(); }
-function renderSubBtn(){
-  const b = $("#subBtn"); if(!b) return;
-  const on = !!(S.cfg && S.cfg.subtitles);
-  b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
-  $("#subBtnLabel").textContent = on ? "Subtitles: on" : "Subtitles";
-  renderModeBar();
+function renderSubBtn(){                               // the mode switch in the header
+  const m = curMode();
+  $$("#modeSeg [data-mode]").forEach(b => b.setAttribute("aria-checked", b.dataset.mode === m ? "true" : "false"));
+  document.body.classList.toggle("inperson", m === "inperson");
+  renderModeBar(); renderVoiceField();
+}
+const MODE_UI = {
+  inperson: {icon: "mic", title: "In-person mode", what: "for someone in front of you, or a phone on speaker.",
+             toast: "In-person mode: only your microphone is used, and the program tells your voice from the others."},
+  video: {icon: "text", title: "Subtitle mode", what: "for a film, video or audio playing on this computer.",
+          toast: "Subtitle mode: only the computer's sound (the video) is used and only the translation is shown."},
+  meeting: {toast: "Meeting mode: the computer's sound is the other side, your microphone is you."}};
+const READ_ME = {fa: "امروز برنامه را امتحان می‌کنم تا صدای مرا یاد بگیرد. معمولی حرف می‌زنم، مثل یک جلسه‌ی کاری.",
+                 en: "Today I am trying the program so it learns my voice. I speak normally, as in a work meeting."};
+function voiceLine(){
+  const v = S.voice || {}, L = v.learning || {};
+  if(L.state === "listen") return `Read aloud now (${L.left || 0} s): “${READ_ME[(S.cfg && S.cfg.my_language) === "fa" ? "fa" : "en"]}”`;
+  if(L.state === "download") return L.note || "Downloading the voice model…";
+  if(L.state === "error") return L.note || "Your voice could not be learned.";
+  if(L.state === "done" && v.learned) return L.note || "Your voice is learned.";
+  return v.learned ? "Your voice is known." : "Your voice is not learned yet: learn it once, or hold Right Ctrl while you speak.";
 }
 function renderModeBar(){
   const bar = $("#modeBar"); if(!bar || OVERLAY) return;
-  const on = !!(S.cfg && S.cfg.subtitles);
-  bar.hidden = !on; if(!on) return;
-  const ml = myLang().name;
-  $("#mbState").textContent = S.running
-    ? `Listening only to the computer's sound (not your microphone) and showing the ${ml} translation.`
-    : `Press Start subtitles, then play it. Only the computer's sound is used (not your microphone); you see only the ${ml} translation.`;
+  const m = curMode();
+  bar.hidden = m === "meeting"; if(m === "meeting") return;
+  const u = MODE_UI[m], ml = myLang().name, v = S.voice || {}, L = v.learning || {};
+  $("#mbIcon").innerHTML = icon(u.icon); $("#mbTitle").textContent = u.title; $("#mbWhat").textContent = u.what;
+  if(m === "video"){
+    $("#mbState").textContent = S.running
+      ? `Listening only to the computer's sound (not your microphone) and showing the ${ml} translation.`
+      : `Press Start subtitles, then play it. Only the computer's sound is used (not your microphone); you see only the ${ml} translation.`;
+    $("#mbVoice").textContent = "";
+  } else {
+    $("#mbState").textContent = S.running
+      ? `Listening only to the microphone. What the others say is translated into ${ml}${featOn("answers") ? ", with an answer when you are asked something" : ""}.`
+      : `Press Start, then talk. Only the microphone is used; the program tells the voices apart.`;
+    $("#mbVoice").textContent = voiceLine();
+  }
+  const busy = L.state === "listen" || L.state === "download";
+  $("#mbLearn").hidden = m !== "inperson" || S.running || busy;
+  $("#mbLearnLabel").textContent = v.learned ? "Learn my voice again" : "Learn my voice";
+  const hold = $("#mbHold"); hold.hidden = m !== "inperson" || !S.running; hold.classList.toggle("on", !!v.holding);
   const ob = $("#mbOverlay"); ob.hidden = !featOn("overlay");
-  $("#mbOverlayLabel").textContent = S.overlay ? "Overlay is on" : "Show over the video";
+  $("#mbOverlayLabel").textContent = S.overlay ? "Overlay is on" : (m === "video" ? "Show over the video" : "Show on top (overlay)");
 }
-$("#mbLeave").onclick = () => setSubtitles(false);
+function renderVoiceField(){
+  const st = $("#voiceState"); if(!st) return;
+  const v = S.voice || {}, L = v.learning || {};
+  st.textContent = voiceLine();
+  st.style.color = L.state === "error" ? "var(--danger)" : "";
+  const busy = L.state === "listen" || L.state === "download";
+  $("#voiceLearnBtn").disabled = busy || !!S.running;
+  $("#voiceLearnLabel").textContent = busy ? (L.state === "listen" ? `Listening… ${L.left || 0} s` : "Downloading…") : (v.learned ? "Learn again (10 s)" : "Learn my voice (10 s)");
+  $("#voiceForgetBtn").hidden = !v.learned;
+}
+async function learnVoice(){
+  const r = await api("voice_learn", {seconds: 10});
+  if(!r.ok) return toast("warn", r.error || "Could not start.");
+}
+$("#mbLearn").onclick = learnVoice;
+$("#voiceLearnBtn").onclick = learnVoice;
+$("#voiceForgetBtn").onclick = async () => { const r = await api("voice_forget", {}); if(r.ok){ S.voice = Object.assign({}, S.voice, r); renderSubBtn(); toast("info", "Your voice print is deleted from this computer."); } };
+(() => {                                                   // hold: those words are mine
+  const b = $("#mbHold"); let on = false;
+  const set = v => { if(v === on) return; on = v; b.classList.toggle("on", v); api("voice_hold", {on: v}); };
+  b.addEventListener("pointerdown", ev => { ev.preventDefault(); set(true); });
+  ["pointerup", "pointerleave", "pointercancel", "blur"].forEach(t => b.addEventListener(t, () => set(false)));
+})();
+$("#mbLeave").onclick = () => setMode("meeting");
 $("#mbOverlay").onclick = () => { if(!S.overlay) $("#ovBtn").click(); };
-function setSubtitles(on){
-  if(!S.cfg) return;
-  S.cfg.subtitles = on; document.body.classList.toggle("subs", on);
+function setMode(m){
+  if(!S.cfg || curMode() === m) return;
+  S.cfg.work_mode = m; S.cfg.subtitles = m === "video";
+  document.body.classList.toggle("subs", m === "video");
   applyConfig();
-  queueSave({subtitles: on});
-  toast("info", on ? "Subtitle mode: only the computer's sound (the video) is used and only the translation is shown." + (S.running ? " Your microphone is no longer written down." : "")
-                   : "Meeting mode again: your microphone, answers and the other parts work as before.");
+  queueSave({work_mode: m});
+  toast("info", MODE_UI[m].toast + (S.running && m !== "meeting" ? " This applies now." : ""));
 }
+function setSubtitles(on){ setMode(on ? "video" : "meeting"); }     // (older callers)
+$$("#modeSeg [data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
 var subsAt = 0;                                 // (var: safe even if called before this line ran)
 function renderSubsSoon(){ if(!OVERLAY || subsAt) return; subsAt = requestAnimationFrame(() => { subsAt = 0; renderSubs(); }); }
 function subItems(){
@@ -2263,7 +2375,7 @@ function renderSubs(){
     box.append(d);
   });
 }
-$("#subBtn").onclick = () => { if(S.cfg) setSubtitles(!S.cfg.subtitles); };
+
 function renderOverlayBtn(){ const b = $("#ovBtn"); if(b) b.classList.toggle("on", !!S.overlay); renderModeBar(); }
 $("#jobPrepBtn").onclick = () => { closeDrawer(); openJobPrep(); };
 $("#ovBtn").onclick = async () => {
@@ -2499,6 +2611,19 @@ function renderEmpty(){
     const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
     return;
   }
+  if(curMode() === "inperson"){
+    const learned = !!(S.voice && S.voice.learned);
+    box.innerHTML = S.running
+      ? `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><h3>Listening to the microphone…</h3><p>Talk normally. What the other person says appears here in ${esc(myLang().name)}${featOn("answers") ? ", with a suggested answer when you are asked something" : ""}.${learned ? "" : " Hold <b>Right Ctrl</b> while you speak so your own words are known."}</p></div>`
+      : `<div class="empty-card"><div class="empty-icon">${icon("mic")}</div><h3>In-person mode</h3>
+         <p>For someone in front of you, or a phone on speaker. Only the microphone is used.</p>
+         <p>1. ${learned ? "Your voice is learned ✓" : "Press <b>Learn my voice</b> once (10 seconds) — or hold <b>Right Ctrl</b> while you speak."}<br>2. Press <b>Start listening</b>.<br>3. Talk. Each line shows who said it (Me, Person 1, Person 2…) — if one is wrong, press <b>Not me</b> / <b>This is me</b> on it.</p>
+         <p class="help">To go back to online meetings, choose <b>Meeting</b> at the top.</p>
+         <div class="empty-actions">${learned ? "" : `<button class="btn soft lg" id="bigLearn">${icon("mic")}Learn my voice</button>`}<button class="btn primary lg" id="bigStart">${icon("play")}Start listening<kbd>F9</kbd></button></div></div>`;
+    const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
+    const bl = $("#bigLearn"); if(bl) bl.onclick = learnVoice;
+    return;
+  }
   if(S.running){
     box.innerHTML = `<div class="empty-card listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
       <h3>Listening…</h3><p>Lines appear here as soon as someone finishes a sentence.${featOn("translate") ? ` The ${esc(myLang().name)} translation follows right away.` : ""}${featOn("answers") ? " Suggested answers appear in the panel." : ""}</p></div>`;
@@ -2650,7 +2775,7 @@ $("#ansNext").onclick = () => stepAnswer(1);
 
 /* ---------- title, pause ---------- */
 function renderTitle(){
-  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : (S.cfg && S.cfg.subtitles ? "Subtitles" : "Live transcript");
+  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : ({video: "Subtitles", inperson: "Conversation"}[curMode()] || "Live transcript");
 }
 async function togglePause(){
   if(!S.running || S.pausing) return;

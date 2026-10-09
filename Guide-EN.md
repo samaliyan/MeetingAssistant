@@ -1,4 +1,22 @@
-# Meeting Assistant — User Guide (version 6.27)
+# Meeting Assistant — User Guide (version 6.28)
+
+## Version 6.28: In person mode (someone in front of you, or a phone on speaker)
+
+At the top there is a switch with three modes:
+- **Meeting**: Teams, Zoom, Meet. The computer's sound is the other side, the microphone is you.
+- **In person**: someone in front of you, or a phone on speaker. Only the microphone is used.
+- **Video**: a film or video on this computer, translated like subtitles (see 6.26).
+
+To use In person:
+1. Choose **In person** at the top.
+2. Press **Learn my voice** and read the sentence it shows for 10 seconds (only once; it is kept on this computer).
+3. Press **Start listening** and talk.
+4. Each line says who said it: **Me**, **Person 1**, **Person 2**. What the others say is translated, and a suggested answer comes when you are asked something.
+5. A line with the wrong person? Press **Not me** or **This is me** on it. The program learns from it.
+
+No time to learn your voice? Hold **Right Ctrl** (or the **Hold while I speak** button in the blue bar) while you speak: those words are yours, and the program learns your voice from them.
+
+To delete your voice: Setup › Audio › **Forget my voice**.
 
 ## Version 6.27: the overlay fixed
 
@@ -11,10 +29,10 @@
 
 For a film, video or audio playing on this computer, when you want its translation like subtitles.
 
-1. Press **Subtitles** at the top. The button turns solid and says **Subtitles: on**, and a blue bar at the top says you are in subtitle mode.
+1. Choose **Video** in the switch at the top (Meeting · In person · Video). A blue bar at the top says you are in subtitle mode.
 2. Press **Start subtitles**.
 3. Play the film or video. Each sentence's translation appears in the window. To see the subtitles over the video itself, press **Show over the video** in the blue bar.
-4. To go back to meetings, press **Back to meeting mode** in the blue bar (or **Subtitles** again).
+4. To go back to meetings, press **Back to meeting mode** in the blue bar (or choose **Meeting** at the top).
 
 In subtitle mode:
 - Only the computer's sound (the video) is heard. **Your microphone is not used** and what you say is not written.
