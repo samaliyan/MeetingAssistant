@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.28"
+VERSION = "6.29"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -11708,7 +11708,9 @@ class App:
         with h.lock:
             n, ov = len(h.clients), sum(1 for q in h.clients if getattr(q, "overlay", False))
         es = h.empty_since
-        return {"ok": True, "pages": n, "overlay_pages": ov, "ever": h.ever,
+        hp = HIDDEN_PROC[-1] if HIDDEN_PROC else None
+        return {"ok": True, "pages": n, "overlay_pages": ov, "ever": h.ever, "page_loads": getattr(self, "page_loads", 0),
+                "window_helper": None if hp is None else ("running" if hp.poll() is None else f"ended {hp.returncode}"),
                 "empty_for": round(time.time() - es, 1) if es else None, "running": self.running,
                 "stopping": self.stopping, "recording": bool(self.recording), "closing": self.closing.is_set(),
                 "overlay_on": bool(getattr(self.overlay, "on", False))}
@@ -13653,7 +13655,16 @@ class App:
                 self.hub.publish("hide", hide=st)
         # the window was closed -> finish and quit; during a meeting or a recording: open the window again
         es = self.hub.empty_since
-        if self.hub.ever and es and now - es > 12:
+        gone = bool(self.hub.ever and es and now - es > 12)
+        hp = HIDDEN_PROC[-1] if HIDDEN_PROC else None
+        if not gone and not self.hub.clients and hp is not None and hp.poll() is not None:
+            # the hidden window's process has ended without its page ever being connected (closed while it was
+            # still loading): without this the program would wait for a page forever, invisible
+            state.setdefault("helper_gone", now)
+            gone = now - state["helper_gone"] > 12
+        else:
+            state.pop("helper_gone", None)
+        if gone:
             if self.running or self.stopping or self.recording:
                 if now - state["reopened"] > 20:
                     state["reopened"] = now
@@ -13866,6 +13877,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with open(os.path.join(WEB_DIR, "index.html"), "r", encoding="utf-8") as f:
                     html_text = f.read().replace("__TOKEN__", app.token)
+                app.page_loads = getattr(app, "page_loads", 0) + 1
             except OSError:
                 return self._send(500, "web/index.html is missing", "text/plain")
             return self._send(200, html_text, "text/html; charset=utf-8",
@@ -14365,7 +14377,24 @@ def run_window_helper(argv):
     worker_t = None
     try:
         # a neutral title: the taskbar button of a window that is hidden from sharing should not say what it is
-        webview.create_window("Notes", url, width=1280, height=860, min_size=(900, 600), text_select=True)
+        win = webview.create_window("Notes", url, width=1280, height=860, min_size=(900, 600), text_select=True)
+
+        def closed():
+            # Closed while the page was still loading, WebView2 can keep this process waiting for ever (and with it
+            # the program, which then never quits). The window is gone: this process ends at the latest 10 s later.
+            def bye():
+                time.sleep(10)
+                stop.set()
+                try:
+                    os.remove(status)
+                except OSError:
+                    pass
+                os._exit(0)
+            threading.Thread(target=bye, daemon=True, name="closed-watchdog").start()
+        try:
+            win.events.closed += closed
+        except Exception:
+            pass
         worker_t = threading.Thread(target=worker, daemon=True, name="hide-keeper")
         worker_t.start()
         webview_test_port(webview)
@@ -14706,6 +14735,12 @@ def open_hidden_window(url, independent=False):
             note_hide_failure(st["error"] or "Windows did not hide the window.")
             return False
         rc = p.poll()
+        if rc == 0:
+            # it ended normally: it was shown, and closed (by the user) before we saw it - not a failure, so no
+            # visible window instead; the program quits by itself as its window is gone
+            log("The hidden window was closed right after it opened")
+            HIDDEN_PROC[:] = [p]
+            return True
         if rc is not None:
             note_hide_failure(f"The hidden window closed at once (code {rc}).")
             return False

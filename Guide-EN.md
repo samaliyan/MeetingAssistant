@@ -1,4 +1,8 @@
-# Meeting Assistant — User Guide (version 6.28)
+# Meeting Assistant — User Guide (version 6.29)
+
+## Version 6.29
+
+- **Fixed**: closing the window very soon after starting (while it was still loading) could leave the program running in the background, invisible. It now always quits by itself.
 
 ## Version 6.28: In person mode (someone in front of you, or a phone on speaker)
 

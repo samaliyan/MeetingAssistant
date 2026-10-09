@@ -2863,3 +2863,73 @@ def test_hide_test_action_guards(app):
         assert r["ok"] is False and ("Windows" in r["error"] or "hidden window" in r["error"])
     finally:
         a.closing.set()
+
+
+def test_quits_when_the_window_ended_before_its_page_loaded(app):
+    """Closed while still loading: no page ever connected, but the window's process ended -> quit 12 s later
+    (before, the program waited for that page for ever, invisible). A window still open keeps it running."""
+    a = app.App()
+    calls = []
+    a.shutdown = lambda: calls.append(1)
+    old = list(app.HIDDEN_PROC)
+
+    class Proc:
+        def __init__(self, rc):
+            self.returncode = rc
+
+        def poll(self):
+            return self.returncode
+    try:
+        state = {"last_save": 0.0, "last_stats": 0.0, "last_sent": None, "reopened": 0.0, "errors": 0}
+        app.HIDDEN_PROC[:] = [Proc(None)]                  # the window is still open (loading)
+        a._tick(state)
+        state["helper_gone"] = 0.0                         # (even a stale mark is dropped while it is open)
+        a._tick(state)
+        assert not calls and "helper_gone" not in state
+        app.HIDDEN_PROC[:] = [Proc(0)]                     # now it has ended, and no page ever connected
+        a._tick(state)
+        assert not calls and "helper_gone" in state        # not at once: 12 s later
+        state["helper_gone"] -= 13
+        a._tick(state)
+        assert calls == [1]
+        assert a.api_debug_clients()["window_helper"] == "ended 0"
+        calls.clear()
+        state = {"last_save": 0.0, "last_stats": 0.0, "last_sent": None, "reopened": 0.0, "errors": 0}
+        q = a.hub.subscribe()                              # a page is connected (e.g. a second start's window)
+        a._tick(state)
+        state["helper_gone"] = time.time() - 60
+        a._tick(state)
+        assert not calls
+        a.hub.unsubscribe(q)
+    finally:
+        app.HIDDEN_PROC[:] = old
+        a.closing.set()
+
+
+def test_hidden_window_closed_right_away_is_not_a_failure(app):
+    """The user closed the hidden window before the program saw it open (its process ended with code 0): no visible
+    window is opened instead, and the program knows its window process (so it quits by itself)."""
+    old = (app.hidden_window_possible, app.subprocess.Popen, app.read_hide_status, app.note_hide_failure, list(app.HIDDEN_PROC))
+    fails = []
+
+    class P:
+        def __init__(self, rc):
+            self.rc = rc
+
+        def poll(self):
+            return self.rc
+
+        def terminate(self):
+            pass
+    try:
+        app.hidden_window_possible = lambda: True
+        app.read_hide_status = lambda: None
+        app.note_hide_failure = lambda msg: fails.append(msg)
+        app.subprocess.Popen = lambda *a, **k: P(0)
+        assert app.open_hidden_window("http://x") is True and not fails
+        assert app.HIDDEN_PROC and app.HIDDEN_PROC[-1].poll() == 0
+        app.subprocess.Popen = lambda *a, **k: P(4)                    # a real failure: still reported
+        assert app.open_hidden_window("http://x") is False and fails and "code 4" in fails[0]
+    finally:
+        (app.hidden_window_possible, app.subprocess.Popen, app.read_hide_status, app.note_hide_failure) = old[:4]
+        app.HIDDEN_PROC[:] = old[4]
