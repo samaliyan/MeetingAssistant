@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.29"
+VERSION = "6.30"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -845,6 +845,30 @@ def wav_pieces(path, piece=3.0):
     x = resample16k(x, sr) if sr != 16000 else x
     step = int(16000 * piece)
     return [x[i:i + step] for i in range(0, len(x), step) if len(x[i:i + step]) >= 16000]
+
+
+def voiced(x, sr=16000):
+    """Only the parts of a recording where someone speaks (by loudness, so the microphone sensitivity setting does
+    not matter), joined; plus the loudest moment (0..1) to tell 'quiet' from 'no sound at all'."""
+    x = np.asarray(x, dtype=np.float32)
+    n = int(sr * 0.03)
+    if len(x) < n:
+        return x[:0], float(np.max(np.abs(x))) if len(x) else 0.0
+    fr = x[:len(x) // n * n].reshape(-1, n)
+    rms = np.sqrt(np.mean(fr * fr, axis=1))
+    peak = float(np.max(np.abs(x)))
+    p10, p90 = float(np.percentile(rms, 10)), float(np.percentile(rms, 90))
+    if p90 < 3 * p10:                                        # the same loudness all the time: a hum or a fan, not speech
+        return x[:0], peak
+    thr = max(0.003, 0.3 * p90, 2.5 * p10)
+    keep = rms > thr
+    if keep.any():                                           # a short gap inside a word stays
+        k = keep.copy()
+        for i in range(1, len(keep) - 1):
+            if not keep[i] and keep[i - 1] and keep[i + 1]:
+                k[i] = True
+        keep = k
+    return fr[keep].reshape(-1), peak
 
 
 def resample16k(x, sr):
@@ -11787,28 +11811,53 @@ class App:
                     return emit(state="error", note="The voice model could not be downloaded (" + short(dl.state.get("error") or "no answer", 120)
                                 + "). Hugging Face may need a VPN or proxy (Setup › Services › Network).")
             test_wav = os.environ.get("MA_TEST_MIC_WAV")
+            pieces, raw, mic = [], [], ""
             if test_wav:                                      # the Windows check has no microphone: a recording instead
-                pieces = wav_pieces(test_wav)
+                raw = [(np.concatenate(wav_pieces(test_wav, 1.0)), 16000)]
+                mic = "test recording"
             else:
-                pieces = []
-
                 def sink(kind, source, seg_id, **kw):
                     if kind == "segment" and source == "me":
                         pieces.append(kw["audio"])
+
+                def keep(source, x, rate):                    # every bit of the microphone, not only "sentences"
+                    if source == "me":
+                        raw.append((np.array(x, dtype=np.float32), rate))
                 with self.lock:
                     if self.running or self.stopping:
                         return emit(state="error", note="A session started meanwhile. Try again after it.")
                     self._stop_captures()
                     problems, mic, _spk = self._start_captures(sink, True, want_loop=False)
+                    for c in self.captures:
+                        c.saver = keep
                 if not any(c.source == "me" for c in self.captures):
                     self._stop_captures()
                     return emit(state="error", note=" ".join(problems) or "No microphone found.")
+                log(f"Learn my voice: listening to the microphone ({mic or 'default'}) for {secs} s")
                 end = time.time() + secs
                 while time.time() < end and not self.closing.is_set():
                     emit(state="listen", left=max(0, round(end - time.time())), note="")
                     time.sleep(0.5)
                 with self.lock:
                     self._stop_captures()                         # (stopping hands over the sentence still being read)
+            if raw:
+                rate = raw[0][1]
+                rec = resample16k(np.concatenate([x for x, _r in raw]), rate) if rate != 16000 else np.concatenate([x for x, _r in raw])
+                speech, peak = voiced(rec)
+                if len(speech) >= sum(len(p) for p in pieces):   # (usually: the pauses of the reading are left out)
+                    step = 16000 * 3
+                    pieces = [speech[i:i + step] for i in range(0, len(speech), step) if len(speech[i:i + step]) >= 16000]
+                if len(speech) < 16000 * 4:
+                    why = ("No sound came from the microphone" if peak < 0.002 else
+                           f"The microphone was very quiet (loudest {round(peak * 100)}%)" if peak < 0.05 else
+                           f"Only {len(speech) / 16000:.0f} s of speech was heard")
+                    return emit(state="error", note=f"{why} ({mic or 'default microphone'}). Check the microphone in "
+                                "Setup › Audio (Test for 30 seconds), and in Windows: Settings › Privacy › Microphone "
+                                "› Let desktop apps access your microphone. Then read the sentence aloud again.")
+            else:
+                return emit(state="error", note=f"No sound came from the microphone ({mic or 'default microphone'}). "
+                            "Check it in Setup › Audio (Test for 30 seconds) and in Windows: Settings › Privacy › "
+                            "Microphone › Let desktop apps access your microphone.")
             speech = sum(len(p) for p in pieces) / 16000
             if speech < 4.0:
                 return emit(state="error", note=f"Only {speech:.0f} s of your voice was heard. Read the sentence aloud, closer to the microphone, and try again.")
