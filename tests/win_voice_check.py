@@ -16,7 +16,7 @@ import tempfile
 import time
 import urllib.request
 
-EXE, OUT = sys.argv[1], sys.argv[2]
+EXE, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 os.makedirs(OUT, exist_ok=True)
 results = []
 
