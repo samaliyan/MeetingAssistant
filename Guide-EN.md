@@ -1,4 +1,12 @@
-# Meeting Assistant — User Guide (version 6.30)
+# Meeting Assistant — User Guide (version 6.31)
+
+## Version 6.31: the Learn my voice window
+
+1. Press **Learn my voice** (in-person mode, or Setup › Audio).
+2. A window shows what to do and the sentence to read. Press **Start**.
+3. Read aloud. The window shows the seconds left, your microphone's level and how much speech it has heard.
+4. At the end it says whether it worked and how good the recording was (speech, loudness, background noise), with tips.
+5. Press **Test it**, read again, and it says whether the voice is yours.
 
 ## Version 6.30: Learn my voice
 

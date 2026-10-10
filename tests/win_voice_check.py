@@ -33,7 +33,8 @@ TEXTS = {
     "a1": "Today I am trying the program so it learns my voice. I speak normally, as in a work meeting. "
           "We moved our main database to the new data centre last month, and the switchover took less than five minutes.",
     "a2": "Thank you for having me. In my last role I led a team of thirty people and planned the backups for every system.",
-    "b1": "Could you tell me about a project you led recently, and what you would do differently next time?",
+    "b1": "Could you tell me about a project you led recently, and what you would do differently next time? "
+          "Please also say how you worked with the other teams.",
 }
 
 
@@ -87,19 +88,30 @@ try:
     check("before: nothing learned", st.get("learned") is False, json.dumps(st))
     r = call("voice_learn", {"seconds": 10})
     check("Learn my voice starts", r.get("ok"), json.dumps(r))
-    t0, seen, last = time.time(), [], {}
-    while time.time() - t0 < 300:
-        st = call("voice_status")
-        last = st.get("learning") or {}
-        if not seen or seen[-1] != last.get("state"):
-            seen.append(last.get("state"))
-        if last.get("state") in ("done", "error"):
-            break
-        time.sleep(0.5)
-    check("learning finishes", last.get("state") == "done",
-          f"after {time.time() - t0:.0f} s, states {seen}, last {json.dumps(last)}")
+    def wait_done():
+        t0, seen, last = time.time(), [], {}
+        while time.time() - t0 < 300:
+            st = call("voice_status")
+            last = st.get("learning") or {}
+            if not seen or seen[-1] != last.get("state"):
+                seen.append(last.get("state"))
+            if last.get("state") in ("done", "error", "cancelled"):
+                break
+            time.sleep(0.3)
+        return last, seen, time.time() - t0
+    last, seen, took = wait_done()
+    check("learning finishes", last.get("state") == "done", f"after {took:.0f} s, states {seen}, last {json.dumps(last)}")
+    q = last.get("quality") or {}
+    check("it says how good the recording was", q.get("grade") in ("good", "ok", "poor") and q.get("speech", 0) >= 4
+          and "snr" in q and "steady" in q, json.dumps(q))
     st = call("voice_status")
     check("the voice is learned and kept", st.get("learned") and os.path.isfile(os.path.join(data, "voiceprint.json")), json.dumps(st))
+    for wav_key, want, name in (("a2", True, "Test my voice, same voice, other words: that is you"),
+                                ("b1", False, "Test my voice, another voice: not you")):
+        r = call("voice_learn", {"seconds": 10, "purpose": "test", "test_path": wav[wav_key]})
+        last, seen, took = wait_done()
+        check(name, r.get("ok") and last.get("state") == "done" and last.get("purpose") == "test" and last.get("is_me") is want,
+              f"states {seen}, {json.dumps({k: last.get(k) for k in ('is_me', 'note', 'quality')})}")
     same = call("voice_try", {"path": wav["a2"]})
     check("the same voice, other words: me", same.get("who") == "me", json.dumps(same))
     other = call("voice_try", {"path": wav["b1"]})

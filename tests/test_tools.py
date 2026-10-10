@@ -2952,3 +2952,71 @@ def test_learn_my_voice_keeps_only_the_speech(app):
     assert len(app.voiced(np.zeros(sr * 10, np.float32))[0]) == 0     # silence (a blocked microphone)
     assert len(app.voiced(rng.normal(0, 0.05, sr * 10).astype(np.float32))[0]) == 0   # a fan: not a voice
     assert len(app.voiced(room)[0]) == 0
+
+
+def test_learn_and_test_my_voice_report_how_it_went(app, tmp_path, monkeypatch):
+    """The steps of 'Learn my voice' / 'Test my voice' (from a recording here, as on the Windows check): listening,
+    checking, then a result with its quality - or a clear reason."""
+    import numpy as np
+    import wave
+    sr = 16000
+    rng = np.random.default_rng(1)
+
+    def write(name, voice_hz, quiet=False, silent=False):
+        x = rng.normal(0, 0.002, sr * 10).astype(np.float32)
+        if not silent:
+            for start in (0.5, 2.5, 4.5, 6.5, 8.3):
+                i, n = int(start * sr), int(1.6 * sr)
+                t = np.arange(n)
+                x[i:i + n] += (0.25 * np.sin(2 * np.pi * voice_hz * t / sr) * (0.6 + 0.4 * np.sin(2 * np.pi * 4 * t / sr))).astype(np.float32)
+        if quiet:
+            x *= 0.05
+        if silent:
+            x[:] = 0.0                        # what a microphone blocked by Windows gives
+        p = str(tmp_path / name)
+        with wave.open(p, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+            w.writeframes((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+        return p
+    me_wav, other_wav, silent_wav = write("me.wav", 150), write("other.wav", 260), write("silent.wav", 0, silent=True)
+    a = app.App()
+    events = []
+    a.hub.publish = lambda t, **k: events.append((t, k))
+    a.voices = app.VoiceID(path=str(tmp_path / "vp.json"))
+
+    def fake_embed(audio):                     # a stand-in voice print: which "voice" (pitch) the piece has
+        f = np.abs(np.fft.rfft(audio[:sr]))
+        hz = np.argmax(f) * sr / len(audio[:sr])
+        e = np.zeros(8, np.float32)
+        e[0 if hz < 200 else 4] = 1.0
+        e[1] = 0.2
+        return e / np.linalg.norm(e)
+    a.voices.embed = fake_embed
+    monkeypatch.setenv("MA_TEST_MIC_WAV", me_wav)
+    open_model = os.path.join(app.MODELS_DIR, app.SPK_MODEL["id"])
+    os.makedirs(open_model, exist_ok=True)
+    made = not os.path.isfile(app.voice_model_path())
+    open(app.voice_model_path(), "ab").close()
+    try:
+        a._voice_learn_run(10, "learn")
+        states = [k["learning"]["state"] for t, k in events if t == "voice"]
+        L = a.voice_learn
+        assert "listen" in states and "check" in states and L["state"] == "done"
+        q = L["quality"]
+        assert q["speech"] >= 6 and q["grade"] in ("good", "ok") and q["snr"] > 15 and q["steady"] > 0.9
+        assert a.voices.learned() and os.path.isfile(str(tmp_path / "vp.json"))
+        a._voice_learn_run(10, "test", me_wav)
+        assert a.voice_learn["purpose"] == "test" and a.voice_learn["is_me"] is True and a.voice_learn["quality"]["like_me"] > 0.9
+        a._voice_learn_run(10, "test", other_wav)
+        assert a.voice_learn["is_me"] is False and "Not recognised" in a.voice_learn["note"]
+        a._voice_learn_run(10, "learn", silent_wav)
+        assert a.voice_learn["state"] == "error" and a.voice_learn["reason"] == "silent" and "Privacy" in a.voice_learn["note"]
+        assert a.voices.learned()                      # a failed attempt keeps the voice learned before
+        assert app.voice_grade({"speech": 4.5, "snr": 6, "loud": 0.02, "clipped": 0}) == "poor"
+        assert app.voice_grade({"speech": 7, "snr": 20, "loud": 0.05, "clipped": 0, "steady": 0.8}) == "good"
+        assert app.voice_grade({"speech": 5, "snr": 12, "loud": 0.05, "clipped": 0}) == "ok"
+        assert a.api_voice_learn(purpose="other")["ok"] is False
+    finally:
+        if made:
+            os.remove(app.voice_model_path())
+        a.closing.set()

@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.30"
+VERSION = "6.31"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -869,6 +869,34 @@ def voiced(x, sr=16000):
                 k[i] = True
         keep = k
     return fr[keep].reshape(-1), peak
+
+
+def voice_quality(rec, sr=16000):
+    """How good a recording of a voice is: seconds of speech, loudness, background noise, clipping; plus the speech in
+    pieces of 3 s (for the voice print)."""
+    rec = np.asarray(rec, dtype=np.float32)
+    speech, peak = voiced(rec, sr)
+    n = int(sr * 0.03)
+    q = {"speech": round(len(speech) / sr, 1), "total": round(len(rec) / sr, 1), "peak": round(peak, 3),
+         "loud": 0.0, "noise": 0.0, "snr": 0.0, "clipped": 0.0}
+    if len(rec) >= n:
+        fr = rec[:len(rec) // n * n].reshape(-1, n)
+        rms = np.sqrt(np.mean(fr * fr, axis=1))
+        noise = float(np.percentile(rms, 10))
+        loud = float(np.sqrt(np.mean(speech * speech))) if len(speech) else 0.0
+        q.update(loud=round(loud, 4), noise=round(noise, 5),
+                 snr=round(20 * np.log10(max(loud, 1e-6) / max(noise, 1e-6)), 1) if len(speech) else 0.0,
+                 clipped=round(float(np.mean(np.abs(rec) > 0.98)) * 100, 2))
+    step = sr * 3
+    q["pieces"] = [speech[i:i + step] for i in range(0, len(speech), step) if len(speech[i:i + step]) >= sr]
+    return q
+
+
+def voice_grade(q):
+    """'good' | 'ok' | 'poor', from voice_quality() (+ 'steady': how alike its pieces sound)."""
+    bad = q["speech"] < 4 or q["snr"] < 8 or q["loud"] < 0.01 or q["clipped"] > 1.0 or q.get("steady", 1) < 0.35
+    good = q["speech"] >= 6 and q["snr"] >= 15 and q["loud"] >= 0.03 and q["clipped"] <= 0.1 and q.get("steady", 1) >= 0.55
+    return "poor" if bad else "good" if good else "ok"
 
 
 def resample16k(x, sr):
@@ -11776,98 +11804,159 @@ class App:
         self.hub.publish("voice", **self.voices.status())
         return {"ok": True, **self.voices.status()}
 
-    def api_voice_learn(self, seconds=10):
-        """'Learn my voice': the microphone listens for a few seconds while I read a sentence aloud."""
+    def api_voice_learn(self, seconds=10, purpose="learn", test_path=""):
+        """'Learn my voice' (purpose 'learn'), or 'Test my voice' (purpose 'test': is this still me?).
+        The microphone listens for a few seconds while I read a sentence aloud; the steps are sent as 'voice' events."""
+        if purpose not in ("learn", "test"):
+            return {"ok": False, "error": "Unknown choice."}
         with self.lock:
             if self.running or self.stopping or self.recording:
                 return {"ok": False, "error": "Stop first. Or, during an in-person session, hold Right Ctrl while you speak: it learns from that too."}
-            if self.voice_learn and self.voice_learn.get("state") in ("download", "listen"):
+            if self.voice_learn and self.voice_learn.get("state") in ("download", "listen", "check"):
                 return {"ok": True, "busy": True}
-            if pyaudio is None:
+            if purpose == "test" and self.voices.me is None:
+                return {"ok": False, "error": "Learn your voice first."}
+            if pyaudio is None and not os.environ.get("MA_TEST_MIC_WAV"):
                 return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
             try:
                 import onnxruntime  # noqa: F401
             except Exception:
                 return {"ok": False, "error": "Voice recognition is not included in this copy of the program (onnxruntime)."}
-            self.voice_learn = {"state": "download" if not os.path.isfile(voice_model_path()) else "listen", "left": 0}
-        secs = max(6, min(30, int(seconds or 10)))
-        threading.Thread(target=self._voice_learn_run, args=(secs,), daemon=True, name="voice-learn").start()
+            secs = max(4, min(30, int(seconds or 10)))
+            self.voice_cancel = threading.Event()
+            self.voice_learn = {"state": "download" if not os.path.isfile(voice_model_path()) else "listen",
+                                "purpose": purpose, "left": secs, "total": secs, "heard": 0.0}
+        tp = test_path if os.environ.get("MA_TEST_MIC_WAV") else ""      # (only the Windows check gives its own recording)
+        threading.Thread(target=self._voice_learn_run, args=(secs, purpose, tp), daemon=True, name="voice-learn").start()
         return {"ok": True, "busy": True}
 
-    def _voice_learn_run(self, secs):
+    def api_voice_cancel(self):
+        ev = getattr(self, "voice_cancel", None)
+        if ev is not None:
+            ev.set()
+        return {"ok": True}
+
+    def _voice_record(self, secs, emit, cancel, test_path=""):
+        """The microphone for `secs` seconds (all of its sound, 16 kHz) and its name; ('', reason) when it cannot."""
+        wav = test_path or os.environ.get("MA_TEST_MIC_WAV")
+        if wav:                                                   # the Windows check has no microphone: a recording instead
+            rec = np.concatenate(wav_pieces(wav, 1.0))
+            emit(state="listen", left=0, heard=round(len(voiced(rec)[0]) / 16000, 1))
+            return rec, "test recording"
+        raw = []
+
+        def keep(source, x, rate):                                # every bit of the microphone, not only "sentences"
+            if source == "me":
+                raw.append((np.array(x, dtype=np.float32), rate))
+        with self.lock:
+            if self.running or self.stopping:
+                return None, "A session started meanwhile. Try again after it."
+            self._stop_captures()
+            problems, mic, _spk = self._start_captures(lambda *a, **k: None, True, want_loop=False)
+            for c in self.captures:
+                c.saver = keep
+        if not any(c.source == "me" for c in self.captures):
+            with self.lock:
+                self._stop_captures()
+            return None, " ".join(problems) or "No microphone found."
+        log(f"Voice: listening to the microphone ({mic or 'default'}) for {secs} s")
+        end = time.time() + secs
+        try:
+            while time.time() < end and not self.closing.is_set() and not cancel.is_set():
+                rate = raw[0][1] if raw else 16000
+                so_far = np.concatenate([x for x, _r in raw]) if raw else np.zeros(0, np.float32)
+                heard = len(voiced(so_far, rate)[0]) / rate if len(so_far) else 0.0
+                peak = float(np.max(np.abs(so_far))) if len(so_far) else 0.0
+                spent = secs - (end - time.time())
+                hint = ("Nothing is heard from the microphone." if spent > 2.5 and peak < 0.002 else
+                        "Very quiet — speak louder or closer." if spent > 2.5 and peak < 0.05 else "")
+                emit(state="listen", left=max(0, round(end - time.time())), heard=round(heard, 1), hint=hint, mic=mic)
+                time.sleep(0.4)
+        finally:
+            with self.lock:
+                self._stop_captures()
+        if cancel.is_set():
+            return None, "cancelled"
+        if not raw:
+            return np.zeros(0, np.float32), mic
+        rate = raw[0][1]
+        rec = np.concatenate([x for x, _r in raw])
+        return (resample16k(rec, rate) if rate != 16000 else rec), mic
+
+    def _voice_learn_run(self, secs, purpose="learn", test_path=""):
+        cancel = getattr(self, "voice_cancel", None) or threading.Event()
+        self.voice_learn = {"state": "download" if not os.path.isfile(voice_model_path()) else "listen",   # (nothing left
+                            "purpose": purpose, "left": secs, "total": secs, "heard": 0.0}              # from the last try)
+
         def emit(**kw):
             if kw.get("state") in ("error", "done") and kw.get("note"):
-                log("Learn my voice: " + kw["note"], level="warn" if kw["state"] == "error" else "info")
+                log(("Learn my voice: " if purpose == "learn" else "Test my voice: ") + kw["note"],
+                    level="warn" if kw["state"] == "error" else "info")
             self.voice_learn = dict(self.voice_learn or {}, **kw)
             self.hub.publish("voice", **self.voices.status(), learning=dict(self.voice_learn))
         try:
             if not os.path.isfile(voice_model_path()):
-                emit(state="download", note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…")
+                emit(state="download", note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…", progress=0)
                 dl = ModelDownload(SPK_MODEL, detect_proxy(self.cfg["proxy"])[0],
-                                   lambda st: emit(note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
+                                   lambda st: emit(progress=round(100 * st['done'] / max(1, st['total'])),
+                                                   note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
+                dl.cancel = cancel
                 os.makedirs(MODELS_DIR, exist_ok=True)
                 dl.run()
+                if cancel.is_set():
+                    return emit(state="cancelled", note="")
                 if not os.path.isfile(voice_model_path()):
-                    return emit(state="error", note="The voice model could not be downloaded (" + short(dl.state.get("error") or "no answer", 120)
+                    return emit(state="error", reason="download",
+                                note="The voice model could not be downloaded (" + short(dl.state.get("error") or "no answer", 120)
                                 + "). Hugging Face may need a VPN or proxy (Setup › Services › Network).")
-            test_wav = os.environ.get("MA_TEST_MIC_WAV")
-            pieces, raw, mic = [], [], ""
-            if test_wav:                                      # the Windows check has no microphone: a recording instead
-                raw = [(np.concatenate(wav_pieces(test_wav, 1.0)), 16000)]
-                mic = "test recording"
-            else:
-                def sink(kind, source, seg_id, **kw):
-                    if kind == "segment" and source == "me":
-                        pieces.append(kw["audio"])
-
-                def keep(source, x, rate):                    # every bit of the microphone, not only "sentences"
-                    if source == "me":
-                        raw.append((np.array(x, dtype=np.float32), rate))
-                with self.lock:
-                    if self.running or self.stopping:
-                        return emit(state="error", note="A session started meanwhile. Try again after it.")
-                    self._stop_captures()
-                    problems, mic, _spk = self._start_captures(sink, True, want_loop=False)
-                    for c in self.captures:
-                        c.saver = keep
-                if not any(c.source == "me" for c in self.captures):
-                    self._stop_captures()
-                    return emit(state="error", note=" ".join(problems) or "No microphone found.")
-                log(f"Learn my voice: listening to the microphone ({mic or 'default'}) for {secs} s")
-                end = time.time() + secs
-                while time.time() < end and not self.closing.is_set():
-                    emit(state="listen", left=max(0, round(end - time.time())), note="")
-                    time.sleep(0.5)
-                with self.lock:
-                    self._stop_captures()                         # (stopping hands over the sentence still being read)
-            if raw:
-                rate = raw[0][1]
-                rec = resample16k(np.concatenate([x for x, _r in raw]), rate) if rate != 16000 else np.concatenate([x for x, _r in raw])
-                speech, peak = voiced(rec)
-                if len(speech) >= sum(len(p) for p in pieces):   # (usually: the pauses of the reading are left out)
-                    step = 16000 * 3
-                    pieces = [speech[i:i + step] for i in range(0, len(speech), step) if len(speech[i:i + step]) >= 16000]
-                if len(speech) < 16000 * 4:
-                    why = ("No sound came from the microphone" if peak < 0.002 else
-                           f"The microphone was very quiet (loudest {round(peak * 100)}%)" if peak < 0.05 else
-                           f"Only {len(speech) / 16000:.0f} s of speech was heard")
-                    return emit(state="error", note=f"{why} ({mic or 'default microphone'}). Check the microphone in "
-                                "Setup › Audio (Test for 30 seconds), and in Windows: Settings › Privacy › Microphone "
-                                "› Let desktop apps access your microphone. Then read the sentence aloud again.")
-            else:
-                return emit(state="error", note=f"No sound came from the microphone ({mic or 'default microphone'}). "
-                            "Check it in Setup › Audio (Test for 30 seconds) and in Windows: Settings › Privacy › "
-                            "Microphone › Let desktop apps access your microphone.")
-            speech = sum(len(p) for p in pieces) / 16000
-            if speech < 4.0:
-                return emit(state="error", note=f"Only {speech:.0f} s of your voice was heard. Read the sentence aloud, closer to the microphone, and try again.")
-            if not self.voices.enroll(pieces):
-                return emit(state="error", note="Your voice could not be learned: " + (self.voices.model_error or "too short"))
-            log(f"Voice print learned from {speech:.0f} s of speech")
-            emit(state="done", note=f"Your voice is learned ({speech:.0f} s).")
+            emit(state="listen", note="", left=secs, heard=0.0)
+            rec, mic = self._voice_record(secs, emit, cancel, test_path)
+            if rec is None:
+                if mic == "cancelled":
+                    return emit(state="cancelled", note="")
+                return emit(state="error", reason="mic", note=mic)
+            emit(state="check", left=0, note="")
+            q = voice_quality(rec)
+            mic_txt = mic or "default microphone"
+            if q["speech"] < 4.0:
+                why = ("No sound came from the microphone" if q["peak"] < 0.002 else
+                       f"The microphone was very quiet (loudest {round(q['peak'] * 100)}%)" if q["peak"] < 0.05 else
+                       f"Only {q['speech']:.0f} s of speech was heard (at least 4 s are needed)")
+                reason = "silent" if q["peak"] < 0.002 else "quiet" if q["peak"] < 0.05 else "short"
+                return emit(state="error", reason=reason, quality=q,
+                            note=f"{why} ({mic_txt}). Check the microphone in Setup › Audio (Test for 30 seconds), and in "
+                                 "Windows: Settings › Privacy › Microphone › Let desktop apps access your microphone. "
+                                 "Then read the sentence aloud again.")
+            pieces = q.pop("pieces")
+            embs = [e for e in (self.voices.embed(p) for p in pieces) if e is not None]
+            if not embs:
+                return emit(state="error", reason="model", quality=q,
+                            note="Your voice could not be measured: " + (self.voices.model_error or "too short"))
+            if len(embs) > 1:                                   # are the pieces one and the same voice?
+                sims = [float(embs[i] @ embs[j]) for i in range(len(embs)) for j in range(i + 1, len(embs))]
+                q["steady"] = round(float(np.mean(sims)), 2)
+            q["grade"] = voice_grade(q)
+            if purpose == "test":
+                v = np.mean(np.stack(embs), axis=0)
+                v = v / max(1e-9, float(np.linalg.norm(v)))
+                like = float(self.voices.me @ v)
+                q["like_me"] = round(like, 2)
+                me = like >= ME_SAME
+                return emit(state="done", quality=q, is_me=me,
+                            note=(f"That is you: {round(like * 100)}% like your voice print." if me else
+                                  f"Not recognised as you: only {round(like * 100)}% like your voice print. "
+                                  "Learn your voice again, in the same place and with the same microphone you use in meetings."))
+            v = np.mean(np.stack(embs), axis=0)
+            with self.voices.lock:
+                self.voices.me, self.voices.me_n = v / max(1e-9, float(np.linalg.norm(v))), max(5, len(embs))
+                self.voices._save()
+            log(f"Voice print learned from {q['speech']:.0f} s of speech ({mic_txt}): {json.dumps(q)}")
+            emit(state="done", quality=q, note={"good": "Your voice is learned. The recording was good.",
+                                                "ok": "Your voice is learned. The recording was OK — it can be better (see the tips).",
+                                                "poor": "Your voice is learned, but the recording was poor — learn it again (see the tips)."}[q["grade"]])
         except Exception as e:
-            log("learn my voice:", traceback.format_exc(), level="warn")
-            emit(state="error", note="Your voice could not be learned: " + short(e, 120))
+            log("voice:", traceback.format_exc(), level="warn")
+            emit(state="error", reason="error", note="Your voice could not be learned: " + short(e, 120))
             try:
                 with self.lock:
                     if not self.running:
