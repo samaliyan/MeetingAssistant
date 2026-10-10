@@ -1647,7 +1647,13 @@ function handle(m){
     case "session": return newSession(m);
     case "speech_mode": S.speechMode = m; renderFooter(); renderSttMode(); return;
     case "overlay": S.overlay = !!m.on; renderOverlayBtn(); return;
-    case "voice": { const t = Object.assign({}, m); delete t.type; S.voice = Object.assign({}, S.voice, t); renderModeBar(); renderVoiceField(); renderEmpty(); return; }
+    case "voice": {
+      const t = Object.assign({}, m); delete t.type;
+      const was = (S.voice && S.voice.learning || {}).state, now = (t.learning || {}).state;
+      S.voice = Object.assign({}, S.voice, t); renderModeBar(); renderVoiceField(); renderEmpty();
+      if(!OVERLAY && now !== was && (now === "done" || now === "error"))       // the end of "Learn my voice" is never missed
+        toast(now === "done" ? "ok" : "error", t.learning.note || (now === "done" ? "Your voice is learned." : "Your voice could not be learned."));
+      return; }
     case "ov_cmd":
       if(OVERLAY){
         const sc = $("#ovScreen"), oc = $("#ovCoach"), down = m.cmd === "down";
