@@ -9,7 +9,7 @@ All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [G
 - It now uses all the sound of the microphone during the 10 seconds and keeps the parts with speech (by loudness). Before, it used only the "sentences" the microphone sensitivity setting let through, so with a low sensitivity, a quiet microphone or one long sentence it could hear too little and fail.
 - A hum or a fan is never learned as your voice.
 - When it cannot learn, it says why, in a message that stays on screen: no sound at all from the microphone (often Windows' microphone privacy setting), a very quiet microphone, too little speech, or the voice model could not be downloaded. When it works, a message says so. Every attempt is also written in Setup › Log.
-- **A new check on every change:** on a real Windows machine, the new exe downloads the voice model, learns a voice (Windows' own speech voices read sentences, as the machine has no microphone) and tells it from another voice (same voice: 92% alike, other voice: 21%). 155 automated tests.
+- **A new check on every change:** on a real Windows machine, the new exe downloads the voice model, learns a voice (Windows' own speech voices read sentences, as the machine has no microphone) and tells it from another voice (same voice: 85% alike, other voice: 17%). 155 automated tests.
 
 ## [6.29]
 
