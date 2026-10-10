@@ -165,6 +165,35 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  voice:
+    name: Voice on Windows (exe)
+    # "Learn my voice" in the new exe: downloads the voice model, learns a voice (Windows' own speech voices read
+    # into WAV files, as the runner has no microphone), and tells that voice from another one.
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Get the new exe
+        uses: actions/download-artifact@v4
+        with:
+          name: MeetingAssistant-${{ github.sha }}-Windows-x64
+          path: new
+
+      - name: Learn a voice and tell it apart
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_voice_check.py new/MeetingAssistant.exe voice-out | Tee-Object -FilePath voice-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
   overlay:
     name: Overlay on Windows (exe)
     # the new exe's overlay as a user sees it: real keys (Ctrl+Alt+O / PageUp / T), flags, the main window minimized

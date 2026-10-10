@@ -2933,3 +2933,22 @@ def test_hidden_window_closed_right_away_is_not_a_failure(app):
     finally:
         (app.hidden_window_possible, app.subprocess.Popen, app.read_hide_status, app.note_hide_failure) = old[:4]
         app.HIDDEN_PROC[:] = old[4]
+
+
+def test_learn_my_voice_keeps_only_the_speech(app):
+    """'Learn my voice' uses all the microphone's sound, keeps the parts with speech, and never learns a hum."""
+    import numpy as np
+    rng = np.random.default_rng(0)
+    sr = 16000
+    room = rng.normal(0, 0.002, sr * 10).astype(np.float32)
+    talk = room.copy()
+    for start in (1, 3, 5.5, 7.5):                       # four sentences of 1.5 s with pauses between them
+        i, n = int(start * sr), int(1.5 * sr)
+        t = np.arange(n)
+        talk[i:i + n] += (0.2 * np.sin(2 * np.pi * 180 * t / sr) * (0.6 + 0.4 * np.sin(2 * np.pi * 4 * t / sr))).astype(np.float32)
+    v, peak = app.voiced(talk)
+    assert 4.5 * sr < len(v) <= 6 * sr and 0.15 < peak < 0.3
+    assert len(app.voiced(talk * 0.1)[0]) > 4 * sr                     # quiet, but still speech
+    assert len(app.voiced(np.zeros(sr * 10, np.float32))[0]) == 0     # silence (a blocked microphone)
+    assert len(app.voiced(rng.normal(0, 0.05, sr * 10).astype(np.float32))[0]) == 0   # a fan: not a voice
+    assert len(app.voiced(room)[0]) == 0

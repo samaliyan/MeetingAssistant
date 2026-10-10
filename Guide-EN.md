@@ -1,4 +1,9 @@
-# Meeting Assistant — User Guide (version 6.29)
+# Meeting Assistant — User Guide (version 6.30)
+
+## Version 6.30: Learn my voice
+
+- **Learn my voice** now hears all of your reading (not only what the microphone sensitivity lets through) and always says how it went.
+- If it fails, the message says why. "No sound came from the microphone" usually means Windows does not let programs use it: Windows Settings › Privacy › Microphone › turn on "Let desktop apps access your microphone".
 
 ## Version 6.29
 
