@@ -809,6 +809,40 @@ details.more .rate-box{border:0;padding:0}
 .modal-note{display:flex;align-items:center;gap:8px;padding:10px 22px;color:var(--muted);font-size:.86rem;border-top:1px solid var(--border)}
 .modal-note:empty{display:none}
 
+/* "Learn my voice" window */
+.vm-card{width:min(600px,100%)}
+.vm-body{padding:18px 22px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+.vm-foot{display:flex;gap:8px;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--border)}
+.vm-foot:empty{display:none}
+.vm-steps{margin:0;padding-inline-start:20px;line-height:1.7;color:var(--text-2)}
+.vm-read{border:1px solid var(--fa-border);background:var(--fa-soft);color:var(--fa);border-radius:12px;padding:14px 16px;font-family:var(--font-tr);font-size:1.12rem;line-height:1.9}
+.vm-read.live{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.vm-state{display:flex;align-items:center;gap:12px}
+.vm-state .big{font-size:1.15rem;font-weight:700}
+.vm-state .sub{color:var(--muted);font-size:.88rem}
+.vm-dot{width:14px;height:14px;border-radius:50%;background:var(--danger);flex:none;animation:vmpulse 1s ease-in-out infinite}
+@keyframes vmpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+.vm-count{margin-inline-start:auto;font-size:2rem;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
+.vm-row{display:grid;grid-template-columns:150px 1fr auto;align-items:center;gap:10px;font-size:.88rem}
+.vm-bar{height:10px;border-radius:6px;background:var(--surface-3);overflow:hidden}
+.vm-bar i{display:block;height:100%;width:0;border-radius:6px;background:var(--accent);transition:width .15s linear}
+.vm-bar.level i{background:var(--ok);transition:width 90ms linear}
+.vm-bar.enough i{background:var(--ok)}
+.vm-hint{color:var(--warn);font-size:.88rem;min-height:1.2em}
+.vm-result{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:12px}
+.vm-result .ic{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;flex:none}
+.vm-result .ic svg{width:24px;height:24px}
+.vm-result b{display:block;font-size:1.05rem}
+.vm-result .sub{display:block;color:var(--text-2);font-size:.88rem;margin-top:2px}
+.vm-result.good{background:var(--ok-soft)} .vm-result.good .ic{background:var(--ok);color:#fff}
+.vm-result.ok{background:var(--warn-soft)} .vm-result.ok .ic{background:var(--warn);color:#fff}
+.vm-result.bad{background:var(--danger-soft)} .vm-result.bad .ic{background:var(--danger);color:#fff}
+.vm-q{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;font-size:.88rem;align-items:center}
+.vm-q .qi{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:.72rem;font-weight:700;color:#fff}
+.vm-q .qi.good{background:var(--ok)} .vm-q .qi.ok{background:var(--warn)} .vm-q .qi.bad{background:var(--danger)}
+.vm-q .qv{color:var(--muted);font-variant-numeric:tabular-nums}
+.vm-tips{margin:0;padding-inline-start:20px;color:var(--text-2);font-size:.88rem;line-height:1.7}
+
 /* offline overlay */
 .offline{position:fixed;inset:0;background:rgba(12,14,19,.72);z-index:80;display:grid;place-items:center;color:#fff;text-align:center;padding:24px}
 .offline div{max-width:380px;line-height:1.6}
@@ -1172,7 +1206,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <span class="label">Your voice (in-person mode)</span>
         <div class="help">In person one microphone hears everyone. The program tells your voice from the others by its sound (kept only on this computer). Learn it once; while you speak you can also hold <kbd>Right Ctrl</kbd> — that line is yours, and it learns from it. A wrong line: press <b>This is me</b> / <b>Not me</b> on it.</div>
         <div class="help" id="voiceState" style="margin-top:6px"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm" id="voiceLearnBtn"><span data-icon="mic"></span><span id="voiceLearnLabel">Learn my voice (10 s)</span></button><button class="btn sm ghost" id="voiceForgetBtn">Forget my voice</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm" id="voiceLearnBtn"><span data-icon="mic"></span><span id="voiceLearnLabel">Learn my voice (10 s)</span></button><button class="btn sm ghost" id="voiceTestBtn" hidden><span data-icon="check"></span>Test my voice</button><button class="btn sm ghost" id="voiceForgetBtn">Forget my voice</button></div>
       </div>
       <label class="toggle"><input type="checkbox" data-key="save_audio"><span class="switch"></span><span class="tt"><b>Keep the sound of meetings</b><span>Starts with the next meeting. After the meeting, the ▶ button on a line plays what was said, while that meeting is on screen (about 7 MB an hour, saved next to the meeting file). Nothing is kept while the meeting is paused. Ask the other side if recording is allowed.</span></span></label>
 
@@ -1495,6 +1529,14 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <div class="modal-note" id="toolNote"></div>
   </div>
 </div>
+<div class="modal" id="voiceModal" hidden>
+  <div class="modal-card vm-card" role="dialog" aria-modal="true" aria-labelledby="vmTitle">
+    <div class="modal-head"><h2 id="vmTitle"><span data-icon="mic"></span><span id="vmTitleText">Learn my voice</span></h2><span class="spacer"></span>
+      <button class="btn icon ghost" id="vmClose" aria-label="Close"><span data-icon="x"></span></button></div>
+    <div class="vm-body" id="vmBody"></div>
+    <div class="vm-foot" id="vmFoot"></div>
+  </div>
+</div>
 <div class="modal" id="findModal" hidden>
   <div class="modal-card" style="width:min(820px,100%)" role="dialog" aria-modal="true" aria-labelledby="findTitle">
     <div class="modal-head"><h2 id="findTitle"><span data-icon="list"></span><span id="findTitleText">Models you can download</span></h2><button class="btn sm ghost" id="findClose">Close</button></div>
@@ -1651,7 +1693,8 @@ function handle(m){
       const t = Object.assign({}, m); delete t.type;
       const was = (S.voice && S.voice.learning || {}).state, now = (t.learning || {}).state;
       S.voice = Object.assign({}, S.voice, t); renderModeBar(); renderVoiceField(); renderEmpty();
-      if(!OVERLAY && now !== was && (now === "done" || now === "error"))       // the end of "Learn my voice" is never missed
+      if(!OVERLAY && t.learning && $("#voiceModal").hidden === false) renderVoiceModal();
+      else if(!OVERLAY && now !== was && (now === "done" || now === "error"))   // the window was closed: the end is never missed
         toast(now === "done" ? "ok" : "error", t.learning.note || (now === "done" ? "Your voice is learned." : "Your voice could not be learned."));
       return; }
     case "ov_cmd":
@@ -1907,6 +1950,7 @@ function onLevel(m){
     const el = $(id); el.classList.toggle("off", v==null); setBar(el, v); setBar($(big), v);
   }
   if(m.me != null && m.thr_me != null && m.me > m.thr_me) S.meAt = Date.now();
+  if(m.me != null && typeof VM !== "undefined" && !$("#voiceModal").hidden){ VM.level = m.me; const lv = $("#vmLevel i"); if(lv) lv.style.width = Math.round(Math.min(1, m.me) * 100) + "%"; }
   if(m.thr_me != null) $("#thrMe").style.left = Math.min(99, m.thr_me * 100) + "%";
 }
 
@@ -2274,14 +2318,15 @@ const MODE_UI = {
   video: {icon: "text", title: "Subtitle mode", what: "for a film, video or audio playing on this computer.",
           toast: "Subtitle mode: only the computer's sound (the video) is used and only the translation is shown."},
   meeting: {toast: "Meeting mode: the computer's sound is the other side, your microphone is you."}};
-const READ_ME = {fa: "امروز برنامه را امتحان می‌کنم تا صدای مرا یاد بگیرد. معمولی حرف می‌زنم، مثل یک جلسه‌ی کاری.",
-                 en: "Today I am trying the program so it learns my voice. I speak normally, as in a work meeting."};
+const READ_ME = {fa: "امروز برنامه را امتحان می‌کنم تا صدای مرا یاد بگیرد. معمولی حرف می‌زنم، مثل یک جلسه‌ی کاری. اول خودم را معرفی می‌کنم و بعد کمی درباره‌ی کارم و آخرین پروژه‌ام توضیح می‌دهم.",
+                 en: "Today I am trying the program so it learns my voice. I speak normally, as in a work meeting. First I introduce myself, then I say a little about my work and my last project."};
 function voiceLine(){
   const v = S.voice || {}, L = v.learning || {};
-  if(L.state === "listen") return `Read aloud now (${L.left || 0} s): “${READ_ME[(S.cfg && S.cfg.my_language) === "fa" ? "fa" : "en"]}”`;
+  if(L.state === "listen") return `Listening to your voice… ${L.left || 0} s`;
+  if(L.state === "check") return "Checking the recording…";
   if(L.state === "download") return L.note || "Downloading the voice model…";
   if(L.state === "error") return L.note || "Your voice could not be learned.";
-  if(L.state === "done" && v.learned) return L.note || "Your voice is learned.";
+  if(L.state === "done" && v.learned && L.purpose !== "test") return L.note || "Your voice is learned.";
   return v.learned ? "Your voice is known." : "Your voice is not learned yet: learn it once, or hold Right Ctrl while you speak.";
 }
 function renderModeBar(){
@@ -2301,7 +2346,7 @@ function renderModeBar(){
       : `Press Start, then talk. Only the microphone is used; the program tells the voices apart.`;
     $("#mbVoice").textContent = voiceLine();
   }
-  const busy = L.state === "listen" || L.state === "download";
+  const busy = ["listen", "download", "check"].includes(L.state);
   $("#mbLearn").hidden = m !== "inperson" || S.running || busy;
   $("#mbLearnLabel").textContent = v.learned ? "Learn my voice again" : "Learn my voice";
   const hold = $("#mbHold"); hold.hidden = m !== "inperson" || !S.running; hold.classList.toggle("on", !!v.holding);
@@ -2313,17 +2358,132 @@ function renderVoiceField(){
   const v = S.voice || {}, L = v.learning || {};
   st.textContent = voiceLine();
   st.style.color = L.state === "error" ? "var(--danger)" : "";
-  const busy = L.state === "listen" || L.state === "download";
-  $("#voiceLearnBtn").disabled = busy || !!S.running;
-  $("#voiceLearnLabel").textContent = busy ? (L.state === "listen" ? `Listening… ${L.left || 0} s` : "Downloading…") : (v.learned ? "Learn again (10 s)" : "Learn my voice (10 s)");
+  const busy = ["listen", "download", "check"].includes(L.state);
+  $("#voiceLearnBtn").disabled = !!S.running;
+  $("#voiceLearnLabel").textContent = busy ? (L.state === "listen" ? `Listening… ${L.left || 0} s` : L.state === "check" ? "Checking…" : "Downloading…") : (v.learned ? "Learn again (10 s)" : "Learn my voice (10 s)");
   $("#voiceForgetBtn").hidden = !v.learned;
+  $("#voiceTestBtn").hidden = !v.learned; $("#voiceTestBtn").disabled = !!S.running || busy;
 }
-async function learnVoice(){
-  const r = await api("voice_learn", {seconds: 10});
-  if(!r.ok) return toast("warn", r.error || "Could not start.");
+
+/* ---- the "Learn my voice" window: what it needs, that it is listening, how much it heard, and how good it was ---- */
+const VM = {phase: "", purpose: "learn", level: 0};
+const vmBusy = () => ["download", "listen", "check"].includes(((S.voice || {}).learning || {}).state);
+function learnVoice(purpose){
+  VM.purpose = purpose === "test" ? "test" : "learn";
+  VM.phase = vmBusy() ? "live" : "intro";               // already running: show it
+  $("#voiceModal").hidden = false; renderVoiceModal();
 }
-$("#mbLearn").onclick = learnVoice;
-$("#voiceLearnBtn").onclick = learnVoice;
+async function vmStart(){
+  if(S.running) return toast("warn", "Stop the meeting first.");
+  VM.phase = "live"; VM.startedAt = Date.now();
+  S.voice = Object.assign({}, S.voice, {learning: {state: "listen", purpose: VM.purpose, left: 10, total: 10, heard: 0}});
+  renderVoiceModal();
+  const r = await api("voice_learn", {seconds: 10, purpose: VM.purpose});
+  if(!r.ok){ S.voice.learning = {state: "error", purpose: VM.purpose, note: r.error || "Could not start."}; renderVoiceModal(); }
+}
+function vmClose(){
+  if(vmBusy()) api("voice_cancel", {});
+  $("#voiceModal").hidden = true; VM.phase = "";
+}
+function vmQuality(q, test){
+  const rows = [], tips = [], need = test ? 4 : 6;     // a test needs less speech than learning
+  const sp = q.speech || 0;
+  rows.push([sp >= need ? "good" : sp >= 4 ? "ok" : "bad", "Speech heard", `${sp} s`]);
+  if(sp < need) tips.push("Keep talking until the time is up — read the sentence, then go on in your own words.");
+  const loud = q.loud || 0, clip = q.clipped || 0;
+  if(clip > 1){ rows.push(["bad", "Loudness", "too loud (distorted)"]); tips.push("Too loud: sit a little further from the microphone, or lower Microphone volume in Setup › Audio."); }
+  else if(clip > 0.1){ rows.push(["ok", "Loudness", "a little too loud"]); tips.push("A little too loud: move slightly away from the microphone."); }
+  else if(loud < 0.01){ rows.push(["bad", "Loudness", "very quiet"]); tips.push("Very quiet: speak louder or closer, or raise Microphone volume in Setup › Audio."); }
+  else if(loud < 0.03){ rows.push(["ok", "Loudness", "quiet"]); tips.push("A bit quiet: speak a little louder or closer to the microphone."); }
+  else rows.push(["good", "Loudness", "good"]);
+  const snr = q.snr || 0;
+  rows.push([snr >= 15 ? "good" : snr >= 8 ? "ok" : "bad", "Background noise", snr >= 15 ? "quiet" : snr >= 8 ? "some noise" : "noisy"]);
+  if(snr < 15) tips.push("Background noise: close the window, turn off a fan or music, or use a headset microphone.");
+  if(q.steady != null){
+    rows.push([q.steady >= 0.55 ? "good" : q.steady >= 0.35 ? "ok" : "bad", "Same voice all the time", `${Math.round(q.steady * 100)}%`]);
+    if(q.steady < 0.55) tips.push("Your voice changed during the recording (or someone else spoke): read it alone, in your normal voice.");
+  }
+  const mark = {good: "✓", ok: "!", bad: "✕"};
+  return `<div class="vm-q">${rows.map(([g, k, v]) => `<span class="qi ${g}">${mark[g]}</span><span>${esc(k)}</span><span class="qv">${esc(v)}</span>`).join("")}</div>`
+       + (tips.length ? `<ul class="vm-tips">${tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : "");
+}
+function vmButtons(list){
+  const f = $("#vmFoot"); f.innerHTML = "";
+  list.forEach(([text, cls, run, ic]) => { const b = document.createElement("button"); b.className = "btn " + cls; b.innerHTML = (ic ? icon(ic) : "") + `<span>${esc(text)}</span>`; b.onclick = run; f.appendChild(b); });
+}
+function renderVoiceModal(){
+  if($("#voiceModal").hidden) return;
+  const v = S.voice || {}, L = v.learning || {}, test = VM.purpose === "test";
+  const read = READ_ME[(S.cfg && S.cfg.my_language) === "fa" ? "fa" : "en"], rtl = (S.cfg && S.cfg.my_language) === "fa";
+  $("#vmTitleText").textContent = test ? "Test my voice" : (v.learned ? "Learn my voice again" : "Learn my voice");
+  const body = $("#vmBody");
+  if(VM.phase === "intro"){
+    body.innerHTML = `<ol class="vm-steps">
+        <li>Sit where you usually are, with the microphone you use in meetings. Make the room quiet.</li>
+        <li>Press <b>Start</b>, then read this aloud in your normal voice${test ? "" : ". When you finish, keep talking in your own words until the time is up (10 seconds)"}:</li></ol>
+      <div class="vm-read" dir="${rtl ? "rtl" : "ltr"}">${esc(read)}</div>
+      <div class="help">${test ? "The program then says whether the voice it hears is yours." : "The program then shows how good the recording was. Your voice print is kept only on this computer."}</div>`;
+    vmButtons([["Cancel", "ghost", vmClose], ["Start", "primary", vmStart, "mic"]]);
+    return;
+  }
+  const st = L.state;
+  if(st === "download"){
+    body.innerHTML = `<div class="vm-state"><span class="spinner"></span><div><div class="big">Preparing…</div><div class="sub">${esc(L.note || "Downloading the voice model (once)…")}</div></div></div>
+      <div class="vm-bar"><i style="width:${L.progress || 0}%"></i></div>`;
+    vmButtons([["Cancel", "ghost", vmClose]]);
+    return;
+  }
+  if(st === "listen"){
+    const total = L.total || 10, left = L.left != null ? L.left : total, heard = L.heard || 0, need = 6;
+    if(!body.querySelector(".vm-count")){
+      body.innerHTML = `<div class="vm-state"><span class="vm-dot"></span><div><div class="big">Listening — read aloud now</div><div class="sub" id="vmMic"></div></div><span class="vm-count" id="vmLeft"></span></div>
+        <div class="vm-read live" dir="${rtl ? "rtl" : "ltr"}">${esc(read)}</div>
+        <div class="vm-row"><span>Microphone</span><div class="vm-bar level" id="vmLevel"><i></i></div><span></span></div>
+        <div class="vm-row"><span>Speech heard</span><div class="vm-bar" id="vmHeard"><i></i></div><span id="vmHeardTxt"></span></div>
+        <div class="vm-row"><span>Time</span><div class="vm-bar" id="vmTime"><i></i></div><span></span></div>
+        <div class="vm-hint" id="vmHint"></div>`;
+    }
+    $("#vmLeft").textContent = left + " s";
+    $("#vmMic").textContent = L.mic ? "Microphone: " + L.mic : "";
+    $("#vmHeard i").style.width = Math.min(100, heard / need * 100) + "%";
+    $("#vmHeard").classList.toggle("enough", heard >= need);
+    $("#vmHeardTxt").textContent = `${heard.toFixed(1)} / ${need} s`;
+    $("#vmTime i").style.width = Math.min(100, (total - left) / total * 100) + "%";
+    $("#vmHint").textContent = L.hint || "";
+    $("#vmLevel i").style.width = Math.round(Math.min(1, VM.level || 0) * 100) + "%";
+    vmButtons([["Stop", "ghost", vmClose]]);
+    return;
+  }
+  if(st === "check"){
+    body.innerHTML = `<div class="vm-state"><span class="spinner"></span><div><div class="big">Checking the recording…</div><div class="sub">A few seconds.</div></div></div>`;
+    vmButtons([]);
+    return;
+  }
+  const again = () => { VM.phase = "intro"; renderVoiceModal(); };
+  if(st === "done"){
+    const q = L.quality || {}, g = L.purpose === "test" ? (L.is_me ? "good" : "bad") : (q.grade === "good" ? "good" : q.grade === "ok" ? "ok" : "bad");
+    const title = L.purpose === "test" ? (L.is_me ? `That is you — ${Math.round((q.like_me || 0) * 100)}% alike` : `Not recognised as you — ${Math.round((q.like_me || 0) * 100)}% alike`)
+      : {good: "Your voice is learned — the recording was good", ok: "Your voice is learned — the recording was OK", bad: "Your voice is learned, but the recording was poor"}[g];
+    body.innerHTML = `<div class="vm-result ${g}"><span class="ic">${icon(g === "bad" ? "x" : g === "ok" ? "alert" : "check")}</span><div><b>${esc(title)}</b><span class="sub">${esc(L.purpose === "test" ? (L.is_me ? "The program will know this voice as you." : "Learn your voice again, in the same place and with the same microphone you use in meetings.") : `From ${q.speech || 0} s of your speech. Kept only on this computer.`)}</span></div></div>`
+      + vmQuality(q, L.purpose === "test");
+    vmButtons(L.purpose === "test" ? [["Learn again", "ghost", () => { VM.purpose = "learn"; again(); }, "mic"], ["Test again", "ghost", again, "refresh"], ["Done", "primary", vmClose]]
+                                   : g === "bad" ? [["Done", "ghost", vmClose], ["Learn again", "primary", again, "mic"]]
+                                                 : [["Learn again", "ghost", again, "mic"], ["Test it", "soft", () => { VM.purpose = "test"; again(); }, "check"], ["Done", "primary", vmClose]]);
+    return;
+  }
+  if(st === "error"){
+    body.innerHTML = `<div class="vm-result bad"><span class="ic">${icon("x")}</span><div><b>${test ? "The test did not work" : "Your voice was not learned"}</b><span class="sub">${esc(L.note || "")}</span></div></div>`
+      + (L.quality ? vmQuality(L.quality, test) : "");
+    vmButtons([["Close", "ghost", vmClose], ["Try again", "primary", again, "refresh"]]);
+    return;
+  }
+  VM.phase = "intro"; renderVoiceModal();               // (nothing running: start from the beginning)
+}
+$("#vmClose").onclick = vmClose;
+$("#voiceModal").addEventListener("click", e => { if(e.target.id === "voiceModal" && !vmBusy()) vmClose(); });
+$("#mbLearn").onclick = () => learnVoice("learn");
+$("#voiceLearnBtn").onclick = () => learnVoice("learn");
+$("#voiceTestBtn").onclick = () => learnVoice("test");
 $("#voiceForgetBtn").onclick = async () => { const r = await api("voice_forget", {}); if(r.ok){ S.voice = Object.assign({}, S.voice, r); renderSubBtn(); toast("info", "Your voice print is deleted from this computer."); } };
 (() => {                                                   // hold: those words are mine
   const b = $("#mbHold"); let on = false;
@@ -2627,7 +2787,7 @@ function renderEmpty(){
          <p class="help">To go back to online meetings, choose <b>Meeting</b> at the top.</p>
          <div class="empty-actions">${learned ? "" : `<button class="btn soft lg" id="bigLearn">${icon("mic")}Learn my voice</button>`}<button class="btn primary lg" id="bigStart">${icon("play")}Start listening<kbd>F9</kbd></button></div></div>`;
     const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
-    const bl = $("#bigLearn"); if(bl) bl.onclick = learnVoice;
+    const bl = $("#bigLearn"); if(bl) bl.onclick = () => learnVoice("learn");
     return;
   }
   if(S.running){

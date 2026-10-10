@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.31]
+
+**"Learn my voice" has its own window, so you always see what is happening and how it went.**
+
+1. **Before:** what to do (a quiet place, your meeting microphone) and the sentence to read. Nothing starts until you press **Start**.
+2. **While it listens:** a red dot, the seconds left, the sentence, your microphone's name and level (it moves when you speak), and **Speech heard** filling up to the 6 seconds it needs. If nothing or very little is heard, it says so at once.
+3. **The result:** learned — good, OK or poor — with a short list: speech heard, loudness, background noise, and whether it was the same voice all the time; for each problem, a tip. If it could not learn, the reason and **Try again**. A voice learned before stays learned when a new try fails.
+4. **Test my voice:** read the sentence again and it says whether it is you, and how alike (for example "That is you — 86% alike"). Also in Setup › Audio.
+
+**Stop** ends it at any time. If you close the window, a message still tells you the result. The Windows check now also runs Test my voice with the real exe (same voice: you; another voice: not you). 156 automated tests.
+
 ## [6.30]
 
 **"Learn my voice" is more reliable and always says how it went.**
