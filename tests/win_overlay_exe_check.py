@@ -57,17 +57,19 @@ def inside(name, out, step, feed=None):
     screen capture), its text, page errors; feed=JS gives it meeting lines first."""
     try:
         with sync_playwright() as pw:
-            br = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP + 1}", timeout=15000)   # the overlay's own port
             t0 = time.time()
-            ov, pages = None, []
-            while time.time() - t0 < 20:                    # on a slow machine the page may still be on its way
+            ov, pages, br = None, [], None
+            while time.time() - t0 < 25:                    # on a slow machine the page may still be on its way; a
+                if br is not None:                          # fresh connection each time (a page made after connecting
+                    br.close()                              # is not always seen by the old one)
+                br = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP + 1}", timeout=15000)   # the overlay's own port
                 pages = [pg for c in br.contexts for pg in c.pages]
                 ov = next((pg for pg in pages if "overlay=1" in pg.url), None)
                 if ov is not None:
                     break
-                time.sleep(0.5)
+                time.sleep(1.0)
             if ov is None:
-                return {"error": "overlay page not found in 20 s among " + ", ".join(pg.url for pg in pages)}
+                return {"error": "overlay page not found in 25 s among " + ", ".join(pg.url for pg in pages)}
             ov.wait_for_function("() => typeof S !== 'undefined' && !!S.cfg", timeout=15000)
             errs = []
             ov.on("pageerror", lambda e: errs.append(str(e)))
