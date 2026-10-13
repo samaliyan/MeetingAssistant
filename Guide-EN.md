@@ -1,4 +1,10 @@
-# Meeting Assistant — User Guide (version 6.31)
+# Meeting Assistant — User Guide (version 6.32)
+
+## Version 6.32: questions numbered, a transcript that holds still, a focus page
+
+- Each answered question has a number (Q1, Q2 …) on its line and above its answer. The line of the answer on the right is lit up. **Show it in the transcript** finds it.
+- While the mouse is on the answer, the transcript does not move. A button counts the new lines.
+- **F10** (or **Focus**): only the question, its translation, the answer and the coach, big; at the bottom, what is being said now. F10 or Esc goes back.
 
 ## Version 6.31: the Learn my voice window
 

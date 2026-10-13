@@ -3020,3 +3020,12 @@ def test_learn_and_test_my_voice_report_how_it_went(app, tmp_path, monkeypatch):
         if made:
             os.remove(app.voice_model_path())
         a.closing.set()
+
+
+def test_page_numbers_questions_and_has_a_focus_page(app):
+    """The page links each question and its answer by a number, holds the transcript while the answer is read, and
+    has a focus page (F10). (The behaviour itself is checked in a browser before each release.)"""
+    page = open(os.path.join(app.WEB_DIR, "index.html"), encoding="utf-8").read()
+    for bit in ('class="qtag"', "function qNumOf", "function findOnLeft", 'id="focusBtn"', 'id="nowStrip"',
+                "function setFocus", '"F10"', 'id="feedHold"', "Show it in the transcript"):
+        assert bit in page, bit
