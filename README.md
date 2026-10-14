@@ -39,17 +39,20 @@ you are asked a question.
 
 ## Quick start
 
-1. Download `MeetingAssistant.exe` from the [latest release](https://github.com/samaliyan/MeetingAssistant/releases/latest)
-   and put it in its own folder.
-2. Run it. Setup opens on first start. (Windows SmartScreen may warn about an unknown publisher — choose
-   *More info › Run anyway*.)
+1. Download `MeetingAssistant-Setup.exe` from the [latest release](https://github.com/samaliyan/MeetingAssistant/releases/latest)
+   and run it. It installs for your user only (no administrator rights), with Start menu and desktop shortcuts.
+   (Windows SmartScreen may warn about an unknown publisher — choose *More info › Run anyway*.)
+   To run it without installing, use the `.zip` instead: unzip it and start `MeetingAssistant.exe`.
+2. Start it. Setup opens on first start. If you had the earlier single-file version, your settings and meetings
+   are brought over by themselves.
 3. **Setup › Services**: paste a Groq API key, or add another service, or download a local model.
 4. **Setup › Meeting**: choose the meeting languages, your language and the answer language; write the topic.
 5. **Setup › Answers › About you**: your background (your CV can go there).
 6. Press **Start** (F9).
 
 Everything the program saves (settings, meetings, log, models) stays in a `Data` folder next to the exe
-(or in `%LOCALAPPDATA%\MeetingAssistant` when that folder is read-only).
+(installed: `%LOCALAPPDATA%\Programs\Meeting Assistant\Data`; or `%LOCALAPPDATA%\MeetingAssistant` when the
+program's folder is read-only). An update installs over the program and keeps it; uninstalling asks before deleting it.
 
 ## Run from source
 

@@ -22,6 +22,17 @@ import time
 import urllib.request
 from ctypes import wintypes as wt
 
+
+def place_program(exe, work):
+    """Copies the program into `work` and returns the exe there: the one-file exe, or (installed-style) the whole
+    folder with its _internal files."""
+    src = os.path.dirname(os.path.abspath(exe))
+    if os.path.isdir(os.path.join(src, "_internal")):
+        shutil.copytree(src, work, dirs_exist_ok=True, ignore=shutil.ignore_patterns("Data"))
+    else:
+        shutil.copy2(exe, os.path.join(work, "MeetingAssistant.exe"))
+    return os.path.join(work, "MeetingAssistant.exe")
+
 RUNS = int(os.environ.get("MA_STARTUP_RUNS") or 3)
 TMP = tempfile.gettempdir()
 u = ctypes.windll.user32
@@ -112,8 +123,7 @@ def run_once(exe, early_close=False):
     """early_close: the window is closed the moment it appears (its page may still be loading)."""
     r = {"port": None, "window": None, "unpacked": None, "overlay": None, "exit": None, "left_temp": None, "error": "", "why": None}
     work = tempfile.mkdtemp(prefix="ma_start_")
-    dst = os.path.join(work, "MeetingAssistant.exe")
-    shutil.copy2(exe, dst)
+    dst = place_program(exe, work)
     data = os.path.join(work, "Data")
     os.makedirs(data)
     with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as f:

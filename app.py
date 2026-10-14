@@ -65,7 +65,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.32"
+VERSION = "6.33"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -542,6 +542,7 @@ def short(e, n=220):
 # Settings
 # ----------------------------------------------------------------------------
 CONFIG_NOTE = []
+STARTUP_INFO = []          # good news for the window when it connects (e.g. settings brought over from an older copy)
 CONFIG_LOCKED = [False]      # the settings file exists but could not be read: never overwrite it with defaults
 
 
@@ -14137,6 +14138,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             while CONFIG_NOTE:
                 app.hub.toast("warn", CONFIG_NOTE.pop(0))     # in the order they happened
+            while STARTUP_INFO:
+                app.hub.toast("ok", STARTUP_INFO.pop(0))
             if APP_DIR_MOVED and not getattr(app, "moved_told", False):
                 app.moved_told = True
                 app.hub.toast("info", f"The program's folder is read-only, so settings and meetings are kept in {DATA_DIR}")
@@ -15482,6 +15485,116 @@ def tune_windows_process():
     return WIN_TUNE
 
 
+# ---- the first start of an installed copy: bring the settings and meetings of an earlier copy along ----------------
+OLD_COPY_SKIP = {".port", ".port.tmp", ".window", ".window_hidden", ".window_overlay", ".hide.json", "app.log",
+                 "app.log.old", ".old_portable", "models", "downloads"}
+
+
+def find_old_copy(app_dir=None, data_dir=None, home=None):
+    """The Data folder of an earlier copy of the program (the single-file exe people kept on the Desktop, in Downloads
+    …), or "". The installer leaves a hint (Data/.old_portable: the folder its desktop shortcut pointed to); without
+    one, the usual places are looked through (two levels deep). The newest settings win."""
+    app_dir = app_dir or APP_DIR
+    data_dir = data_dir or DATA_DIR
+    home = home or os.path.expanduser("~")
+    me = os.path.normcase(os.path.abspath(app_dir))
+    mine = os.path.normcase(os.path.abspath(data_dir))
+
+    def ok(folder, need_exe=True):
+        d = os.path.join(folder, "Data")
+        if os.path.normcase(os.path.abspath(folder)) == me or os.path.normcase(os.path.abspath(d)) == mine:
+            return ""
+        if not os.path.isfile(os.path.join(d, "config.json")):
+            return ""
+        if need_exe and not os.path.isfile(os.path.join(folder, "MeetingAssistant.exe")):
+            return ""
+        return d
+    try:
+        with open(os.path.join(data_dir, ".old_portable"), encoding="utf-8-sig") as f:
+            hint = f.read().strip().strip('"')
+        if hint and ok(hint, need_exe=False):
+            return ok(hint, need_exe=False)
+    except OSError:
+        pass
+    found = []
+    moved = os.path.join(os.environ.get("LOCALAPPDATA") or home, "MeetingAssistant")      # a copy whose folder was read-only
+    if os.path.normcase(os.path.abspath(moved)) != mine and os.path.isfile(os.path.join(moved, "config.json")):
+        found.append(moved)
+    for root in ("Desktop", "Downloads", "Documents", os.path.join("OneDrive", "Desktop"), os.path.join("OneDrive", "Documents")):
+        r = os.path.join(home, root)
+        folders = [r]
+        try:
+            for n in sorted(os.listdir(r))[:500]:
+                p = os.path.join(r, n)
+                if n.startswith(".") or not os.path.isdir(p):
+                    continue
+                folders.append(p)
+                try:
+                    folders += [os.path.join(p, m) for m in sorted(os.listdir(p))[:200]
+                                if not m.startswith(".") and os.path.isdir(os.path.join(p, m))]
+                except OSError:
+                    pass
+        except OSError:
+            continue
+        found += [d for d in (ok(f) for f in folders) if d]
+    if not found:
+        return ""
+    return max(found, key=lambda d: os.path.getmtime(os.path.join(d, "config.json")))
+
+
+def bring_old_copy(old, data_dir=None):
+    """Copies the settings, meetings and voice print of an earlier copy into this Data folder (the old copy keeps
+    them too); its downloaded models are moved (they are big) when they are on the same drive. Returns a sentence."""
+    data_dir = data_dir or DATA_DIR
+    os.makedirs(data_dir, exist_ok=True)
+    meetings = 0
+    for name in os.listdir(old):
+        if name in OLD_COPY_SKIP or name.startswith("config.json.bad-"):
+            continue
+        src, dst = os.path.join(old, name), os.path.join(data_dir, name)
+        if os.path.exists(dst):
+            continue
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+            if name == "meetings":
+                meetings = sum(1 for n in os.listdir(dst) if n.endswith(".md"))
+        else:
+            shutil.copy2(src, dst)
+    models = ""
+    src_m, dst_m = os.path.join(old, "models"), os.path.join(data_dir, "models")
+    if os.path.isdir(src_m) and os.listdir(src_m):
+        if os.path.exists(dst_m) and not os.listdir(dst_m):
+            os.rmdir(dst_m)
+        if not os.path.exists(dst_m):
+            try:
+                os.replace(src_m, dst_m)                  # instant on the same drive
+                models = " Its downloaded models were moved here too."
+            except OSError:
+                models = (f" Its downloaded models stayed in {src_m} (another drive): download them again in Setup, "
+                          "or choose that folder there.")
+    folder = os.path.dirname(old)
+    return (f"Your settings{f' and {meetings} saved meetings' if meetings else ''} were brought over from the earlier "
+            f"copy in {folder}.{models} That copy is not needed any more.")
+
+
+def first_start_of_installed_copy():
+    """When this copy has no settings yet and an earlier copy exists: bring its settings along (once)."""
+    if not FROZEN or os.path.exists(CONFIG_PATH) or os.environ.get("MA_NO_MIGRATE"):
+        return
+    try:
+        old = find_old_copy()
+        if old:
+            msg = bring_old_copy(old)
+            log("Earlier copy:", msg)
+            STARTUP_INFO.append(msg)
+    except Exception as e:
+        log("could not bring the settings of the earlier copy:", short(e, 160), level="warn")
+    try:
+        os.remove(os.path.join(DATA_DIR, ".old_portable"))
+    except OSError:
+        pass
+
+
 def single_instance():
     """True if no other copy is running (a double-click on the slow-starting exe must not start two)."""
     if sys.platform != "win32":
@@ -15536,6 +15649,7 @@ def main():
         message_box("Meeting Assistant is already running.")
         return
     tune_windows_process()
+    first_start_of_installed_copy()               # (before the settings are read)
     app = App()
     Handler.app = app
     if sys.platform == "win32":

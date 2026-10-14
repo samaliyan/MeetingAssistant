@@ -109,13 +109,24 @@ jobs:
       - name: Build
         run: python tools/build.py
 
-      - name: Upload the exe
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress | Out-Null }
+          $ver = (Select-String -Path app.py -Pattern '^VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=$ver" installer\MeetingAssistant.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item dist\MeetingAssistant-Setup.exe | Format-List Name, Length
+
+      - name: Upload the program and its installer
         uses: actions/upload-artifact@v4
         with:
           name: MeetingAssistant-${{ github.sha }}-Windows-x64
           if-no-files-found: error
           retention-days: 14
-          path: dist/MeetingAssistant.exe
+          path: |
+            dist/MeetingAssistant/
+            dist/MeetingAssistant-Setup.exe
 
   startup:
     name: Startup on Windows
@@ -147,13 +158,21 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir old
+        shell: pwsh
+        run: |
+          # up to 6.32 a single exe; from 6.33 a folder (in the portable zip)
+          gh release download --repo ${{ github.repository }} --pattern MeetingAssistant.exe --dir old
+          if (-not (Test-Path old\MeetingAssistant.exe)) {
+            gh release download --repo ${{ github.repository }} --pattern "MeetingAssistant-*-Windows-x64.zip" --dir oldzip
+            Expand-Archive (Get-ChildItem oldzip\*.zip)[0].FullName -DestinationPath old
+            Move-Item old\MeetingAssistant\* old\ -Force
+          }
 
       - name: Start them and measure
         env:
           PYTHONUTF8: "1"
         run: |
-          python tests/win_startup_check.py new/MeetingAssistant.exe old/MeetingAssistant.exe | Tee-Object -FilePath startup-report.txt
+          python tests/win_startup_check.py new/MeetingAssistant/MeetingAssistant.exe old/MeetingAssistant.exe | Tee-Object -FilePath startup-report.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Keep the report
@@ -164,6 +183,35 @@ jobs:
           path: startup-report.txt
           if-no-files-found: ignore
           retention-days: 14
+
+  install:
+    name: Install on Windows
+    # the installer as a user runs it: install (bringing the earlier copy's settings along), start, update while it
+    # runs, uninstall. Fails when any of it does not work.
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Get the new installer
+        uses: actions/download-artifact@v4
+        with:
+          name: MeetingAssistant-${{ github.sha }}-Windows-x64
+          path: new
+
+      - name: Install, start, update, uninstall
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_install_check.py new/MeetingAssistant-Setup.exe | Tee-Object -FilePath install-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
   voice:
     name: Voice on Windows (exe)
@@ -191,7 +239,7 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
-          python tests/win_voice_check.py new/MeetingAssistant.exe voice-out | Tee-Object -FilePath voice-report.txt
+          python tests/win_voice_check.py new/MeetingAssistant/MeetingAssistant.exe voice-out | Tee-Object -FilePath voice-report.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
   overlay:
@@ -228,5 +276,5 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
-          python tests/win_overlay_exe_check.py new/MeetingAssistant.exe overlay-shots | Tee-Object -FilePath overlay-exe-report.txt
+          python tests/win_overlay_exe_check.py new/MeetingAssistant/MeetingAssistant.exe overlay-shots | Tee-Object -FilePath overlay-exe-report.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }

@@ -3029,3 +3029,63 @@ def test_page_numbers_questions_and_has_a_focus_page(app):
     for bit in ('class="qtag"', "function qNumOf", "function findOnLeft", 'id="focusBtn"', 'id="nowStrip"',
                 "function setFocus", '"F10"', 'id="feedHold"', "Show it in the transcript"):
         assert bit in page, bit
+
+
+def test_installed_copy_brings_the_settings_of_an_earlier_copy(app, tmp_path):
+    """The first start of the installed program finds the earlier single-file copy (from the installer's hint, or by
+    looking on the Desktop / in Downloads) and brings its settings, meetings and voice print; models are moved."""
+    import json as _json
+    home = tmp_path / "home"
+    old = home / "Downloads" / "MA"
+    (old / "Data" / "meetings").mkdir(parents=True)
+    (old / "MeetingAssistant.exe").write_bytes(b"MZ")
+    (old / "Data" / "config.json").write_text(_json.dumps({"context": "old topic"}), encoding="utf-8")
+    (old / "Data" / "meetings" / "m1.md").write_text("# m1", encoding="utf-8")
+    (old / "Data" / "meetings" / "m2.md").write_text("# m2", encoding="utf-8")
+    (old / "Data" / "voiceprint.json").write_text("{}", encoding="utf-8")
+    (old / "Data" / ".port").write_text("1 x", encoding="utf-8")
+    (old / "Data" / "models" / "m").mkdir(parents=True)
+    (old / "Data" / "models" / "m" / "w.bin").write_bytes(b"1234")
+    (old / "Data" / ".window").mkdir()
+    inst = tmp_path / "Programs" / "Meeting Assistant"
+    data = inst / "Data"
+    data.mkdir(parents=True)
+    # no hint: found by looking (two levels deep in Downloads)
+    found = app.find_old_copy(app_dir=str(inst), data_dir=str(data), home=str(home))
+    assert found == str(old / "Data")
+    # a folder without the exe next to its Data is not taken (it is not a copy of the program)
+    other = home / "Desktop" / "notes"
+    (other / "Data").mkdir(parents=True)
+    (other / "Data" / "config.json").write_text("{}", encoding="utf-8")
+    assert app.find_old_copy(app_dir=str(inst), data_dir=str(data), home=str(home)) == str(old / "Data")
+    # the installer's hint wins (and needs no exe)
+    (data / ".old_portable").write_text("﻿" + str(other), encoding="utf-8")
+    assert app.find_old_copy(app_dir=str(inst), data_dir=str(data), home=str(home)) == str(other / "Data")
+    (data / ".old_portable").unlink()
+    # this copy itself is never "an earlier copy"
+    assert app.find_old_copy(app_dir=str(old), data_dir=str(old / "Data"), home=str(home)) in ("", str(other / "Data"))
+    msg = app.bring_old_copy(str(old / "Data"), data_dir=str(data))
+    assert _json.loads((data / "config.json").read_text(encoding="utf-8"))["context"] == "old topic"
+    assert (data / "meetings" / "m1.md").exists() and (data / "voiceprint.json").exists()
+    assert not (data / ".port").exists() and not (data / ".window").exists()
+    assert (data / "models" / "m" / "w.bin").read_bytes() == b"1234" and not (old / "Data" / "models").exists()
+    assert (old / "Data" / "config.json").exists()                     # the old copy keeps its settings
+    assert "2 saved meetings" in msg and "moved" in msg
+    # an existing file here is never overwritten
+    (data / "config.json").write_text("{}", encoding="utf-8")
+    app.bring_old_copy(str(old / "Data"), data_dir=str(data))
+    assert (data / "config.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_installer_script_matches_the_program(app):
+    """The installer installs for this user only (no administrator), keeps the Data folder on update and uninstall,
+    and leaves the earlier copy's folder in the file the program reads on its first start."""
+    iss = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "installer", "MeetingAssistant.iss"),
+               encoding="utf-8").read()
+    assert "PrivilegesRequired=lowest" in iss and r"DefaultDirName={localappdata}\Programs\Meeting Assistant" in iss
+    assert 'Name: "{app}\\_internal"' in iss                       # only the old program files are removed on update
+    deletes = [ln for ln in iss.split("[InstallDelete]")[1].split("[Files]")[0].splitlines() if ln.strip() and not ln.startswith(";")]
+    assert deletes and not any("Data" in ln for ln in deletes)
+    assert r"\Data\.old_portable" in iss and ".old_portable" in app.OLD_COPY_SKIP
+    assert "Meeting Assistant.lnk" in iss                                 # the same name make_shortcut() gives
+    assert "MB_DEFBUTTON2, IDNO" in iss                                   # uninstall keeps the data unless asked

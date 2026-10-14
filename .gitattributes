@@ -12,3 +12,4 @@
 *.woff2 binary
 *.exe binary
 *.zip binary
+*.iss text eol=crlf
