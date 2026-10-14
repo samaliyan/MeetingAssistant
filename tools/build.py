@@ -1,9 +1,10 @@
-"""Builds dist/MeetingAssistant.exe with PyInstaller (used by the GitHub release workflow).
+"""Builds the program with PyInstaller (used by the GitHub workflows and by build_exe.bat).
 
-build_exe.bat calls this same file on your own computer (and also copies your settings there),
-so the PyInstaller options live only here.
+    python tools/build.py            -> dist/MeetingAssistant/MeetingAssistant.exe (a folder: what the installer
+                                        installs; it starts fast because nothing is unpacked at each start)
+    python tools/build.py --onefile  -> dist/MeetingAssistant.exe (one file; build_exe.bat on your own computer)
 
-    python tools/build.py            (Windows, after: pip install -r requirements.txt pyinstaller)
+(Windows, after: pip install -r requirements.txt pyinstaller.) The PyInstaller options live only here.
 """
 import importlib.util
 import os
@@ -33,7 +34,8 @@ def imports(name):
 def main():
     os.chdir(ROOT)
     sep = ";" if os.name == "nt" else ":"
-    args = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed",
+    onefile = "--onefile" in sys.argv[1:]
+    args = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile" if onefile else "--onedir", "--windowed",
             "--name", "MeetingAssistant", "--icon", "icon.ico",
             "--add-data", f"web{sep}web", "--add-data", f"icon.ico{sep}.",
             "--hidden-import", "socksio", "--collect-submodules", "h2"]

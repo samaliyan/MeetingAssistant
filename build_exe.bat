@@ -121,7 +121,7 @@ rem   UPX is not used: inside a single exe it saves very little and makes antivi
 echo  [3/4] Building the exe (please wait)...
 if exist build rmdir /s /q build
 if exist dist\MeetingAssistant.exe del /q dist\MeetingAssistant.exe
-%BPY% tools\build.py > build_log.txt 2>&1
+%BPY% tools\build.py --onefile > build_log.txt 2>&1
 if errorlevel 1 (
   echo.
   echo  BUILD FAILED. The last lines of build_log.txt:

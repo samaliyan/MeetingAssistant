@@ -22,6 +22,17 @@ from ctypes import wintypes as wt
 from PIL import Image
 from playwright.sync_api import sync_playwright
 
+
+def place_program(exe, work):
+    """Copies the program into `work` and returns the exe there: the one-file exe, or (installed-style) the whole
+    folder with its _internal files."""
+    src = os.path.dirname(os.path.abspath(exe))
+    if os.path.isdir(os.path.join(src, "_internal")):
+        shutil.copytree(src, work, dirs_exist_ok=True, ignore=shutil.ignore_patterns("Data"))
+    else:
+        shutil.copy2(exe, os.path.join(work, "MeetingAssistant.exe"))
+    return os.path.join(work, "MeetingAssistant.exe")
+
 CDP = 9333
 NOW_JS = "Date.now() / 1000"
 FEED_MEETING = """() => {
@@ -237,8 +248,7 @@ def read_cfg(data):
 def scenario(name, exe, out, cfg):
     print(f"\n=== {name} ===", flush=True)
     work = tempfile.mkdtemp(prefix="ma_ov_")
-    dst = os.path.join(work, "MeetingAssistant.exe")
-    shutil.copy2(exe, dst)
+    dst = place_program(exe, work)
     data = os.path.join(work, "Data")
     os.makedirs(data)
     with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as f:

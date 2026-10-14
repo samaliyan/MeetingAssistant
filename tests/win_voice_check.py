@@ -16,6 +16,17 @@ import tempfile
 import time
 import urllib.request
 
+
+def place_program(exe, work):
+    """Copies the program into `work` and returns the exe there: the one-file exe, or (installed-style) the whole
+    folder with its _internal files."""
+    src = os.path.dirname(os.path.abspath(exe))
+    if os.path.isdir(os.path.join(src, "_internal")):
+        shutil.copytree(src, work, dirs_exist_ok=True, ignore=shutil.ignore_patterns("Data"))
+    else:
+        shutil.copy2(exe, os.path.join(work, "MeetingAssistant.exe"))
+    return os.path.join(work, "MeetingAssistant.exe")
+
 EXE, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 os.makedirs(OUT, exist_ok=True)
 results = []
@@ -63,7 +74,7 @@ for k, text in TEXTS.items():
     speak(male if k.startswith("a") else female, text, wav[k])
 
 work = tempfile.mkdtemp(prefix="ma_voice_")
-shutil.copy2(EXE, os.path.join(work, "MeetingAssistant.exe"))
+place_program(EXE, work)
 data = os.path.join(work, "Data")
 os.makedirs(data)
 with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as f:

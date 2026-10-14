@@ -91,8 +91,16 @@ jobs:
           curl -fsSL -o jsrt/qjs.exe https://github.com/quickjs-ng/quickjs/releases/download/v0.17.0/qjs-windows-x86_64.exe
           ./jsrt/qjs.exe -e "print('quickjs ok')"
 
-      - name: Build the exe
+      - name: Build the program (a folder, which the installer installs)
         run: python tools/build.py
+
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress | Out-Null }
+          $ver = (Select-String -Path app.py -Pattern '^VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=$ver" installer\MeetingAssistant.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Check that the release has both local engines
         shell: bash
@@ -111,10 +119,12 @@ jobs:
           VERSION="$(python -c "import re;print(re.search(r'^VERSION = \"([^\"]+)\"', open('app.py', encoding='utf-8').read(), re.M).group(1))")"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           python tools/release_notes.py "$VERSION" > release_notes.md      # fails here (before any tag) if missing
-          mkdir -p "pkg/MeetingAssistant"
-          cp dist/MeetingAssistant.exe README.md README_FA.md Guide-EN.md Guide-FA.md LICENSE "pkg/MeetingAssistant/"
+          # the installer is the main download; the zip is the same program to run without installing (portable)
+          mkdir -p pkg
+          cp -r dist/MeetingAssistant pkg/MeetingAssistant
+          cp README.md README_FA.md Guide-EN.md Guide-FA.md LICENSE "pkg/MeetingAssistant/"
           (cd pkg && 7z a -tzip "../dist/MeetingAssistant-${VERSION}-Windows-x64.zip" MeetingAssistant >/dev/null)
-          (cd dist && sha256sum MeetingAssistant.exe "MeetingAssistant-${VERSION}-Windows-x64.zip" > SHA256SUMS.txt)
+          (cd dist && sha256sum MeetingAssistant-Setup.exe "MeetingAssistant-${VERSION}-Windows-x64.zip" > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
       - name: Create tag and GitHub Release
@@ -141,7 +151,7 @@ jobs:
             git push origin "$TAG"
           fi
           gh release create "$TAG" \
-            "dist/MeetingAssistant.exe" \
+            "dist/MeetingAssistant-Setup.exe" \
             "dist/MeetingAssistant-${VERSION}-Windows-x64.zip" \
             "dist/SHA256SUMS.txt" \
             --verify-tag \

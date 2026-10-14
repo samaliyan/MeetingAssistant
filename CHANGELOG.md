@@ -2,6 +2,28 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.33]
+
+**The program is now installed like any other program — and starts faster.**
+
+- Download **MeetingAssistant-Setup.exe** and run it. It installs for your user only (no administrator rights, no
+  security prompt) in `%LOCALAPPDATA%\Programs\Meeting Assistant`, with a Start menu and a desktop shortcut, and it
+  is listed in Settings › Apps for uninstalling.
+- **Faster start:** the program is no longer one big file that Windows had to unpack (about 100 MB) into a temporary
+  folder at every start; it starts directly from its folder. A single file is also what antivirus programs often
+  mistrust; an installed program less so.
+- **Updates:** run the new Setup; it closes the program if it is open and installs over it. Your settings, meetings,
+  voice print and models (the `Data` folder) stay.
+- **Your earlier copy:** on the first start, the settings, saved meetings and voice print of the earlier single-file
+  copy are brought over by themselves (found from its desktop shortcut, or on the Desktop / in Downloads / Documents);
+  its downloaded models are moved, not copied twice. The earlier copy is not needed any more.
+- **Uninstall** (Settings › Apps) removes the program and asks whether to delete your settings and meetings too
+  (No keeps them).
+- To run it without installing, the release also has a `.zip`: unzip and start `MeetingAssistant.exe`.
+- **New check on every change:** on a real Windows machine the installer is run like a user would — install (with an
+  earlier copy on the Desktop), first start, update while the program runs, uninstall. The startup, overlay and voice
+  checks now run the installed-style program. 159 automated tests.
+
 ## [6.32]
 
 **You no longer lose your place between the transcript and the answer.**

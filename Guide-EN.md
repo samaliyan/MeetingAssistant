@@ -1,4 +1,13 @@
-# Meeting Assistant — User Guide (version 6.32)
+# Meeting Assistant — User Guide (version 6.33)
+
+## Version 6.33: install it like any program
+
+1. Download **MeetingAssistant-Setup.exe** from the latest release.
+2. Run it and press **Install**. No administrator rights are needed.
+3. Start it from the Start menu or the desktop shortcut.
+
+If you used the earlier single-file version, its settings and meetings come along by themselves on the first start.
+To update later, run the new Setup: your settings stay. To uninstall: Windows Settings › Apps › Meeting Assistant.
 
 ## Version 6.32: questions numbered, a transcript that holds still, a focus page
 
