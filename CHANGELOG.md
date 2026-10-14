@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.32]
+
+**You no longer lose your place between the transcript and the answer.**
+
+- **Every answered question has a number — Q1, Q2, Q3 — on both sides:** on its line in the transcript and above its answer on the right. The line whose answer is shown on the right is lit up (amber), and a question always stands on its own line (it is never merged with the lines around it).
+- **Above each answer:** its number, who asked and when, the question and its translation, and **Show it in the transcript**, which brings that line to the middle of the transcript and lights it up. Clicking **Q1** on a line shows its answer. ‹ › between answers now say **Q2**, not 2 / 3.
+- **The transcript holds still while you read the answer:** while the mouse is on the answer side, new lines are added below without moving what you see ("Held still while you read the answer"), and a button counts them ("3 new lines"). A few seconds after the mouse leaves, it follows the newest line again.
+- **Focus page (F10, or the Focus button):** the transcript is hidden; only the question, its translation, the answer and the coach, larger, plus one strip at the bottom with what is being said right now (with its translation). F10 or Esc goes back. It is remembered for the next start.
+
+157 automated tests.
+
 ## [6.31]
 
 **"Learn my voice" has its own window, so you always see what is happening and how it went.**

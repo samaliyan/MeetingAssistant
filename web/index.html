@@ -809,6 +809,31 @@ details.more .rate-box{border:0;padding:0}
 .modal-note{display:flex;align-items:center;gap:8px;padding:10px 22px;color:var(--muted);font-size:.86rem;border-top:1px solid var(--border)}
 .modal-note:empty{display:none}
 
+/* questions: the same number (Q1, Q2 …) on the line and on its answer; the line shown on the right is marked */
+.qtag{font-size:.7rem;font-weight:800;letter-spacing:.02em;padding:1px 7px;border-radius:6px;background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber-border);cursor:pointer;line-height:1.5}
+button.qtag{font-family:inherit}
+.entry.shown-right{background:var(--amber-soft);box-shadow:inset 4px 0 0 var(--amber)}
+.entry.flash{animation:qflash 1.8s ease-out}
+@keyframes qflash{0%,30%{background:var(--amber-border)}100%{background:var(--amber-soft)}}
+.q-head{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);margin-bottom:4px;flex-wrap:wrap}
+.q-head .spacer{flex:1}
+.q-find{background:none;border:0;padding:0;color:var(--accent);font:inherit;font-size:.8rem;cursor:pointer;text-decoration:underline}
+body.ov .q-find{display:none}
+.feed-hold{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:3;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow);border-radius:999px;padding:3px 12px;font-size:.78rem;color:var(--muted);pointer-events:none}
+/* focus page: only the question, its answer and the coach; one line of what is being said now */
+.nowstrip{display:none}
+body.focus .layout{grid-template-columns:minmax(0,1fr)!important;grid-template-rows:minmax(0,1fr)!important}
+body.focus .layout > section.card{display:none}
+body.focus .answer-card{width:min(1100px,100%);margin:0 auto;order:0}
+body.focus .q-orig{font-size:1.1rem;-webkit-line-clamp:3}
+body.focus .q-fa{font-size:1.35rem}
+body.focus .nowstrip{display:block;border-top:1px solid var(--border);padding:10px 18px;background:var(--surface-2)}
+.nowstrip .ns-h{display:flex;gap:8px;align-items:center;font-size:.76rem;color:var(--muted);margin-bottom:2px}
+.nowstrip .ns-o{margin:0;font-size:.95rem;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nowstrip .ns-f{margin:2px 0 0;font-family:var(--font-tr);font-size:1.1rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nowstrip .live-tag{margin-inline-start:4px}
+#focusBtn.on{background:var(--accent);color:#fff}
+
 /* "Learn my voice" window */
 .vm-card{width:min(600px,100%)}
 .vm-body{padding:18px 22px;overflow:auto;display:flex;flex-direction:column;gap:14px}
@@ -990,12 +1015,13 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <button data-tool="export" role="menuitem"><span data-icon="file"></span><span class="tp-text">Export…<small>Word, PDF, subtitles, text</small></span></button>
       </div>
       <div class="recbar" id="recBar" hidden><span data-icon="file"></span><span class="rname"></span><div class="dlbar"><i></i></div><span class="rtext"></span><button class="btn sm ghost" id="recCancel">Stop</button></div>
+      <div class="feed-hold" id="feedHold" hidden>Held still while you read the answer</div>
       <div class="feed-scroll" id="feed">
         <div class="empty" id="empty"></div>
         <div id="list"></div>
       </div>
       <div class="ctxbar" id="ctxBar" hidden role="button" tabindex="0" aria-label="The last thing they said — press to open the line"><div class="cx-h"><span class="cx-who"></span><span class="cx-time"></span><button class="cx-x" title="Hide for this line" aria-label="Hide">×</button></div><p class="cx-o" dir="auto"></p><p class="cx-f" hidden></p></div>
-      <button class="btn sm primary jump" id="jump" hidden><span data-icon="down"></span>New lines</button>
+      <button class="btn sm primary jump" id="jump" hidden><span data-icon="down"></span><span>New lines</span></button>
     </section>
 
     <aside class="card answer-card">
@@ -1008,6 +1034,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <button id="aBigger" aria-label="Bigger answer text">A+</button>
         </div>
         <button class="btn icon ghost" id="copyBtn" title="Copy answer" aria-label="Copy answer"><span data-icon="copy"></span></button>
+        <button class="btn sm ghost keep-label" id="focusBtn" title="Focus: only the question, its answer and the coach, big — the full transcript is hidden (F10)"><span data-icon="eye"></span><span class="hide-sm" id="focusLabel">Focus</span><kbd class="hide-sm">F10</kbd></button>
       </div>
       <div class="coach" id="coach" hidden>
         <div class="co-top"><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-more" id="coMore" hidden>Details</button><button class="co-fold" id="coFold" aria-expanded="true" title="Show or hide the coach details" aria-label="Show or hide the coach details">▾</button></div>
@@ -1034,6 +1061,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       </div>
       <div class="newq" id="newQ" hidden role="button" tabindex="0"><b>New question</b><span id="newQText"></span><u>Show now</u></div>
       <div class="answer-body" id="answerBody"></div>
+      <div class="nowstrip" id="nowStrip" aria-live="polite"></div>
       <div class="answer-foot">
         <span class="ans-nav" id="ansNav" hidden><button class="btn icon ghost" id="ansPrev" title="Earlier answer (Ctrl + Left)" aria-label="Earlier answer">‹</button><span id="ansPos"></span><button class="btn icon ghost" id="ansNext" title="Newer answer (Ctrl + Right)" aria-label="Newer answer">›</button></span>
         <button class="btn soft sm" id="answerNowBtn" title="Suggest an answer to the latest question now"><span data-icon="zap"></span>Answer now<kbd>F2</kbd></button>
@@ -1739,7 +1767,7 @@ function stopPlay(){                                      // a line still playin
 function clearTranscript(){
   stopPlay();
   S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.coach = null; S.check = null; S.coHelp = null; S.coTok = (S.coTok || 0) + 1; S.meStart = 0; S.coLiveHtml = S.coChipHtml = ""; S.pinned = false; S.queued = null; $("#newQ").hidden = true; S.ctxHidden = null; $("#ctxBar").hidden = true;
-  $("#jump").hidden = true;
+  S.newBelow = 0; setJump(); S.qNums = new Map();
 }
 function newSession(m){
   flushNotes();
@@ -1957,14 +1985,38 @@ function onLevel(m){
 /* ---------- transcript ---------- */
 const feed = $("#feed"), list = $("#list");
 function nearBottom(){ return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 70; }
+/* While the mouse is on the answer (you are reading it), the transcript holds still: new lines are added below
+   without moving it, and a button counts them. A few seconds after the mouse leaves, it follows again. */
+const holding = () => !!S.readRight && !OVERLAY && !document.body.classList.contains("focus");
+function setJump(){
+  const j = $("#jump"), n = S.newBelow || 0;
+  j.hidden = !n;
+  j.lastElementChild.textContent = n === 1 ? "1 new line" : n + " new lines";
+}
 function keepBottom(fn, added){
-  const stick = nearBottom();
+  const stick = nearBottom() && !holding();
   fn();
   if(stick) feed.scrollTop = feed.scrollHeight;
-  else if(added) $("#jump").hidden = false;
+  else if(added){ S.newBelow = (S.newBelow || 0) + 1; setJump(); }
 }
-feed.addEventListener("scroll", () => { if(nearBottom()) $("#jump").hidden = true; });
-$("#jump").onclick = () => { feed.scrollTop = feed.scrollHeight; $("#jump").hidden = true; };
+feed.addEventListener("scroll", () => { if(nearBottom() && !holding()){ S.newBelow = 0; setJump(); } });
+$("#jump").onclick = () => { feed.scrollTop = feed.scrollHeight; S.newBelow = 0; setJump(); };
+(() => {
+  const card = document.querySelector(".answer-card"); let t = 0;
+  card.addEventListener("mouseenter", () => {
+    clearTimeout(t);
+    if(OVERLAY || S.readRight) return;
+    S.readRight = true; S.holdWasBottom = nearBottom();
+    if(S.running) $("#feedHold").hidden = false;
+  });
+  card.addEventListener("mouseleave", () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      S.readRight = false; $("#feedHold").hidden = true;
+      if(S.holdWasBottom){ feed.scrollTo({top: feed.scrollHeight, behavior: "smooth"}); S.newBelow = 0; setJump(); }
+    }, 2500);
+  });
+})();
 
 /* ---------- conversation flow: turns and the "last thing they said" bar ---------- */
 /* A grouped line has its buttons (or "speaking… LIVE") at the top right, over the first line of text. The text keeps
@@ -2001,7 +2053,8 @@ function groupTurns(){
     if(!el.classList || !el.classList.contains("entry")) continue;
     const src = (el.classList.contains("me") ? "me" : "them") + "|" + (el.dataset.who || "");   // another speaker starts a new turn
     const gap = prev ? Math.abs(+el.dataset.t - +prev.dataset.t) : 1e9;
-    const same = prev && prev.dataset.src2 === src && gap <= 25;
+    const isQ = el => { const q = el.querySelector(".qtag"); return !!q && !q.hidden; };     // a question stands alone (with its Q number)
+    const same = prev && prev.dataset.src2 === src && gap <= 25 && !isQ(el) && !isQ(prev);
     el.classList.toggle("cont", !!same);
     el.classList.toggle("turn-start", !same && !!prev);
     el.dataset.src2 = src;
@@ -2121,7 +2174,7 @@ function entryShell(e){
   const el = document.createElement("article");
   el.id = "e"+e.id; el.dataset.t = e.t0;
   el.innerHTML = `<div class="avatar"></div><div class="body">
-    <div class="meta"><span class="who"></span><span class="time"></span><span class="tag" hidden></span><span class="edited" hidden>edited</span>
+    <div class="meta"><span class="who"></span><span class="time"></span><span class="tag" hidden></span><button class="qtag" hidden></button><span class="edited" hidden>edited</span>
       <button class="btn sm ghost whofix" hidden></button>
       <button class="btn sm ghost act" title="Suggest an answer to this line">${icon("zap")}Answer this</button>
       <button class="btn icon ghost play" title="Play this line" aria-label="Play this line" hidden>${icon("play")}</button>
@@ -2213,8 +2266,13 @@ function fillEntry(el, e){
   }
   const row = el.querySelector(".ans-row");
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
+  const qn = qNumOf(e), qt = el.querySelector(".qtag");
+  qt.hidden = !qn; qt.textContent = "Q" + qn;
+  qt.title = `Question ${qn} — its answer has the same number on the right. Click to show it.`;
+  qt.onclick = () => showAnswerOf(e.id, true);
+  el.classList.toggle("shown-right", !!qn && S.panelId === e.id);
   if(has){
-    row.innerHTML = `<button class="chip${S.panelId===e.id?" active":""}">${icon("sparkles")}${S.panelId===e.id ? "Answer shown on the right" : "Show suggested answer"}</button>`;
+    row.innerHTML = `<button class="chip${S.panelId===e.id?" active":""}">${icon("sparkles")}${qn ? `Q${qn} · ` : ""}${S.panelId===e.id ? "Answer shown on the right" : "Show this answer"}</button>`;
     row.firstChild.onclick = () => showAnswerOf(e.id, true);
   } else if(e.ans_state === "thinking" && e.forced){
     row.innerHTML = `<span class="chip muted"><span class="spinner"></span>Writing an answer…</span>`;
@@ -2504,7 +2562,44 @@ function setMode(m){
 function setSubtitles(on){ setMode(on ? "video" : "meeting"); }     // (older callers)
 $$("#modeSeg [data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
 var subsAt = 0;                                 // (var: safe even if called before this line ran)
-function renderSubsSoon(){ if(!OVERLAY || subsAt) return; subsAt = requestAnimationFrame(() => { subsAt = 0; renderSubs(); }); }
+function renderSubsSoon(){
+  if(subsAt || !(OVERLAY || document.body.classList.contains("focus"))) return;
+  subsAt = requestAnimationFrame(() => { subsAt = 0; if(OVERLAY) renderSubs(); else renderNow(); });
+}
+/* Focus page (F10): the transcript is hidden; one strip at the bottom shows what is being said right now */
+function setFocus(on){
+  if(OVERLAY) return;
+  document.body.classList.toggle("focus", on);
+  $("#focusBtn").classList.toggle("on", on);
+  $("#focusLabel").textContent = on ? "Full transcript" : "Focus";
+  $("#focusBtn").title = on ? "Back to the full transcript (F10 or Esc)" : "Focus: only the question, its answer and the coach, big — the full transcript is hidden (F10)";
+  try{ localStorage.setItem("ma.focus", on ? "1" : "0"); }catch{}
+  if(on){ S.readRight = false; $("#feedHold").hidden = true; renderNow(); }
+  else requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; S.newBelow = 0; setJump(); });
+  fitSoon(true);
+}
+$("#focusBtn").onclick = () => setFocus(!document.body.classList.contains("focus"));
+function renderNow(){
+  const box = $("#nowStrip"); if(!box || !document.body.classList.contains("focus")) return;
+  let item = null;                                           // the newest: a sentence being said, or the last finished line
+  S.pend.forEach(p => {
+    const tx = (p.querySelector(".live-text").textContent || "").trim(), fa = (p.querySelector(".live-fa").textContent || "").trim();
+    if((tx || fa) && (!item || +p.dataset.t > item.t)) item = {t: +p.dataset.t, who: p.querySelector(".who").textContent, o: tx, f: fa, live: true};
+  });
+  if(!item){
+    let last = null; S.entries.forEach(e => { if(String(e.text || "").trim() && (!last || e.t0 > last.t0)) last = e; });
+    if(last) item = {t: last.t0, who: whoOf(last), o: last.text, f: hasTr(last) ? last.translation : "", live: false};
+  }
+  const key = item ? [item.who, item.o, item.f, item.live].join("|") : (S.running ? "wait" : "idle");
+  if(box.dataset.k === key) return;
+  box.dataset.k = key;
+  if(!item){ box.innerHTML = `<div class="ns-h">${S.running ? "Listening…" : "The meeting has not started."} <span class="spacer"></span>F10: full transcript</div>`; return; }
+  box.innerHTML = `<div class="ns-h"><b class="ns-who"></b>${item.live ? `<span class="live-tag">live</span>` : `<span>said last</span>`}<span class="spacer" style="flex:1"></span><span>F10: full transcript</span></div><p class="ns-o" dir="auto"></p>${item.f ? `<p class="ns-f" ${trAttr()}></p>` : ""}`;
+  box.querySelector(".ns-who").textContent = item.who;
+  box.querySelector(".ns-o").textContent = item.o;
+  if(item.f) box.querySelector(".ns-f").textContent = item.f;
+}
+try{ if(!OVERLAY && localStorage.getItem("ma.focus") === "1") setTimeout(() => setFocus(true), 0); }catch{}
 function subItems(){
   // finished lines: the other side always; my own lines only when they were translated
   const fin = [...S.entries.values()].filter(e => (e.source !== "me" || hasTr(e)) && String(e.text || e.translation || "").trim())
@@ -2716,6 +2811,19 @@ function answeredList(){
   return [...S.entries.values()].filter(x => x.answer && (x.ans_state === "streaming" || x.ans_state === "done")).sort((a, b) => a.t0 - b.t0);
 }
 function newestAnswered(){ const l = answeredList(); return l.length ? l[l.length - 1] : null; }
+// Q1, Q2 …: numbered in the order the answers came (an answer asked for later on an old line gets the next number)
+function qNumOf(e){
+  if(!e || !e.answer || !(e.ans_state === "streaming" || e.ans_state === "done")) return 0;
+  if(!S.qNums) S.qNums = new Map();
+  if(!S.qNums.has(e.id)) S.qNums.set(e.id, S.qNums.size + 1);
+  return S.qNums.get(e.id);
+}
+function findOnLeft(id){                                  // the line of this answer, in the middle of the transcript, lit up
+  const el = document.getElementById("e" + id); if(!el) return;
+  if(document.body.classList.contains("focus")) setFocus(false);
+  el.scrollIntoView({block: "center", behavior: "smooth"});
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
 function showAnswerOf(id, pin){
   S.queued = null; $("#newQ").hidden = true;
   const l = answeredList(), last = l[l.length - 1];
@@ -2734,7 +2842,9 @@ function updateNav(){
   const box = $("#ansNav"); if(!box) return;
   box.hidden = l.length < 2;
   if(l.length < 2) return;
-  $("#ansPos").textContent = (i < 0 ? l.length : i + 1) + " / " + l.length;
+  const cur = i < 0 ? l[l.length - 1] : l[i];
+  $("#ansPos").textContent = "Q" + qNumOf(cur);                 // the same number as on its line
+  $("#ansPos").title = `Answer ${i < 0 ? l.length : i + 1} of ${l.length}`;
   $("#ansPrev").disabled = i <= 0;
   const newer = i >= 0 && i < l.length - 1;
   $("#ansNext").disabled = !newer;
@@ -2752,7 +2862,12 @@ function markLatest(){
     try{ localStorage.setItem("ma.tip.select", "1"); }catch{}
   }
 }
-function refreshChips(){ $$(".ans-row .chip:not(.muted):not(.err)").forEach(c => { const id = +c.closest("article").id.slice(1); const on = id === S.panelId; c.classList.toggle("active", on); c.innerHTML = icon("sparkles") + (on ? "Answer shown on the right" : "Show suggested answer"); }); }
+function refreshChips(){
+  $$(".ans-row .chip:not(.muted):not(.err)").forEach(c => { const id = +c.closest("article").id.slice(1); const on = id === S.panelId, n = qNumOf(S.entries.get(id)); c.classList.toggle("active", on); c.innerHTML = icon("sparkles") + (n ? `Q${n} · ` : "") + (on ? "Answer shown on the right" : "Show this answer"); });
+  $$("#list article.entry.shown-right").forEach(a => { if(a.id !== "e" + S.panelId) a.classList.remove("shown-right"); });
+  const cur = S.panelId != null && document.getElementById("e" + S.panelId);
+  if(cur && qNumOf(S.entries.get(S.panelId))) cur.classList.add("shown-right");
+}
 
 /* ---------- empty / waiting state ---------- */
 function renderEmpty(){
@@ -2854,7 +2969,7 @@ function renderAnswer(){
   }
   const streaming = e.ans_state === "streaming";
   const showFa = S.cfg?.answer_fa && e.answer_fa;
-  const key = [e.id, !!showFa, !!(e.translation && !e.question), e.question || e.text, e.forced, S.running, e.repeat || 0].join("|");
+  const key = [e.id, !!showFa, !!e.translation, e.question || e.text, e.forced, S.running, e.repeat || 0, qNumOf(e), (newestAnswered() || {}).id].join("|");
   if(body.dataset.key === key && body.querySelector(".a-text")){
     const at = body.querySelector(".a-text");
     setAnswerText(at, e.answer);
@@ -2870,16 +2985,17 @@ function renderAnswer(){
   if(body.dataset.eid !== String(e.id)){ body.scrollTop = 0; body.dataset.eid = String(e.id); }     // a new answer starts at its top
   body.innerHTML = `
     <div class="q-block">
-      ${e.forced || !S.running || (newestAnswered() && newestAnswered().id !== e.id) ? `<div class="q-label">${e.forced?"You asked for an answer to":"Question"} · ${esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}</div>` : ""}
+      <div class="q-head"><span class="qtag" title="The same number is on its line in the transcript">Q${qNumOf(e)}</span><span>${e.forced ? "You asked for an answer to · " : ""}${esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}${newestAnswered() && newestAnswered().id !== e.id ? " · an earlier question" : ""}</span><span class="spacer"></span><button class="q-find" title="Scroll the transcript to this question and light it up">Show it in the transcript</button></div>
       <p class="q-orig" dir="auto"></p>
-      ${e.translation && !e.question ? `<p class="q-fa" ${trAttr()}></p>` : ""}
+      ${e.translation ? `<p class="q-fa" ${trAttr()}></p>` : ""}
     </div>
     ${e.repeat ? `<div class="rep-note">${icon("alert")} They asked this again (asked ${e.repeat + 1} times). This answer is written to be more direct than the last one: say the point in the first sentence, then one example.</div>` : ""}
     <p class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></p>
     ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
   body.querySelector(".q-orig").textContent = e.question || e.text;
   body.querySelector(".q-orig").onclick = ev => ev.currentTarget.parentNode.classList.toggle("open");
-  if(e.translation && !e.question) body.querySelector(".q-fa").textContent = e.translation;
+  if(e.translation) body.querySelector(".q-fa").textContent = e.translation;
+  body.querySelector(".q-find").onclick = () => findOnLeft(e.id);
   setAnswerText(body.querySelector(".a-text"), e.answer);
   if(showFa) body.querySelector(".a-fa p").textContent = e.answer_fa;
   requestAnimationFrame(() => body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8));
@@ -4289,8 +4405,9 @@ $$("#logFilter [data-val]").forEach(b => b.onclick = () => {
 
 /* ---------- keyboard ---------- */
 document.addEventListener("keydown", ev => {
-  if(["F2", "F3", "F6", "F7", "F8", "F9"].includes(ev.key) && ev.repeat){ ev.preventDefault(); return; }   // a held key acts once
+  if(["F2", "F3", "F6", "F7", "F8", "F9", "F10"].includes(ev.key) && ev.repeat){ ev.preventDefault(); return; }   // a held key acts once
   if(ev.key === "F9"){ ev.preventDefault(); toggleRun(ev.shiftKey); }
+  else if(ev.key === "F10" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); setFocus(!document.body.classList.contains("focus")); }
   else if(ev.key === "F2"){
     ev.preventDefault();
     const a = document.activeElement;
@@ -4316,7 +4433,7 @@ document.addEventListener("keydown", ev => {
     else { const b = $("#answerBody"); b.scrollBy({top: (ev.key === "ArrowDown" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"}); }
   }
   else if(ev.key === "F8"){ ev.preventDefault(); togglePause(); }
-  else if(ev.key === "Escape"){ if(!$("#hideModal").hidden) closeHideAsk(false); else if(!$("#toolPop").hidden) $("#toolPop").hidden = true; else if(!$("#toolModal").hidden) closeTool(); else if(!$("#helpPop").hidden) $("#helpPop").hidden = true; else if(!$("#brModal").hidden) closeBrowser(); else if(!$("#sumModal").hidden) $("#sumModal").hidden = true; else closeDrawer(); hideSel(); }
+  else if(ev.key === "Escape"){ if(!$("#hideModal").hidden) closeHideAsk(false); else if(!$("#toolPop").hidden) $("#toolPop").hidden = true; else if(!$("#toolModal").hidden) closeTool(); else if(!$("#helpPop").hidden) $("#helpPop").hidden = true; else if(!$("#brModal").hidden) closeBrowser(); else if(!$("#sumModal").hidden) $("#sumModal").hidden = true; else if(!$("#voiceModal").hidden) vmClose(); else if($("#drawer").getAttribute("aria-hidden") === "true" && document.body.classList.contains("focus")) setFocus(false); else closeDrawer(); hideSel(); }
   else if((ev.ctrlKey || ev.metaKey) && ev.key === ","){ ev.preventDefault(); openDrawer(); }
   else if((ev.ctrlKey || ev.metaKey) && (ev.key === "=" || ev.key === "+" || ev.key === "-")){
     ev.preventDefault();
