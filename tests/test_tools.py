@@ -2718,6 +2718,15 @@ def test_meeting_windows_are_recognised(app):
     assert f(["Chat | Weekly Meeting | Microsoft Teams", "Webex Meetings pricing - Google Chrome",     # pages and chats
               "Zoom Meeting tips - YouTube - Google Chrome", "Weekly Meeting notes - Microsoft\u200b Edge"]) == set()
     assert f(["Meet - abc-defg-hij and 2 more pages - Personal - Microsoft\u200b Edge"]) == {"Google Meet"}
+    # Teams in a web browser; a page or a chat about a meeting is still not one
+    assert f(["Meeting with Sara | Microsoft Teams - Google Chrome"]) == {"Teams"}
+    assert f(["Call with Ali | Microsoft Teams (work) and 2 more pages - Microsoft\u200b Edge"]) == {"Teams"}
+    assert f(["Chat | Weekly Meeting | Microsoft Teams - Google Chrome", "How to join a Teams meeting - Google Chrome"]) == set()
+    # the user's own words (Setup › Meeting) for meetings named without "Meeting" or "Call"
+    assert f(["Weekly sync | Microsoft Teams", "Standup notes - Notepad"], "weekly sync, ab") == {"weekly sync"}
+    assert f(["Meeting Assistant 6.34 — Weekly sync"], "weekly sync") == set()    # (never our own window)
+    assert f(["Meeting with Ali | Microsoft Teams (work or school) - Google Chrome"]) == {"Teams"}
+    assert f(["Weekly sync tutorial - YouTube - Google Chrome"], "weekly sync") == set()
     old = os.environ.get("MA_FAKE_WINDOWS")
     os.environ["MA_FAKE_WINDOWS"] = "Zoom Meeting;;Notes"
     try:
@@ -3089,3 +3098,252 @@ def test_installer_script_matches_the_program(app):
     assert r"\Data\.old_portable" in iss and ".old_portable" in app.OLD_COPY_SKIP
     assert "Meeting Assistant.lnk" in iss                                 # the same name make_shortcut() gives
     assert "MB_DEFBUTTON2, IDNO" in iss                                   # uninstall keeps the data unless asked
+
+
+def test_speech_to_text_moves_on_to_the_next_service_after_a_temporary_error(app):
+    """A connection problem on the first service: the sentence goes to the next service at once (it is not lost
+    after 2 minutes of retrying the same one); with no other service, the same one is tried again later."""
+    import time
+    eng, sess, calls = _engine(app)
+    tried, done = [], []
+
+    class Api:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def transcribe(self, audio, model, lang, prompt):
+            tried.append(self.pid)
+            if self.pid == "first":
+                raise app.Transient("connection reset")
+            return {"text": "Hello there.", "language": "english"}
+    eng.app.get_api = lambda pid: Api(pid)
+    eng.app.note_request = lambda: None
+    eng.stt_targets = lambda source: [("first", "m1"), ("second", "m2")]
+    eng._usable = lambda t, d, n: True
+    eng.accept_text = lambda *a, **k: done.append(a[1])
+    job = {"segs": [1], "source": "them", "audio": app.np.zeros(16000, app.np.float32), "t0": time.time() - 2,
+           "t_end": time.time() - 1, "dur": 1.0, "tries": 0, "t_queued": time.time()}
+    eng._process(job, ("first", "m1"))
+    assert eng.pending and eng.pending[0] is job and job["avoid"].get(("first", "m1"), 0) > time.time()
+    assert job["not_before"] - time.time() < 0.5                      # not a long wait: another service is there
+    assert eng._pick_model("them", 1.0, time.time(), job["avoid"]) == ("second", "m2")
+    eng.pending.clear()
+    eng._process(job, ("second", "m2"))
+    assert tried == ["first", "second"] and done == ["Hello there."]
+    # only one service: it is tried again (later), never another one that does not exist
+    eng.stt_targets = lambda source: [("first", "m1")]
+    job2 = dict(job, tries=0, avoid={}, segs=[2])
+    job2.pop("t_first_fail", None)
+    eng._process(job2, ("first", "m1"))
+    assert eng._pick_model("them", 1.0, time.time(), job2["avoid"]) == ("first", "m1")
+    assert job2["not_before"] - time.time() > 0.5
+
+
+def test_live_service_is_not_sent_long_silence(app):
+    """Deepgram bills the audio it gets: after speech only 2 s of silence are sent (they end the sentence); the rest
+    is skipped and the timeline moves on by the same time, so the times of the next sentence stay right. A stream
+    that broke still counts its audio in the usage numbers."""
+    np = app.np
+    lv = app.DeepgramLive("them", "k", "nova-3", "en", "", lambda *a: None, lambda *a: None, lambda e: None)
+    lv.stop_event.set()
+    speech = (np.sin(np.arange(1600) * 0.3) * 0.3).astype(np.float32)        # 0.1 s
+    quiet = np.zeros(1600, np.float32)
+    for _ in range(10):
+        lv._put(speech, 16000)
+    t0 = lv.t_audio0
+    for _ in range(100):                                                     # 10 s of silence
+        lv._put(quiet, 16000)
+    lv._put(None, 2.0)                                                        # and a gap (nothing playing)
+    for _ in range(10):
+        lv._put(speech, 16000)
+    items = [lv.q.get_nowait() for _ in range(lv.q.qsize())]
+    assert abs(sum(len(p) for p, _ in items) / 32000 - (1.0 + 2.0 + 1.0)) < 0.11
+    assert abs(lv.skipped - 10.0) < 0.11 and lv.t_audio0 == t0
+
+    class WS:
+        def __init__(self):
+            self.n, self.last_rx = 0, 0.0
+
+        def send(self, data, text=False):
+            self.n += len(data)
+    lv.ws = WS()
+    for k in range(0, len(items), 4):                                        # as the sender does: ~100 ms at a time
+        lv._send_parts(items[k:k + 4])
+    assert abs(lv.sent - 4.0) < 0.11
+    # Deepgram's time 3.5 s (the middle of the second sentence) is 13.5 s after the start on the wall clock;
+    # its time 0.5 s (the first sentence) is unchanged
+    assert abs(lv._wall(3.5) - (t0 + 13.5)) < 0.12 and abs(lv._wall(0.5) - (t0 + 0.5)) < 0.01
+    assert lv.ws.last_rx > 0                                                  # the 'no answer' check starts again
+    # a pause: the time paused is skipped too
+    lv.pause(True)
+    lv.paused_at -= 5.0                                                       # (5 s paused)
+    lv.pause(False)
+    items = []
+    for _ in range(10):
+        lv._put(speech, 16000)
+    items = [lv.q.get_nowait() for _ in range(lv.q.qsize())]
+    lv._send_parts(items)
+    assert abs(lv._wall(4.5) - (t0 + 14.0 + 5.0 + 0.5)) < 0.15
+    lv.thread.join(10)                                       # (its own connection attempt has ended by now)
+    lv.ok, lv.usage_done, lv.sent = True, False, 4.0
+    on = app.USAGE_ON[0]
+    app.USAGE_ON[0] = True
+    try:
+        before = dict(app.USAGE.get("Deepgram (live)", {}))
+        lv._fail(RuntimeError("line broke"))
+        lv.stop()
+        after = app.USAGE.get("Deepgram (live)", {})
+        assert after.get("audio", 0) - before.get("audio", 0) == 4.0          # counted once, also for a broken stream
+    finally:
+        app.USAGE_ON[0] = on
+
+
+def test_say_mode_keeps_my_microphone_from_the_live_service(app):
+    """Say mode with a live service (Deepgram): my microphone is not sent to it while say mode is on (before, it was
+    sent but not shown); the other side still is. A paused meeting sends nothing."""
+    eng, sess, calls = _engine(app)
+
+    class Lv:
+        def __init__(self):
+            self.p = None
+
+        def pause(self, on):
+            self.p = on
+    eng.live = {"me": Lv(), "them": Lv()}
+    eng.say_mode = True
+    eng.apply_live_pause()
+    assert eng.live["me"].p is True and eng.live["them"].p is False
+    eng.say_mode = False
+    eng.apply_live_pause()
+    assert eng.live["me"].p is False
+    eng.paused = True
+    eng.apply_live_pause()
+    assert eng.live["me"].p is True and eng.live["them"].p is True
+
+
+def test_failed_services_are_tried_again_when_setup_changes_them(app):
+    """A model that failed (404, wrong address) is not off until the next meeting: changing the services in Setup
+    makes the program try it again at once."""
+    a = app.App()
+    try:
+        eng, sess, calls = _engine(app)
+        a.engine = eng
+        eng.models.kill("openai|gpt-x")
+        eng.stt_dead.add(("openai", "whisper-1"))
+        eng._q("whisper-large-v3").dead = True
+        a.api_save_config(answer_size=30)                      # not a service setting: nothing changes
+        assert "openai|gpt-x" in eng.models.dead and eng.stt_dead
+        a.api_save_config(stt_model="whisper-1-fixed")
+        assert not eng.models.dead and not eng.stt_dead and not eng._q("whisper-large-v3").dead
+        assert eng.models.ok("openai|gpt-x")
+    finally:
+        a.engine = None
+        a.closing.set()
+
+
+def test_pac_answer_is_turned_into_one_proxy(app):
+    """Windows 'Use setup script' (PAC): the proxy WinHTTP chose becomes one address; 'direct' means none."""
+    f = app.pac_pick
+    assert f(3, "10.0.0.5:8080") == "http://10.0.0.5:8080"
+    assert f(3, "10.0.0.5:8080; 10.0.0.6:3128") == "http://10.0.0.5:8080"
+    assert f(3, "http=1.2.3.4:80;https=5.6.7.8:443") == "http://1.2.3.4:80"
+    assert f(3, "ftp=9.9.9.9:21 https=5.6.7.8:443") == "http://5.6.7.8:443"
+    assert f(3, "DIRECT") == "" and f(1, "10.0.0.5:8080") == "" and f(3, "") == ""
+    assert f(3, "socks5://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
+
+
+def test_global_keys_can_avoid_altgr(app):
+    """Ctrl+Alt is AltGr on many keyboards: the keys can be Ctrl+Alt+Shift, or off (buttons only)."""
+    assert app.hotkey_mods(app.sanitize({})) == (0x3, "Ctrl+Alt")
+    assert app.hotkey_mods(app.sanitize({"hotkeys": "ctrl_alt_shift"})) == (0x7, "Ctrl+Alt+Shift")
+    assert app.hotkey_mods(app.sanitize({"hotkeys": "off"})) == (None, "")
+    assert app.sanitize({"hotkeys": "alt_only"})["hotkeys"] == "ctrl_alt"      # an unknown choice: the default
+    page = open(os.path.join(app.WEB_DIR, "index.html"), encoding="utf-8").read()
+    assert 'data-key="hotkeys"' in page and "function relabelKeys" in page and 'id="fMeetWords"' in page
+    assert "readScreen(); }" not in page.split("They mention the screen")[0][-400:]      # never read by itself
+
+
+def test_pac_lookup_never_holds_up_the_program(app, monkeypatch):
+    """The PAC lookup runs in the background: the first time it waits at most 3 s, later it answers at once with
+    the last value while a new lookup runs."""
+    import time as _t
+    calls = []
+
+    def slow(url):
+        calls.append(url)
+        _t.sleep(0.3)
+        return "http://10.1.1.1:8080"
+    old = app._winhttp_proxy_for
+    app._winhttp_proxy_for = slow
+    app._pac_cache.clear()
+    try:
+        assert app.pac_proxy("https://x.example/") == "http://10.1.1.1:8080"        # first time: waited for it
+        app._pac_cache["https://x.example/"] = (_t.time() - 400, "http://10.1.1.1:8080")   # 5 minutes later
+        t0 = _t.time()
+        assert app.pac_proxy("https://x.example/") == "http://10.1.1.1:8080"        # the last value, at once
+        assert _t.time() - t0 < 0.1
+        _t.sleep(0.5)
+        assert len(calls) == 2 and _t.time() - app._pac_cache["https://x.example/"][0] < 1
+    finally:
+        app._winhttp_proxy_for = old
+        app._pac_cache.clear()
+
+
+def test_failover_keeps_its_pause_when_the_other_service_cannot_take_it(app):
+    """The next service is busy or out of its free limit: the failed one is not hammered every 0.2 s - it waits."""
+    import time
+    eng, sess, calls = _engine(app)
+
+    class Api:
+        def transcribe(self, *a):
+            raise app.Transient("connection reset")
+    eng.app.get_api = lambda pid: Api()
+    eng.app.note_request = lambda: None
+    eng.stt_targets = lambda source: [("first", "m1"), ("groq", "w")]
+    eng._usable = lambda t, d, n: t[0] == "first"                       # the other one cannot take it now
+    job = {"segs": [1], "source": "them", "audio": app.np.zeros(16000, app.np.float32), "t0": time.time() - 2,
+           "t_end": time.time() - 1, "dur": 1.0, "tries": 0, "t_queued": time.time()}
+    eng._process(job, ("first", "m1"))
+    assert job["not_before"] - time.time() >= 0.9
+
+
+def test_live_time_marks_are_safe_and_ends_stay_before_a_skip(app):
+    lv = app.DeepgramLive("them", "k", "nova-3", "en", "", lambda *a: None, lambda *a: None, lambda e: None)
+    lv.stop_event.set()
+    lv.t_audio0 = 1000.0
+    lv.break_pos, lv.break_off = [0.0, 5.0], [0.0, 20.0]
+    assert lv._wall(5.0) == 1000.0 + 5.0 + 20.0          # a sentence starting right after the skip: after it
+    assert lv._wall(5.0, end=True) == 1000.0 + 5.0       # a sentence ending right before it: before it
+    lv.break_pos.append(9.0)                              # (a mark being written: its offset not there yet)
+    assert lv._wall(9.5) == 1000.0 + 9.5 + 20.0          # no error, the last complete mark is used
+
+
+def test_starting_live_twice_never_makes_two_streams(app):
+    eng, sess, calls = _engine(app)
+    made = []
+
+    class Lv:
+        def __init__(self, *a, **k):
+            made.append(self)
+            self.ok = True
+            self.stop_event = app.threading.Event()
+
+        def feed(self, *a):
+            pass
+
+        def pause(self, on):
+            pass
+    old = app.DeepgramLive
+    app.DeepgramLive = Lv
+    try:
+        eng.app.provider = lambda pid: {"kind": "live", "api_key": "k", "name": "Deepgram", "use_proxy": False}
+        eng.speech_mode = lambda: {}
+        cap = app.types.SimpleNamespace(source="them", tap=None, preview_every=1.0, seg=None)
+        eng.start_live([cap])
+        eng.start_live([cap], retry_dead=True)
+        assert len(made) == 1
+        eng.live_dead.add("them")                        # it broke: a new start makes a new one
+        eng.start_live([cap], retry_dead=True)
+        assert len(made) == 2
+    finally:
+        app.DeepgramLive = old

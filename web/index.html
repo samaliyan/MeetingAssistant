@@ -200,6 +200,7 @@ button.chip:hover{filter:brightness(.97)}
 .entry.me{background:linear-gradient(90deg,transparent,var(--me-soft) 140%);border-inline-end:3px solid var(--me)}
 .entry.me .fa{opacity:.78;font-size:1.02rem;line-height:1.7}
 .entry.cont{padding-top:2px;padding-bottom:6px}
+.entry.far{content-visibility:auto;contain-intrinsic-size:auto 120px}
 .entry.cont::before{display:none!important}
 .entry.cont .avatar{visibility:hidden;height:0;overflow:hidden}
 .entry.cont .meta .who,.entry.cont .meta .time,.entry.cont .meta .tag,.entry.cont .meta .edited{display:none}
@@ -1156,7 +1157,9 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <div class="help">Usually the language of the question.</div></div>
       </div>
       <div class="two">
-        <div class="field"><label for="fMe">My name on screen</label><input class="input" id="fMe" data-key="me_label" maxlength="24"></div>
+        <div class="field"><label for="fMeetWords">Meeting reminder: also these window titles</label><input class="input" id="fMeetWords" data-key="meeting_words" maxlength="300" spellcheck="false" placeholder="e.g. Standup, Weekly sync, Interview — comma separated">
+        <div class="help">Zoom, Teams (also in a web browser), Google Meet and Webex meetings are noticed by themselves. If your meetings have other names in their window title, write words of them here.</div></div>
+      <div class="field"><label for="fMe">My name on screen</label><input class="input" id="fMe" data-key="me_label" maxlength="24"></div>
         <div class="field"><label for="fThem">Other side's name</label><input class="input" id="fThem" data-key="them_label" maxlength="24"></div>
       </div>
       <label class="toggle"><input type="checkbox" data-key="diarize"><span class="switch"></span><span class="tt"><b>Tell the other speakers apart</b><span>Names several people on the other side (Interviewer, Interviewer 2 …). Works with the live service (Deepgram) only; applies from the next Start.</span></span></label>
@@ -1313,7 +1316,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         </div>
         <div class="arow" id="screenRow" style="margin-top:12px"><span class="astat"></span><span class="alabel">Reading the screen</span><select class="input select" id="scrProv" data-key="screen_provider"></select><input class="input" data-key="screen_model" list="dl-scr" spellcheck="false" placeholder="Model that reads pictures — empty = pick automatically"><datalist id="dl-scr"><option value="gpt-4o-mini"><option value="gpt-4.1-mini"><option value="gemini-2.5-flash"><option value="qwen/qwen3.8-27b"><option value="meta-llama/llama-4-scout-17b-16e-instruct"></datalist></div>
         <div class="help" style="margin:4px 0 8px">Used by Tools › Read my screen (F3). It needs an online service whose model can read pictures; the local models cannot. Picture delay:
-          <label class="toggle" style="margin:6px 0"><input type="checkbox" data-key="auto_screen"><span class="switch"></span><span class="tt"><b>Read the screen by itself</b><span>When they say "look at this code" or "on my screen", the screen is read after the picture delay, with no key. Off by default.</span></span></label>
+          <div class="help" style="margin:6px 0">When they say "look at this code" or "on my screen", a message offers <b>Read my screen</b>. The screen is read only when you press it (or F3) — never because of something said in the meeting.</div>
           <select class="input select" data-key="screen_delay" style="width:auto;display:inline-block;padding:3px 8px" aria-label="Picture delay"><option value="0">at once</option><option value="2">2 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option></select></div>
         <label class="toggle" id="backupRow"><input type="checkbox" data-key="use_backup"><span class="switch"></span><span class="tt"><b>Use Groq as a backup</b><span id="backupHelp">If a chosen service fails or runs out of credit, Groq continues so the meeting never stops.</span></span></label>
       </div>
@@ -1448,9 +1451,12 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <label for="fOvT" style="margin-top:8px">Overlay: how strong the words are <b id="ovTVal">85%</b></label>
         <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="60" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
+        <div class="field" style="margin-top:12px"><span class="label">Keys that work from any program</span>
+          <div class="seg" data-key="hotkeys" style="margin-top:6px"><button data-val="ctrl_alt">Ctrl + Alt</button><button data-val="ctrl_alt_shift">Ctrl + Alt + Shift</button><button data-val="off">Off</button></div>
+          <div class="help">On some keyboards Ctrl + Alt is the AltGr key (Polish ó ą ś, German € @ …): then those letters cannot be typed while the program holds them. Choose Ctrl + Alt + Shift, or Off and use the buttons (with Off only <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>M</kbd> stays, to move the see-through window). F2–F10 in this window always work.</div></div>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Subtitle mode (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. Also the Subtitles button, or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
-        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd> (drag it with the mouse, press again to lock), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> with the arrows; <kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller.</div>
+        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd>, then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place.</div>
       </div>
       <div class="field">
         <span class="label">Screen sharing</span>
@@ -1876,9 +1882,52 @@ function applyFeatures(){
   const ct = document.querySelector(".coach-title"); if(ct) ct.textContent = coachShown ? "Coach" : featOn("say") ? "Say it" : "My notes";
   renderSayBtn(); renderNotes();
 }
+/* the global keys can be Ctrl+Alt+… or Ctrl+Alt+Shift+… (Setup › Display): every text that names them follows */
+const KEY_RX = /Ctrl\+Alt\+(?!Shift\+)/g;
+// what was said in the meeting, answers, tool results and the log are never changed ("Ctrl+Alt+Delete" stays)
+const KEY_SKIP = "#list, #answerBody, #toolBody, #logBox, #nowStrip, #ovSub, #sumBody, #ctxBar, #sayCard, #coach, #findBody";
+function inContent(n){
+  const el = n.nodeType === 1 ? n : n.parentElement;
+  return !!(el && el.closest(KEY_SKIP) && !el.closest(".ov-idle, .answer-empty, .help, .co-actions"));
+}
+function relabelNode(n){
+  if(inContent(n)) return;
+  if(n.nodeType === 3){ const v = n.nodeValue; if(v.includes("Ctrl+Alt+")){ const t = v.replace(KEY_RX, "Ctrl+Alt+Shift+"); if(t !== v) n.nodeValue = t; } return; }
+  if(n.nodeType !== 1) return;
+  if(n.title && n.title.includes("Ctrl+Alt+")) n.title = n.title.replace(KEY_RX, "Ctrl+Alt+Shift+");
+  const w = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+  for(let t = w.nextNode(); t; t = w.nextNode()) relabelNode(t);
+  n.querySelectorAll && n.querySelectorAll("[title*='Ctrl+Alt+']").forEach(e => { if(!inContent(e)) e.title = e.title.replace(KEY_RX, "Ctrl+Alt+Shift+"); });
+  const kbds = (n.tagName === "KBD" ? [n] : (n.querySelectorAll ? [...n.querySelectorAll("kbd")] : [])).filter(k => !inContent(k));
+  kbds.forEach(k => {                                       // keys written as separate boxes: Ctrl Alt T -> Ctrl Alt Shift T
+    const prev = k.previousElementSibling, next = k.nextElementSibling;
+    if(k.textContent.trim() === "Alt" && prev && prev.tagName === "KBD" && prev.textContent.trim() === "Ctrl"
+       && next && next.tagName === "KBD" && next.textContent.trim() !== "Shift"){
+      const sh = document.createElement("kbd"); sh.textContent = "Shift"; sh.dataset.added = "1"; k.after(sh);
+    }
+  });
+}
+let keyObs = null;
+function relabelKeys(){
+  const shift = !!(S.cfg && S.cfg.hotkeys === "ctrl_alt_shift");
+  if(shift === !!keyObs) return;
+  if(shift){
+    relabelNode(document.body);
+    keyObs = new MutationObserver(ms => ms.forEach(m => { if(m.type === "characterData") relabelNode(m.target); else m.addedNodes.forEach(relabelNode); }));
+    keyObs.observe(document.body, {subtree: true, childList: true, characterData: true});
+  } else {
+    keyObs.disconnect(); keyObs = null;
+    const back = n => { if(n.nodeType === 3 && n.nodeValue.includes("Ctrl+Alt+Shift+")) n.nodeValue = n.nodeValue.replaceAll("Ctrl+Alt+Shift+", "Ctrl+Alt+"); };
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for(let t = w.nextNode(); t; t = w.nextNode()) back(t);
+    document.querySelectorAll("[title*='Ctrl+Alt+Shift+']").forEach(e => { e.title = e.title.replaceAll("Ctrl+Alt+Shift+", "Ctrl+Alt+"); });
+    document.querySelectorAll("kbd[data-added]").forEach(k => k.remove());
+  }
+}
 function applyConfig(){
   const c = S.cfg; if(!c) return;
   applyFeatures();
+  relabelKeys();
   const ml = myLang();
   $$(".myl").forEach(x => { x.textContent = ml.name; });
   document.documentElement.style.setProperty("--font-tr", ml.rtl ? "var(--font-fa)" : "var(--font)");
@@ -2028,6 +2077,11 @@ function fitRooms(){
   const bodyKey = fitVer + "|" + document.body.className;
   for(const el of list.children){
     if(!el.classList || !el.classList.contains("entry")) continue;
+    if(el.classList.contains("far")){                              // not drawn now: it keeps the room measured before,
+      if(el._fitBody !== bodyKey){ el.style.removeProperty("--rsv"); el._fitBody = bodyKey; el._fitKey = null; }   // or the default after a change of size / mode
+      continue;
+    }
+    el._fitBody = bodyKey;
     const latest = el.classList.contains("latest"), pend = el.classList.contains("pending");
     const key = bodyKey + "|" + el.className + "|" + (pend ? (el.querySelector(".state").textContent + el.querySelector(".mode").textContent) : "");
     if(el._fitKey === key) continue;
@@ -2046,8 +2100,26 @@ function fitRooms(){
     el.style.setProperty("--rsv", room + "px");
   }
 }
+/* Long meetings: lines far above the newest 150 are only drawn when they are scrolled near (the browser keeps their
+   size), so a meeting of thousands of lines stays as quick as a short one. */
+const NEAR_LINES = 150;
+function scrollToLine(el){                               // an old line: it and its neighbours are drawn first, so it lands right
+  let a = el; for(let i = 0; i < 25 && a; i++, a = a.previousElementSibling) a.classList && a.classList.remove("far");
+  a = el; for(let i = 0; i < 25 && a; i++, a = a.nextElementSibling) a.classList && a.classList.remove("far");
+  el.scrollIntoView({block: "center"});
+  requestAnimationFrame(() => el.scrollIntoView({block: "center"}));
+}
+function markFar(){
+  const ch = list.children, n = ch.length;
+  for(let i = 0; i < n; i++){
+    const el = ch[i];
+    if(!el.classList) continue;
+    const far = i < n - NEAR_LINES && !el.classList.contains("pending") && !el.classList.contains("shown-right");
+    if(far !== el.classList.contains("far")) el.classList.toggle("far", far);
+  }
+}
 function groupTurns(){
-  fitSoon();
+  fitSoon(); markFar();
   let prev = null;
   for(const el of list.children){
     if(!el.classList || !el.classList.contains("entry")) continue;
@@ -2098,7 +2170,7 @@ $("#ctxBar").addEventListener("click", ev => {
   if(ev.target.closest(".cx-x")){ S.ctxHidden = +bar.dataset.id; bar.hidden = true; return; }
   if(!bar.classList.contains("open")){ bar.classList.add("open"); return; }        // first press: read all of it
   const el = document.getElementById("e" + bar.dataset.id);                        // second press: go to the line
-  if(el){ el.scrollIntoView({block: "center"}); bar.classList.remove("open"); updateCtx(); }
+  if(el){ scrollToLine(el); bar.classList.remove("open"); updateCtx(); }
 });
 feed.addEventListener("scroll", updateCtx, {passive: true});
 window.addEventListener("resize", updateCtx);
@@ -2309,8 +2381,9 @@ function upsertEntry(e, silent, batch){
   if(added && e.source === "them" && /\b(on (the|my|your) screen|look at (this|the|my)|share (my|your|the) screen|sharing (my|the) screen|this (code|diagram|schema|query|table|slide)|can you see (my|the|this)|see (this|the) (code|screen|diagram))\b/i.test(e.text || "")
      && Date.now() - (S.scrTip || 0) > 60000 && S.running && !silent){
     S.scrTip = Date.now();
-    if(S.cfg && S.cfg.auto_screen && featOn("screen") && !OVERLAY && !S.scrBusy && !TM.kind){ toast("info", "They mention the screen. Reading it…"); readScreen(); }
-    else toast("info", "They mention the screen. Press F3 and the program reads it and suggests the answer.");
+    // never by itself: what the meeting says ("look at my screen") cannot take a picture of this screen - you press
+    if(featOn("screen") && !OVERLAY) toast("info", "They mention the screen. Read it and get the answer? (or press F3)", {text: "Read my screen", run: readScreen});
+    else if(featOn("screen") && OVERLAY && !(S.cfg && S.cfg.hotkeys === "off")) toast("info", "They mention the screen. Ctrl+Alt+S reads it.");
   }
   // the newest answer goes to the answer panel automatically
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
@@ -2821,7 +2894,7 @@ function qNumOf(e){
 function findOnLeft(id){                                  // the line of this answer, in the middle of the transcript, lit up
   const el = document.getElementById("e" + id); if(!el) return;
   if(document.body.classList.contains("focus")) setFocus(false);
-  el.scrollIntoView({block: "center", behavior: "smooth"});
+  scrollToLine(el);
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 function showAnswerOf(id, pin){
@@ -3482,7 +3555,7 @@ function fillDrawer(force){
   renderServices(); renderLocal(); renderAbout(); renderHide();
   const [p, src] = S.proxy || ["",""];
   const ns = $("#netSummary"); ns.className = "opt-state" + (p ? "" : " off"); ns.textContent = p ? "proxy " + p : "direct connection";
-  $("#proxyHelp").textContent = p ? (src === "system" ? `Using your Windows proxy automatically: ${p}` : `Using: ${p}`)
+  $("#proxyHelp").textContent = p ? (String(src).startsWith("system") ? `Using your Windows proxy automatically${String(src).includes("PAC") ? " (from its setup script)" : ""}: ${p}` : `Using: ${p}`)
                                   : "No proxy found. That is fine if your VPN works in TUN / global mode. Otherwise enter your VPN app's HTTP proxy, for example http://127.0.0.1:10809";
 }
 

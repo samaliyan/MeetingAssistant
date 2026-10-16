@@ -12,6 +12,8 @@ Windows only (uses WASAPI loopback to hear system audio).
 """
 from __future__ import annotations
 
+import base64
+import bisect
 import concurrent.futures
 import collections
 import datetime
@@ -65,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.33"
+VERSION = "6.34"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -214,7 +216,9 @@ DEFAULTS = {
     "answer_mode": "fast",       # fast | smart
     "job_ad": "",                # the job advert (for prep and answers; optional)
     "debrief_scores": True,      # scores (clarity, structure, ...) in the review after a meeting
-    "auto_screen": False,        # read the screen by itself when they say "look at the screen"
+    "auto_screen": False,        # (no longer used: the screen is read only when the user presses Read my screen / F3)
+    "meeting_words": "",         # meeting reminder: also windows whose title has one of these words (comma separated)
+    "hotkeys": "ctrl_alt",       # the global keys: ctrl_alt | ctrl_alt_shift (AltGr keyboards) | off
     "coach": True,               # the situation card: phase, difficulty, repeated questions, a tip
     "answer_fa": True,           # the meaning (in my language) under the suggested answer
     "mic_device": "",            # "" = Windows default
@@ -395,7 +399,7 @@ MODES = {
 CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
            "about_source": ("text", "file"), "overlay_pos": ("top", "bottom"), "meeting_mode": tuple(MODES),
-           "work_mode": ("meeting", "inperson", "video"),
+           "work_mode": ("meeting", "inperson", "video"), "hotkeys": ("ctrl_alt", "ctrl_alt_shift", "off"),
            "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
 RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100), "overlay_text": (30, 100),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
@@ -546,6 +550,99 @@ STARTUP_INFO = []          # good news for the window when it connects (e.g. set
 CONFIG_LOCKED = [False]      # the settings file exists but could not be read: never overwrite it with defaults
 
 
+# ---- secrets in the settings file: API keys and a proxy password are kept encrypted for this Windows user (DPAPI) ----
+SECRET_TAG = "dpapi:"
+SECRET_ENTROPY = b"MeetingAssistant settings"
+
+
+def _dpapi(data, protect):
+    """Windows' own encryption for the signed-in user (only this user on this PC can read it back)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.c_void_p)]
+    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    buf = ctypes.create_string_buffer(data, len(data))
+    ent = ctypes.create_string_buffer(SECRET_ENTROPY, len(SECRET_ENTROPY))
+    inp, out = BLOB(len(data), ctypes.cast(buf, ctypes.c_void_p)), BLOB()
+    eb = BLOB(len(SECRET_ENTROPY), ctypes.cast(ent, ctypes.c_void_p))
+    if protect:
+        ok = crypt32.CryptProtectData(ctypes.byref(inp), ctypes.c_wchar_p("Meeting Assistant"), ctypes.byref(eb),
+                                      None, None, 0x1, ctypes.byref(out))      # 0x1: never show a prompt
+    else:
+        ok = crypt32.CryptUnprotectData(ctypes.byref(inp), None, ctypes.byref(eb), None, None, 0x1, ctypes.byref(out))
+    if not ok:
+        raise OSError(f"Windows could not {'protect' if protect else 'read'} it (error {ctypes.GetLastError()})")
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        kernel32.LocalFree(out.pbData)
+
+
+SECRET_CODEC = [_dpapi if sys.platform == "win32" else None]    # (tests give their own)
+SECRETS_LOST = []                                # keys that could not be read back (another Windows user or PC)
+SECRETS_KEPT = {}       # their encrypted text, written back unchanged: a copy of the folder opened on another PC or
+                        # Windows account must never destroy the keys of the first one (cleared when a new key is given)
+
+
+def protect_secret(v):
+    if not isinstance(v, str) or not v or v.startswith(SECRET_TAG) or SECRET_CODEC[0] is None:
+        return v
+    try:
+        return SECRET_TAG + base64.b64encode(SECRET_CODEC[0](v.encode("utf-8"), True)).decode("ascii")
+    except Exception as e:
+        log("a key could not be encrypted, it is kept as it was:", short(e, 100), level="warn")
+        return v
+
+
+def reveal_secret(v, what="a key", fid=None):
+    if not isinstance(v, str) or not v.startswith(SECRET_TAG):
+        return v                                     # (plain: a settings file from before 6.34, or not Windows)
+    try:
+        if SECRET_CODEC[0] is None:
+            raise OSError("not on Windows")
+        return SECRET_CODEC[0](base64.b64decode(v[len(SECRET_TAG):]), False).decode("utf-8")
+    except Exception as e:
+        log(f"{what} in the settings could not be read:", short(e, 100), level="warn")
+        SECRETS_LOST.append(what)
+        if fid is not None:
+            SECRETS_KEPT[fid] = v
+        return ""
+
+
+def keep_secret(v, what="", fid=None):
+    """Writing: a secret that could not be read here (still empty) stays as it was in the file."""
+    if (v is None or v == "") and fid in SECRETS_KEPT:
+        return SECRETS_KEPT[fid]
+    return protect_secret(v)
+
+
+def forget_kept_secret(fid):
+    SECRETS_KEPT.pop(fid, None)
+
+
+def _secret_fields(cfg, fn):
+    """The settings with fn(value, what, field id) applied to each secret: the Groq key, every service key, a proxy
+    with a password."""
+    out = dict(cfg)
+    if "api_key" in out:
+        out["api_key"] = fn(out["api_key"], "the Groq key", "api_key")
+    if isinstance(out.get("providers"), list):
+        ps = []
+        for p in out["providers"]:
+            if isinstance(p, dict) and "api_key" in p:
+                pid = re.sub(r"[^a-z0-9_-]", "", str(p.get("id") or "").lower())[:40]   # (as clean_providers has it)
+                p = dict(p, api_key=fn(p["api_key"], "the key of " + str(p.get("name") or "a service"), ("provider", pid)))
+            ps.append(p)
+        out["providers"] = ps
+    pr = out.get("proxy")
+    if (isinstance(pr, str) and (pr.startswith(SECRET_TAG) or "@" in pr)) or (pr in ("", None) and "proxy" in SECRETS_KEPT):
+        out["proxy"] = fn(pr, "the proxy password", "proxy")
+    return out
+
+
 def load_config():
     cfg = dict(DEFAULTS)
     saved = {}
@@ -608,6 +705,11 @@ def load_config():
     elif isinstance(ver, bool) or not isinstance(ver, (int, float)):
         try: ver = float(str(ver).strip())
         except (TypeError, ValueError): ver = CONFIG_VERSION   # unreadable: keep the settings as they are
+    SECRETS_LOST.clear()
+    saved = _secret_fields(saved, reveal_secret)
+    if SECRETS_LOST:
+        CONFIG_NOTE.append("Saved keys could not be read on this Windows account (" + ", ".join(SECRETS_LOST)
+                           + "). Enter them again in Setup › Services.")
     if ver < 4:                                     # from versions 1-3: keep only what still applies
         saved = {k: v for k, v in saved.items() if k in KEEP_FROM_OLD}
     for k, v in saved.items():
@@ -755,7 +857,7 @@ def save_config(cfg):
         raise OSError("the settings file became readable again - restart the program to use it")
     with _cfg_save_lock:
         tmp = CONFIG_PATH + ".tmp"
-        data = json.dumps(cfg, ensure_ascii=False, indent=2)
+        data = json.dumps(_secret_fields(cfg, keep_secret), ensure_ascii=False, indent=2)   # keys encrypted
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -812,6 +914,10 @@ def _detect_proxy(manual):
         except Exception:
             sysp = {}
         p = sysp.get("https") or sysp.get("http") or sysp.get("socks") or ""     # (a SOCKS-only system proxy too)
+        if not p and sys.platform == "win32":
+            p = pac_proxy()                                  # a proxy chosen by a PAC script (or found automatically)
+            if p:
+                source = "system (PAC)"
         # Windows proxies speak plain HTTP even for https:// targets
         if p.startswith("https://"):
             p = "http://" + p[len("https://"):]
@@ -822,6 +928,123 @@ def _detect_proxy(manual):
     if "://" not in p:
         p = "http://" + p
     return p, source
+
+
+_pac_cache = {}
+_pac_lock = threading.Lock()
+_pac_busy = {}
+
+
+def pac_proxy(url="https://api.groq.com/"):
+    """Windows 'Use setup script' (a PAC file) or 'Automatically detect settings': the proxy WinHTTP chooses for
+    `url` ("" = none / direct). Looked up in the background (finding it can take seconds) and refreshed every
+    5 minutes; the very first time it waits up to 3 s for the answer, after that it never waits."""
+    now = time.time()
+    with _pac_lock:
+        hit = _pac_cache.get(url)
+        ev = _pac_busy.get(url)
+        mine = False
+        if (hit is None or now - hit[0] >= 300) and ev is None:
+            ev = _pac_busy[url] = threading.Event()
+            mine = True
+
+            def look(ev=ev):
+                res = ""
+                try:
+                    res = _winhttp_proxy_for(url)
+                except Exception as e:
+                    log("PAC proxy:", short(e, 120), level="debug")
+                with _pac_lock:
+                    old = _pac_cache.get(url)
+                    _pac_cache[url] = (time.time(), res)
+                    _pac_busy.pop(url, None)
+                if res and (old is None or old[1] != res):
+                    log(f"Windows proxy from the setup script (PAC): {mask_proxy(res)}")
+                ev.set()
+            threading.Thread(target=look, daemon=True, name="pac").start()
+    if hit is None and mine:                         # only the first asker waits (and only up to 3 s)
+        ev.wait(3.0)
+        with _pac_lock:
+            hit = _pac_cache.get(url)
+    return hit[1] if hit else ""
+
+
+def _winhttp_proxy_for(url):
+    import ctypes
+    from ctypes import wintypes as wt
+    # the strings WinHTTP hands back are its own memory: kept as raw pointers, read, then given back with GlobalFree
+
+    class IECFG(ctypes.Structure):
+        _fields_ = [("fAutoDetect", wt.BOOL), ("lpszAutoConfigUrl", ctypes.c_void_p), ("lpszProxy", ctypes.c_void_p),
+                    ("lpszProxyBypass", ctypes.c_void_p)]
+
+    class OPTS(ctypes.Structure):
+        _fields_ = [("dwFlags", wt.DWORD), ("dwAutoDetectFlags", wt.DWORD), ("lpszAutoConfigUrl", wt.LPCWSTR),
+                    ("lpvReserved", ctypes.c_void_p), ("dwReserved", wt.DWORD), ("fAutoLogonIfChallenged", wt.BOOL)]
+
+    class INFO(ctypes.Structure):
+        _fields_ = [("dwAccessType", wt.DWORD), ("lpszProxy", ctypes.c_void_p), ("lpszProxyBypass", ctypes.c_void_p)]
+    w = ctypes.windll.winhttp
+    k = ctypes.windll.kernel32
+    k.GlobalFree.argtypes = [ctypes.c_void_p]
+    k.GlobalFree.restype = ctypes.c_void_p
+    w.WinHttpGetIEProxyConfigForCurrentUser.argtypes = [ctypes.POINTER(IECFG)]
+    w.WinHttpOpen.restype = ctypes.c_void_p
+    w.WinHttpOpen.argtypes = [wt.LPCWSTR, wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD]
+    w.WinHttpGetProxyForUrl.argtypes = [ctypes.c_void_p, wt.LPCWSTR, ctypes.POINTER(OPTS), ctypes.POINTER(INFO)]
+    w.WinHttpCloseHandle.argtypes = [ctypes.c_void_p]
+
+    def take(ptr):
+        if not ptr:
+            return None
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            k.GlobalFree(ptr)
+    ie = IECFG()
+    if not w.WinHttpGetIEProxyConfigForCurrentUser(ctypes.byref(ie)):
+        return ""
+    pac, auto = take(ie.lpszAutoConfigUrl), bool(ie.fAutoDetect)
+    take(ie.lpszProxy)
+    take(ie.lpszProxyBypass)
+    if not pac and not auto:
+        return ""
+    h = w.WinHttpOpen("MeetingAssistant", 1, None, None, 0)              # 1: no proxy for this lookup itself
+    if not h:
+        return ""
+    try:
+        o = OPTS()
+        o.dwFlags = 0x2 if pac else 0x1                                    # CONFIG_URL / AUTO_DETECT
+        o.dwAutoDetectFlags = 0 if pac else 0x3                            # (auto-detect: DHCP + DNS)
+        o.lpszAutoConfigUrl = pac                                         # (pac: a str kept alive by this frame)
+        o.fAutoLogonIfChallenged = True
+        info = INFO()
+        if not w.WinHttpGetProxyForUrl(h, url, ctypes.byref(o), ctypes.byref(info)):
+            return ""
+        proxies = take(info.lpszProxy) or ""
+        take(info.lpszProxyBypass)
+        return pac_pick(info.dwAccessType, proxies)
+    finally:
+        w.WinHttpCloseHandle(h)
+
+
+def pac_pick(access, proxies):
+    """WinHTTP's answer -> one proxy address: 'host:port;host2:port' (or 'https=host:port …') -> 'http://host:port'."""
+    if access != 3 or not proxies:                     # 3: a named proxy; anything else: direct
+        return ""
+    for part in re.split(r"[;\s]+", proxies):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:                                # per scheme ("https=host:port"): only the web ones
+            scheme, _, addr = part.partition("=")
+            if scheme.lower() not in ("https", "http"):
+                continue
+            part = addr
+        if part.upper() == "DIRECT":
+            continue
+        return part if "://" in part else "http://" + part
+    return ""
 
 
 # ----------------------------------------------------------------------------
@@ -2405,6 +2628,7 @@ def strip_think(t):
 # Live speech-to-text (WebSocket) - used for services such as Deepgram
 # ----------------------------------------------------------------------------
 import base64
+import bisect
 import glob
 import hashlib
 import select
@@ -2657,6 +2881,10 @@ def deepgram_url(model, language, terms=None, diarize=False):
 _live_ids = itertools.count(1)
 
 
+LIVE_SILENT = 2e-4          # an audio frame quieter than this is silence (the gate gives exact zeros)
+LIVE_SILENCE_SENT = 2.0     # seconds of silence still sent after speech (the service ends the sentence with them: utterance_end_ms 1000)
+
+
 class DeepgramLive:
     """Streams one audio source to Deepgram and reports words while they are spoken.
 
@@ -2684,6 +2912,12 @@ class DeepgramLive:
         self.dropped = 0.0            # seconds of audio dropped because the connection could not keep up
         self.drop_told = 0.0
         self.last_audio = 0.0         # when audio was last sent (the service answers while it gets audio)
+        self.quiet_run = 0.0          # seconds of silence in a row just now
+        self.skipped = 0.0            # seconds of silence not sent (not billed); the timeline skips them
+        self.fpos = 0.0               # the audio clock: seconds since t_audio0, also for audio not sent (silence, pause)
+        self.break_pos, self.break_off = [0.0], [0.0]   # stream time from where (audio clock - stream time) = off
+        self.usage_lock = threading.Lock()
+        self.usage_done = False
         self.plock = threading.Lock() # pause and feed never interleave: nothing from a pause is sent
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"live-{source}")
         self.thread.start()
@@ -2696,7 +2930,7 @@ class DeepgramLive:
                 self._drain()                             # speech from before the pause is not sent either
             elif not on and self.paused_at is not None:
                 if self.t_audio0 is not None:
-                    self.t_audio0 += time.time() - self.paused_at
+                    self.fpos += time.time() - self.paused_at       # the next audio comes that much later
                 self.paused_at = None
 
     def _drain(self):
@@ -2720,14 +2954,29 @@ class DeepgramLive:
             self._put(x, rate)
 
     def _put(self, x, rate):
+        """Every queued piece carries its place on the audio clock; the sender notes where the clock and the stream
+        part (silence not sent, a pause, audio lost) so that each result is put at the right time."""
+        dur = rate if x is None else len(x) / rate
         if self.t_audio0 is None:
-            self.t_audio0 = time.time() - (rate if x is None else len(x) / rate)
+            self.t_audio0 = time.time() - dur
+        if x is None or (len(x) and float(np.max(np.abs(x))) < LIVE_SILENT):
+            # silence: the first moments are sent (they end the sentence), the rest is not - it would be billed as
+            # audio. Deepgram keeps the line open with KeepAlive meanwhile.
+            self.quiet_run += dur
+            if self.quiet_run > LIVE_SILENCE_SENT:
+                self.fpos += dur
+                self.skipped += dur
+                return
+        else:
+            self.quiet_run = 0.0
         if x is None:
             pcm = np.zeros(int(16000 * rate), dtype=np.int16).tobytes()
         else:
             pcm = (np.clip(resample16k(x, rate), -1, 1) * 32767).astype(np.int16).tobytes()
+        at = self.fpos
+        self.fpos += len(pcm) / 32000
         try:
-            self.q.put_nowait(pcm)
+            self.q.put_nowait((pcm, at))
         except queue.Full:
             self.dropped += len(pcm) / 32000
             now = time.time()
@@ -2736,12 +2985,22 @@ class DeepgramLive:
                 log(f"Live {self.source}: the connection is too slow — {self.dropped:.1f} s of audio could not be "
                     f"sent so far", level="warn")
 
+    def _usage(self):
+        """The audio sent is counted once, also when the stream broke (it was billed all the same)."""
+        with self.usage_lock:
+            if self.usage_done:
+                return
+            self.usage_done = True
+        record_usage("Deepgram (live)", requests=0, audio=self.sent)
+        if self.skipped > 1:
+            log(f"Live {self.source}: {self.skipped:.0f} s of silence were not sent (not billed)", level="debug")
+
     def stop(self):
-        if not self.stop_event.is_set():
-            record_usage("Deepgram (live)", requests=0, audio=self.sent)
+        self._usage()
         self.stop_event.set()
 
     def _fail(self, e):
+        self._usage()
         if self.ok:
             self.ok = False
             if not self.stop_event.is_set():
@@ -2783,20 +3042,17 @@ class DeepgramLive:
                         parts.append(self.q.get_nowait())
                     except queue.Empty:
                         break
-                data = b"".join(parts)
-                self.ws.send(data)
-                self.sent += len(data) / 32000
+                self._send_parts(parts)
                 last_send = self.last_audio = time.time()
             if self.ok:
                 try:
                     end = time.time() + 3                 # Stop: what is still queued is sent first ...
                     while self.paused_at is None and time.time() < end:
                         try:
-                            data = self.q.get_nowait()
+                            item = self.q.get_nowait()
                         except queue.Empty:
                             break
-                        self.ws.send(data)
-                        self.sent += len(data) / 32000
+                        self._send_parts([item])
                     self.ws.send('{"type": "CloseStream"}', text=True)
                     rx.join(timeout=5)                    # ... and the last words are waited for (the server closes)
                 except Exception:
@@ -2814,8 +3070,32 @@ class DeepgramLive:
         except Exception:
             log("live text handling problem:", traceback.format_exc(), level="error")
 
-    def _wall(self, t):
-        return (self.t_audio0 or time.time()) + t
+    def _send_parts(self, parts):
+        """Sends pieces in order; where the audio clock jumps (silence not sent, a pause, audio lost) a mark is kept,
+        and after a long jump the 'no answer for 25 s' check starts again (nothing could be answered meanwhile)."""
+        buf = b""
+        for pcm, at in parts:
+            off = at - (self.sent + len(buf) / 32000)
+            if abs(off - self.break_off[-1]) > 0.02:
+                if buf:
+                    self.ws.send(buf)
+                    self.sent += len(buf) / 32000
+                    buf = b""
+                if off - self.break_off[-1] > 1.0:
+                    self.ws.last_rx = time.time()
+                self.break_off.append(at - self.sent)      # (the offset first: the reader thread never sees a mark
+                self.break_pos.append(self.sent)           #  without its offset)
+            buf += pcm
+        if buf:
+            self.ws.send(buf)
+            self.sent += len(buf) / 32000
+
+    def _wall(self, t, end=False):
+        """Wall-clock time of stream time t (Deepgram counts only the audio it got). end=True: the end of a sentence
+        that ends exactly where silence was skipped belongs before the skip, not after it."""
+        n = len(self.break_off)
+        i = (bisect.bisect_left(self.break_pos, t - 1e-6, 0, n) if end else bisect.bisect_right(self.break_pos, t + 1e-6, 0, n)) - 1
+        return (self.t_audio0 or time.time()) + t + self.break_off[max(0, min(i, n - 1))]
 
     def _receive(self):
         try:
@@ -2874,8 +3154,8 @@ class DeepgramLive:
         if self.diarize:
             who = self.spk.most_common(1)[0][0] if self.spk else None
             self.spk = collections.Counter()
-            return self._cb(self.on_final, key, self._wall(start), self._wall(end), text, who)
-        self._cb(self.on_final, key, self._wall(start), self._wall(end), text)
+            return self._cb(self.on_final, key, self._wall(start), self._wall(end, True), text, who)
+        self._cb(self.on_final, key, self._wall(start), self._wall(end, True), text)
 
 
 def ws_close_reason(data):
@@ -6419,7 +6699,8 @@ class Session:
         return speaker_label(self.cfg["them_label"], e.get("speaker"))
 
     def save_if_dirty(self, final=True):
-        """final=False (the regular save during a meeting): the 'Continue' copy is refreshed at most every 20 s."""
+        """final=False (the regular save during a meeting): the 'Continue' copy is refreshed at most every 5 s
+        (every 20 s when writing it is slow: a very long meeting on a slow disk)."""
         with self.save_lock:
             self._save(final)
 
@@ -6494,7 +6775,7 @@ class Session:
                 self.save_bad = True
                 save_alert("error", "The meeting file could not be saved (" + short(e, 80) + "). Free some space or check the folder; it tries again.")
             return
-        if final or time.time() - getattr(self, "state_t", 0) > 20:
+        if final or time.time() - getattr(self, "state_t", 0) > getattr(self, "state_every", 5.0):
             self.state_dirty = False
             self._save_state(rows)
         else:
@@ -6508,7 +6789,10 @@ class Session:
             tmp = LAST_MEETING + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.state(), f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())                            # on the disk before it replaces the last good copy
             os.replace(tmp, LAST_MEETING)
+            self.state_every = 5.0 if time.time() - self.state_t < 0.25 else 20.0
         except (OSError, TypeError, ValueError) as e:
             log("could not keep the meeting for 'Continue':", short(e), level="debug")
 
@@ -7413,6 +7697,7 @@ class Engine:
         self.plan_lock = threading.Lock()
         self.live_retries = collections.Counter()   # how many times a broken live stream was reopened by itself
         self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
+        self.live_lock = threading.RLock()   # one start of live streams at a time (never two streams for one source)
         self.live_backlog = {}         # source -> recent finished sentences (audio) while a live service runs
         self.live_heard = {}           # source -> time up to which the live service wrote the text
         self.done_segs = set()         # sentences that already have their final text
@@ -7766,6 +8051,10 @@ class Engine:
     def start_live(self, captures, retry_dead=False):
         """Starts live streaming for the sources, if the speech-to-text service is a live one.
         retry_dead: after a device change, a stream that broke (not one refused for good) gets a new try."""
+        with self.live_lock:
+            return self._start_live(captures, retry_dead)
+
+    def _start_live(self, captures, retry_dead):
         pid = self.cfg["stt_provider"]
         prov = self.app.provider(pid)
         if not prov or prov.get("kind") != "live" or not prov.get("api_key"):
@@ -7773,10 +8062,15 @@ class Engine:
         proxy = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
         for cap in captures:
             src = cap.source
-            if src in self.live_dead:
+            was_dead = src in self.live_dead
+            if was_dead:
                 if not retry_dead or src in self.live_fatal:
                     continue
                 self.live_dead.discard(src)
+            old = self.live.get(src)
+            if old is not None and not was_dead and old.ok and not old.stop_event.is_set() \
+                    and getattr(cap, "tap", None) == old.feed:
+                continue                                  # (already streaming: a second start changes nothing)
             box = []
             lv = DeepgramLive(src, prov["api_key"], self.cfg["stt_model"] or "nova-3", fixed_lang(self.cfg) or "auto", proxy,
                               on_interim=lambda k, t0, text, s=src: self.live_interim(s, k, t0, text),
@@ -7792,7 +8086,14 @@ class Engine:
                 cap.seg.preview_every = 0.0
         if self.live:
             log(f"Live speech-to-text with {prov['name']} for: " + ", ".join(self.live))
+        self.apply_live_pause()
         self.hub.publish("speech_mode", **self.speech_mode())
+
+    def apply_live_pause(self):
+        """Nothing goes to a live service while the meeting is paused; and in say mode my microphone is not sent to
+        it at all (my words in my language are only for 'say it')."""
+        for src, lv in list(self.live.items()):
+            lv.pause(self.paused or (src == "me" and self.say_mode))
 
     def _live_reopen(self, source):
         """A live stream that broke (network break, PC sleep) is opened again by itself."""
@@ -8171,11 +8472,17 @@ class Engine:
             return q.can_send(now, dur)
         return target not in self.stt_dead and now >= self.stt_cool.get(target, 0)
 
-    def _pick_model(self, source, dur, now):
+    def _pick_model(self, source, dur, now, avoid=None):
+        """The first usable service. `avoid`: services that just failed for this sentence - another one is taken
+        first when one can be used now; otherwise the failed one is tried again."""
+        later = None
         for t in self.stt_targets(source):
             if self._usable(t, dur, now):
+                if avoid and avoid.get(t, 0) > now:
+                    later = later or t
+                    continue
                 return t
-        return None
+        return later
 
     def _q(self, model):
         """The free-plan counter of one Groq model (created under a lock: several threads ask)."""
@@ -8226,7 +8533,7 @@ class Engine:
                     # never let my own lines take the last free slot: the other side must never wait
                     if job["source"] == "me" and self.busy >= STT_WORKERS - 1:
                         continue
-                    model = self._pick_model(job["source"], job["dur"], now)
+                    model = self._pick_model(job["source"], job["dur"], now, job.get("avoid"))
                     if model is None:
                         continue
                     self.pending.pop(i)
@@ -8372,7 +8679,14 @@ class Engine:
             self._refund(target, job.pop("qh", None))    # not answered (connection / server trouble): does not count
             age = time.time() - job.setdefault("t_first_fail", time.time())
             if age < 120 and not self.stop_event.is_set():
-                job["not_before"] = time.time() + min(2 ** job["tries"], 8)
+                # the next service of the list takes this sentence now (if there is one); this one is tried again later
+                now = time.time()
+                job.setdefault("avoid", {})[target] = now + 30
+                others = any(t != target and job["avoid"].get(t, 0) <= now and self._usable(t, job["dur"], now)
+                             for t in self.stt_targets(source))       # (one that can take it now; else: the backoff)
+                job["not_before"] = time.time() + (0.2 if others else min(2 ** job["tries"], 8))
+                if others:
+                    log(f"speech-to-text: {pid} failed ({short(e, 80)}) — this sentence goes to the next service", level="warn")
                 if job["tries"] == 0:                           # the first failure (tries is counted below)
                     self.hub.toast("warn", ("Local model problem" if pid == "local" else "Connection problem")
                                    + " — retrying, nothing is lost yet. " + short(e, 100))
@@ -10669,6 +10983,10 @@ class App:
         cur = self.cfg.get("proxy") or ""
         return cur if isinstance(v, str) and "***" in v and v.strip() == mask_proxy(cur) else v
 
+    def api_proxy_status(self):
+        p, src = self.shown_proxy()
+        return {"ok": True, "proxy": p, "source": src}
+
     def shown_proxy(self):
         """(proxy, where it came from) for the window — a password in it is hidden."""
         p, src = detect_proxy(self.cfg["proxy"])
@@ -10753,6 +11071,8 @@ class App:
         eng = getattr(self, "engine", None)
         if not feat(self.cfg, "say") and eng is not None and eng.say_mode:
             eng.say_mode = False
+            if hasattr(eng, "apply_live_pause"):
+                eng.apply_live_pause()
             self.hub.publish("say_mode", on=False)
 
     def api_save_config(self, **values):
@@ -10763,6 +11083,9 @@ class App:
                           ("meeting" if self.cfg.get("work_mode") == "video" else self.cfg.get("work_mode", "meeting")))
         with self.lock:
             new = dict(self.cfg)
+            for k in ("api_key", "proxy"):
+                if k in values:
+                    forget_kept_secret(k)                   # given again (or cleared on purpose) in Setup
             for k, v in values.items():
                 if k == "api_key":
                     if isinstance(v, str) and v.strip():
@@ -10770,6 +11093,7 @@ class App:
                 elif k == "clear_api_key":
                     if v:
                         new["api_key"] = ""
+                        forget_kept_secret("api_key")
                 elif k in DEFAULTS and k not in INTERNAL_KEYS:
                     new[k] = self._real_proxy(v) if k == "proxy" else v
             new = sanitize(new)
@@ -10777,6 +11101,10 @@ class App:
             changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
             changed_subs = new["work_mode"] != self.cfg["work_mode"]
             changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
+            svc_keys = [k for k in new if k in ("providers", "api_key", "proxy") or k.endswith(("_provider", "_model"))]
+            changed_svc = any(new[k] != self.cfg.get(k) for k in svc_keys)
+            changed_hk = new["hotkeys"] != self.cfg.get("hotkeys")
+            changed_live = (new["stt_provider"], new["stt_model"]) != (self.cfg["stt_provider"], self.cfg["stt_model"])
             if new["overlay_pos"] != self.cfg["overlay_pos"]:
                 try:
                     os.remove(OVERLAY_POS_PATH)          # a new choice of top / bottom replaces the place it was left
@@ -10810,10 +11138,49 @@ class App:
             self.hub.publish("speech_mode", **eng.speech_mode())
         if changed_net:
             self.warm_async()
+        if changed_svc:
+            self._revive_services(live=changed_live)
+        if changed_hk:
+            log("Keys from any program: " + (hotkey_mods(self.cfg)[1] or "off"))
+            if getattr(self.overlay, "on", False):             # the see-through window takes its keys when it opens
+                def reopen():
+                    self.overlay.no_minimize = True                  # (you are in Setup: the window stays)
+                    try:
+                        self.api_overlay(on=False)
+                        self.api_overlay(on=True)
+                    except Exception as e:
+                        log("overlay reopen:", short(e, 100), level="debug")
+                    finally:
+                        self.overlay.no_minimize = False
+                threading.Thread(target=reopen, daemon=True, name="overlay-keys").start()
         if failed is not None:
             return {"ok": False, "error": "The settings are in use but could not be written to the file: "
                                           + short(failed, 120)}
         return {"ok": True, "config": self.public_config()}
+
+    def _revive_services(self, live=False):
+        """A service or model was changed in Setup (a fixed address, a new key …): the ones that failed are tried
+        again now, during this meeting, instead of staying off until the next one."""
+        for eng in {id(e): e for e in (self.engine, getattr(self.recording, "engine", None)) if e is not None}.values():
+            n = len(eng.models.dead) + len(eng.stt_dead)
+            with eng.models.lock:                                  # (rate-limit pauses stay: they are real)
+                eng.models.dead.clear()
+            eng.stt_dead.clear()
+            dead = set(eng.live_dead) - (set() if live else set(eng.live_fatal))
+            if dead and not eng.stop_event.is_set():                # a live service with a new key: open it again
+                if live:
+                    eng.live_fatal.clear()                          # (refused for good: only after its own key changed)
+                caps = [c for c in list(self.captures) if getattr(c, "source", "") in dead]
+                if caps:
+                    threading.Thread(target=eng.start_live, args=(caps,), kwargs={"retry_dead": True},
+                                     daemon=True, name="live-again").start()
+            for _m, q in eng._quotas():
+                if q.dead:
+                    q.dead = False
+                    n += 1
+            eng.warned.clear()
+            if n:
+                log(f"Services changed: {n} service(s) or model(s) that had failed are tried again")
 
     def api_devices(self):
         try:
@@ -11238,9 +11605,7 @@ class App:
                             raise OSError((problems and problems[0]) or "the " + ("microphone" if need == "me" else "speaker device")
                                           + " did not start")
                         engine.start_live(self.captures, retry_dead=True)
-                        if engine.paused:                    # still paused: nothing may be sent
-                            for lv in engine.live.values():
-                                lv.pause(True)
+                        engine.apply_live_pause()           # still paused / say mode: nothing of it may be sent
                     err = None
                     break
                 except Exception as e:
@@ -11687,6 +12052,7 @@ class App:
         if not want:
             if live and eng.say_mode:
                 eng.say_mode = False
+                eng.apply_live_pause()
                 self.hub.publish("say_mode", on=False)
             return {"ok": True, "on": False}
         off = feature_off(self.cfg, "say")
@@ -11709,6 +12075,7 @@ class App:
             return {"ok": False, "error": f"The local model understands English only, not {lang_name(ml)}. Use a multilingual "
                                           "Whisper model or add a Groq key for say mode."}
         eng.say_mode = True
+        eng.apply_live_pause()                         # a live service does not hear my microphone in say mode
         self.hub.publish("say_mode", on=True)
         self.hub.toast("info", f"Say mode is on: mute yourself in Teams or Zoom, then say it in {lang_name(ml)}. "
                                "Press F6 (or Ctrl+Alt+J) again to turn it off.")
@@ -11723,7 +12090,7 @@ class App:
                 if not feat(self.cfg, "detect"):
                     before = set()
                     continue
-                found = meeting_apps(window_titles())
+                found = meeting_apps(window_titles(), self.cfg.get("meeting_words", ""))
                 new = found - before
                 before = found
                 if self.running or self.stopping or self.recording is not None:
@@ -12212,7 +12579,10 @@ class App:
                 add("pywebview", "ok", "loaded")
             except Exception as e:
                 add("pywebview", "bad", "not loaded: " + short(e, 100))
-            if not self.overlay.on:
+            mods, prefix = hotkey_mods(self.cfg)
+            if mods is None:
+                add("Overlay keys", "info", "Turned off in Setup › Display: use the buttons.")
+            elif not self.overlay.on:
                 import ctypes
                 from ctypes import wintypes as wt
                 u = ctypes.windll.user32
@@ -12221,10 +12591,10 @@ class App:
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items()):
                     if cmd == "toggle" or (cmd in OV_MEETING_KEYS and self.running):
                         continue                               # (during a meeting the program holds Ctrl+Alt+K and J)
-                    if u.RegisterHotKey(None, 9000 + i, 0x2 | 0x1 | 0x4000, vk):
+                    if u.RegisterHotKey(None, 9000 + i, mods | 0x4000, vk):
                         u.UnregisterHotKey(None, 9000 + i)
                     else:
-                        bad.append("Ctrl+Alt+" + label)
+                        bad.append(prefix + "+" + label)
                 add("Overlay keys", "ok" if not bad else "warn",
                     "free" if not bad else "used by another program: " + ", ".join(bad) + ". Use the buttons instead.")
             else:
@@ -12415,8 +12785,7 @@ class App:
         for c in list(self.captures):
             if c.seg:
                 c.seg.drop_req = True          # the sentence around the pause is not sent (not even partly)
-        for lv in list(eng.live.values()):
-            lv.pause(eng.paused)
+        eng.apply_live_pause()
         log("Listening paused — nothing is sent" if eng.paused else "Listening again")
         self.hub.publish("paused", paused=eng.paused)
         return {"ok": True, "paused": eng.paused}
@@ -12713,11 +13082,14 @@ class App:
                 p["base_url"] = u
             if isinstance(api_key, str) and clean_key(api_key):
                 p["api_key"] = clean_key(api_key)
+                forget_kept_secret(("provider", p["id"]))           # a new key replaces one that could not be read
             if use_proxy is not None:
                 p["use_proxy"] = bool(use_proxy)
             res = self._save_and_publish()
             res["id"] = p["id"]
-            return res
+            is_live = p["id"] == self.cfg["stt_provider"]
+        self._revive_services(live=is_live)                        # a fixed key / address works at once
+        return res
 
     def api_remove_provider(self, id=""):
         with self.lock:
@@ -12734,7 +13106,10 @@ class App:
                 t.start()
             if p:
                 log(f"Service removed: {p['name']}")
-            return self._save_and_publish()
+            forget_kept_secret(("provider", id))
+            res = self._save_and_publish()
+        self._revive_services()
+        return res
 
     def api_provider_test(self, id=""):
         """Checks the address and key, and loads the service's model list."""
@@ -13651,7 +14026,7 @@ class App:
         steps = []
         p, src = detect_proxy(self.cfg["proxy"] if proxy is None else self._real_proxy(proxy))
         if p:
-            steps.append({"ok": True, "text": ("Using your Windows proxy: " if src == "system" else "Using: ") + mask_proxy(p)})
+            steps.append({"ok": True, "text": ("Using your Windows proxy" + (" (setup script)" if "PAC" in src else "") + ": " if src.startswith("system") else "Using: ") + mask_proxy(p)})
             try:
                 u0 = urllib.parse.urlsplit(p)
                 good = u0.scheme in ("http", "https", "socks5", "socks5h") and bool(u0.hostname) and bool(u0.port)
@@ -14750,11 +15125,37 @@ def run_overlay_helper(argv):
                               "" if mode != "shown" or not hide else
                               "Windows would not hide the see-through window from screen sharing: it is visible.")
             keys = {}
-            for i, (vk, mod) in enumerate([(0x4D, 0x2 | 0x1 | 0x4000), (0x25, 0x2 | 0x1 | 0x4), (0x27, 0x2 | 0x1 | 0x4),
-                                           (0x26, 0x2 | 0x1 | 0x4), (0x28, 0x2 | 0x1 | 0x4),
-                                           (0x24, 0x2 | 0x1 | 0x4), (0x23, 0x2 | 0x1 | 0x4)], 1):
-                if u.RegisterHotKey(None, 100 + i, mod, vk):
-                    keys[100 + i] = ("move", (-1, 0), (1, 0), (0, -1), (0, 1), "bigger", "smaller")[i - 1]
+            # the keys follow Setup › Display (read when the overlay opens): Ctrl+Alt+M / Ctrl+Alt+Shift+M / none.
+            # Moving with keys: the arrows (Home / End: bigger / smaller) while move mode is on; with Ctrl+Alt also
+            # Ctrl+Alt+Shift+arrows at any time, as before.
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    hk_cfg = json.load(f)
+            except (OSError, ValueError):
+                hk_cfg = {}
+            hk_mods = hotkey_mods(hk_cfg if isinstance(hk_cfg, dict) else {})[0]
+            ARROWS = [(0x25, (-1, 0)), (0x27, (1, 0)), (0x26, (0, -1)), (0x28, (0, 1)), (0x24, "bigger"), (0x23, "smaller"),
+                      (0x1B, "move")]                              # (Esc ends move mode too)
+            # with the keys Off, only Ctrl+Alt+Shift+M stays (there is no other way to move it)
+            if u.RegisterHotKey(None, 101, (hk_mods if hk_mods is not None else 0x7) | 0x4000, 0x4D):
+                keys[101] = "move"
+            if hk_mods is not None:
+                if hk_mods == 0x3:
+                    for i, (vk, act) in enumerate(ARROWS, 102):
+                        if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4, vk):
+                            keys[i] = act
+            plain = {}
+
+            def plain_arrows(on):                                  # only while moving: plain arrows move it
+                for i in list(plain):
+                    u.UnregisterHotKey(None, i)
+                    keys.pop(i, None)
+                plain.clear()
+                if on:
+                    for i, (vk, act) in enumerate(ARROWS, 120):
+                        if u.RegisterHotKey(None, i, 0, vk):
+                            plain[i] = keys[i] = act
+            moved = [time.time()]
             msg, last, drag = wt.MSG(), 0.0, None
             while not stop.is_set():
                 while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):
@@ -14766,19 +15167,31 @@ def run_overlay_helper(argv):
                             save_pos()
                         apply(hwnd, *settings())
                         mark_move(st["move"])
+                        plain_arrows(st["move"])
+                        moved[0] = time.time()
                     elif isinstance(k, tuple):
+                        moved[0] = time.time()
                         read_rect(hwnd)
                         st["x"] = min(vx + sw - 80, max(vx - st["w"] + 80, st["x"] + k[0] * 40))
                         st["y"] = min(vy + sh - 40, max(vy, st["y"] + k[1] * 40))
                         u.SetWindowPos(hwnd, -1, st["x"], st["y"], 0, 0, 0x1 | 0x10)
                         save_pos()
                     elif k in ("bigger", "smaller"):
+                        moved[0] = time.time()
                         read_rect(hwnd)
                         f = 1.1 if k == "bigger" else 1 / 1.1
                         st["w"] = int(min(sw, max(400, st["w"] * f)))
                         st["h"] = int(min(sh, max(140, st["h"] * f)))
                         u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10)
                         save_pos()
+                if st["move"] and time.time() - moved[0] > 30 and drag is None:
+                    # forgotten in move mode: it locks by itself (the plain arrows belong to the other programs again)
+                    st["move"] = False
+                    read_rect(hwnd)
+                    save_pos()
+                    apply(hwnd, *settings())
+                    mark_move(False)
+                    plain_arrows(False)
                 if st["move"]:                                     # own mouse drag: does not depend on the web view
                     pt = wt.POINT()
                     u.GetCursorPos(ctypes.byref(pt))
@@ -14788,6 +15201,7 @@ def run_overlay_helper(argv):
                         if st["x"] <= pt.x <= st["x"] + st["w"] and st["y"] <= pt.y <= st["y"] + st["h"]:
                             drag = (rb and not lb, pt.x, pt.y, st["x"], st["y"], st["w"], st["h"])
                     elif (lb or rb) and drag:
+                        moved[0] = time.time()
                         rs, x0, y0, ox, oy, ow, oh = drag
                         if rs:                                     # right button: bigger / smaller
                             nw, nh = int(min(sw, max(400, ow + pt.x - x0))), int(min(sh, max(140, oh + pt.y - y0)))
@@ -14973,6 +15387,17 @@ OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "Page
 OV_MEETING_KEYS = {"mark": "marks", "say": "say"}      # registered only during a meeting (and while that part is on)
 
 
+def hotkey_mods(cfg):
+    """(RegisterHotKey modifiers or None when the keys are off, the name shown) from Setup › Display › Keys.
+    Ctrl+Alt is AltGr on many keyboards (Polish ó ą ś, German € @ …): Ctrl+Alt+Shift or no keys avoid that."""
+    v = (cfg or {}).get("hotkeys", "ctrl_alt")
+    if v == "off":
+        return None, ""
+    if v == "ctrl_alt_shift":
+        return 0x2 | 0x1 | 0x4, "Ctrl+Alt+Shift"
+    return 0x2 | 0x1, "Ctrl+Alt"
+
+
 class Overlay:
     def __init__(self, app):
         self.app = app
@@ -15083,7 +15508,8 @@ class Overlay:
                 self.style(hwnd)
                 self.main_windows = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
                 for m in self.main_windows:
-                    self.user32().ShowWindow(m, 6)                   # minimize
+                    if not getattr(self, "no_minimize", False):
+                        self.user32().ShowWindow(m, 6)               # minimize
                 self.on = True
             except Exception as e:
                 log("overlay problem:", traceback.format_exc(), level="warn")
@@ -15112,7 +15538,8 @@ class Overlay:
                 if st["active"]:
                     self.main_windows = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
                     for m in self.main_windows:
-                        self.user32().ShowWindow(m, 6)
+                        if not getattr(self, "no_minimize", False):
+                            self.user32().ShowWindow(m, 6)
                     self.on = True
                     if st.get("error"):
                         self.app.hub.toast("warn", st["error"])
@@ -15243,18 +15670,30 @@ class Overlay:
         u = ctypes.windll.user32
         u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
         u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
-        names = {}
-        for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
-            if cmd != "toggle":
-                continue                                             # the others are registered only while it is on / in a meeting
-            if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4000, vk):    # Ctrl + Alt, no repeat
-                names[i] = cmd
-            else:
-                log(f"The key Ctrl+Alt+{label} is used by another program: use the Overlay button instead.", level="warn")
-        arrows, tried = {}, False
-        live, live_want = {}, set()
+        names, arrows, live = {}, {}, {}
+        tried, live_want, mods_now = False, set(), None
         msg = wt.MSG()
+
+        def drop_all():
+            for i in list(names) + list(arrows) + list(live):
+                u.UnregisterHotKey(None, i)
+            names.clear(); arrows.clear(); live.clear()
         while not self.app.closing.is_set():
+            mods, prefix = hotkey_mods(self.app.cfg)
+            if mods != mods_now:                                     # first time, or Setup changed the keys
+                drop_all()
+                tried, live_want, mods_now = False, set(), mods
+                if mods is not None:
+                    for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
+                        if cmd != "toggle":
+                            continue                                 # the others only while it is on / in a meeting
+                        if u.RegisterHotKey(None, i, mods | 0x4000, vk):     # no repeat
+                            names[i] = cmd
+                        else:
+                            log(f"The key {prefix}+{label} is used by another program: use the Overlay button instead.", level="warn")
+            if mods is None:                                         # keys turned off in Setup: buttons only
+                time.sleep(0.25)
+                continue
             want = {cmd for cmd, part in OV_MEETING_KEYS.items() if self.app.running and feat(self.app.cfg, part)}
             if want != live_want:                                    # mark / say: only during a meeting
                 live_want = want
@@ -15262,10 +15701,10 @@ class Overlay:
                     if cmd not in OV_MEETING_KEYS:
                         continue
                     if cmd in want and i not in live:
-                        if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4000, vk):
+                        if u.RegisterHotKey(None, i, mods | 0x4000, vk):
                             live[i] = cmd
                         else:
-                            msg_ = (f"The key Ctrl+Alt+{label} is used by another program: use F{6 if cmd == 'say' else 7} "
+                            msg_ = (f"The key {prefix}+{label} is used by another program: use F{6 if cmd == 'say' else 7} "
                                     "in the window instead.")
                             log(msg_, level="warn")
                             self.app.hub.toast("warn", msg_)
@@ -15278,14 +15717,15 @@ class Overlay:
                     if cmd == "toggle" or cmd in OV_MEETING_KEYS:
                         continue
                     once = 0x4000 if cmd in ("screen", "answer", "coach", "more", "less", "subs") else 0   # no auto-repeat for these
-                    if u.RegisterHotKey(None, i, 0x2 | 0x1 | once, vk):
+                    if u.RegisterHotKey(None, i, mods | once, vk):
                         arrows[i] = cmd
                     else:
-                        log(f"The key Ctrl+Alt+{label} is used by another program (overlay).", level="warn")
+                        log(f"The key {prefix}+{label} is used by another program (overlay).", level="warn")
             elif not self.on and tried:
                 for i in list(arrows):
                     u.UnregisterHotKey(None, i)
-                arrows, tried = {}, False
+                arrows.clear()
+                tried = False
             while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):      # WM_HOTKEY
                 cmd = names.get(msg.wParam) or arrows.get(msg.wParam) or live.get(msg.wParam)
                 if cmd == "mark":
@@ -15307,29 +15747,36 @@ class Overlay:
                 elif cmd:
                     self.app.hub.publish("ov_cmd", cmd=cmd)
             time.sleep(0.04)
-        for i in list(names) + list(arrows) + list(live):
-            u.UnregisterHotKey(None, i)
+        drop_all()
 
 
 # ---- 6.19: "a meeting has opened — start?" (window titles only: nothing is read from the meeting programs) ----
 MEETING_WINDOWS = (
     ("Zoom", r"^Zoom (Meeting|Webinar)$|^Zoom Workplace\s*[-–—]\s*(Meeting|Webinar)$"),
     ("Teams", r"^(?!Chat\b)[^|]*\b(Meeting|Call|Besprechung|Anruf|جلسه|تماس)\b[^|]*\|\s*Microsoft Teams$|^Microsoft Teams (meeting|call)$"),
+    # Teams in a web browser (teams.microsoft.com, teams.live.com): the meeting tab's title, then the browser's name
+    ("Teams", r"^(?!Chat\b)[^|]*\b(Meeting|Call|Besprechung|Anruf|جلسه|تماس)\b[^|]*\|\s*Microsoft Teams(\s+\([^)]*\))?\s*(and \d+ more pages?\s*)?[-–—]"),
     ("Google Meet", r"\bMeet\s*[-–—:]\s*[a-z]{3}-[a-z]{4}-[a-z]{3}\b|\bmeet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}\b"),
     ("Webex", r"^(Cisco )?Webex( Meetings?)?$|^Meeting\s*[-–—|]\s*(Cisco )?Webex$"),
 )
 BROWSER_TITLE = r"\s[-–—]\s(Google Chrome|Microsoft\u200b? ?Edge|Mozilla Firefox|Opera|Brave|Vivaldi)$|YouTube"   # (Edge titles hold a zero-width space)
 
 
-def meeting_apps(titles):
-    """The meeting programs whose meeting window is open, from the window titles."""
+def meeting_apps(titles, words=""):
+    """The meeting programs whose meeting window is open, from the window titles. words: the user's own words
+    (Setup › Meeting) - a window whose title has one of them counts too (for meetings named without 'Meeting')."""
     found = set()
+    own = [w.strip() for w in str(words or "").split(",") if len(w.strip()) >= 3][:20]
     for t in titles:
         t = str(t or "")[:300]
         web = re.search(BROWSER_TITLE, t) is not None
+        for w in own:
+            if re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", t, re.I) and not re.search(r"Meeting Assistant|YouTube", t):
+                found.add(w)
         for name, pat in MEETING_WINDOWS:
-            if web and name != "Google Meet":
-                continue                                  # a web page about Zoom or Teams is not a meeting
+            web_pat = name == "Google Meet" or (name == "Teams" and pat.endswith("[-–—]"))
+            if web != web_pat and name != "Google Meet":
+                continue                                  # a web page about Zoom or Teams is not a meeting (but Teams web is)
             if re.search(pat, t, re.I if name != "Google Meet" else 0):
                 found.add(name)
     return found

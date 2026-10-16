@@ -2,6 +2,23 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.34]
+
+The open points of the last audit, fixed and checked one by one.
+
+- **Screen reading is never started by the meeting.** When the other side says "look at my screen", a message offers **Read my screen**; the screen is read only when you press it (or F3). The old setting "Read the screen by itself" is gone — a voice in the meeting could start it.
+- **API keys are kept encrypted.** The Groq key, the keys of your other services and a proxy password are written to Data\config.json (and its backup) encrypted by Windows for your Windows user (DPAPI). Old files are read as before and encrypted at the next save. Another Windows user or PC cannot read them: then the program says so and asks you to enter them again — and it never overwrites them there, so the folder still works when it is back on your PC. (An older version of the program cannot read the encrypted keys.)
+- **Speech to text moves on to the next service.** After a temporary error (connection, server) the sentence goes at once to the next service of your list, instead of retrying the same one for 2 minutes and then dropping it. With only one service it is retried as before.
+- **"Continue" after a crash** has the meeting up to about 5 seconds before it (it was up to 20 seconds), and the copy is on the disk before it replaces the last good one.
+- **Deepgram:** long silence is no longer sent (it was billed): 2 seconds after speech are still sent (they end the sentence), then nothing until sound comes back; the times of the next sentence stay right. A stream that broke now counts its audio in the usage numbers.
+- **A fixed service works again at once:** after you change a service, its key or its address in Setup (for example a wrong address that gave 404), the ones that had failed are tried again in the running meeting (a broken live stream is opened again).
+- **Say mode with Deepgram:** your microphone is not sent to the live service while say mode is on (it was sent, only not shown).
+- **Windows proxy from a setup script (PAC)** or "Automatically detect settings" is used (Setup › Services shows "from its setup script"). It is looked up in the background, so it never holds the program up.
+- **Keys on AltGr keyboards:** Setup › Display › Keys that work from any program: **Ctrl + Alt** (as before), **Ctrl + Alt + Shift**, or **Off**. The see-through window follows too. Every help text names the keys you chose (what was said in the meeting is never changed). Moving the see-through window: its move key, then drag it or use the arrow keys.
+- **Meeting reminder:** Teams meetings in a web browser are noticed too, and Setup › Meeting has "also these window titles" for meetings named without "Meeting" or "Call".
+- **Very long meetings stay quick:** lines far above the newest 150 are drawn only when you scroll near them (in a 2000-line meeting a change at the end took 70 ms instead of 286 ms).
+- New Windows checks with the real program: keys in the settings file are encrypted and read back after a new start; a PAC proxy set for the Windows user is used. 172 automated tests.
+
 ## [6.33]
 
 **The program is now installed like any other program — and starts faster.**

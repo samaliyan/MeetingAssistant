@@ -55,21 +55,24 @@ Ways of checking:
 
 Setup › Services › **Check this computer** tests the Windows parts on the user's own machine and can copy a report.
 
-## Known open points from the last audit (not fixed yet)
+## Known open points (after 6.34)
 
-- Speech to text does not switch to the next service when the first answers with a temporary error (it retries for up to
-  2 minutes, then drops that sentence). Chat does switch.
-- A model that returned 404 (wrong address) stays off until the program restarts.
-- A Windows proxy set by a PAC file is not read.
-- Deepgram: silence is sent (and billed) as zeros; failed streams are not counted in the usage numbers.
-- After a crash, up to about 20 seconds of the newest lines may be missing when continuing a meeting.
-- Screen reading by itself (off by default) sends the whole screen; a remote voice saying "look at my screen" can
-  trigger it. Keep it off unless you want it.
-- API keys are stored as plain text in `Data\config.json` (and its backup copy).
-- Two overlay hotkeys can collide with other programs on AltGr keyboards; use the buttons then.
-- Very long meetings keep every line in the page (no virtual list yet).
-- 6.19 meeting reminder: Teams in a web browser and meetings whose window title has no "Meeting" or "Call" are not noticed.
-- 6.19 say mode: with a live service (Deepgram) your speech is still sent to it while say mode is on (it is not shown).
+Fixed in 6.34 (each with a test; the Windows parts with a check on a real Windows machine): speech to text moves on to
+the next service after a temporary error; a model that failed is tried again when Setup changes the services; a Windows
+PAC proxy is read (Windows check with a real PAC file); Deepgram silence is not sent and failed streams are counted;
+"Continue" is at most ~5 s behind; screen reading is never started by the meeting audio; API keys are stored with
+DPAPI (Windows check: not in the file, read back after a restart); keys can be Ctrl+Alt+Shift or off for AltGr
+keyboards; far lines of long meetings are drawn only when near (browser check, 2000 lines); Teams in a web browser and
+the user's own window-title words for the meeting reminder; say mode no longer streams the microphone to Deepgram.
+
+Still open:
+
 - 6.19 say mode: there is no echo check on the say piece; use headphones.
-- 6.19 "Test it now" for hiding: the pixel capture half (BitBlt + PrintWindow) is logic-reviewed only; it has not been run on a real Windows screen share. The decision logic (judge_hide) is unit-tested. The flag Windows itself reports (GetWindowDisplayAffinity) is always the authoritative signal.
-- Hiding the mouse cursor from the other side only (while the user still sees it) is not possible on Windows and was not added.
+- 6.19 "Test it now" for hiding: the pixel capture half (BitBlt + PrintWindow) is logic-reviewed only; it has not been
+  run on a real Windows screen share. The decision logic (judge_hide) is unit-tested. The flag Windows itself reports
+  (GetWindowDisplayAffinity) is always the authoritative signal.
+- Hiding the mouse cursor from the other side only (while the user still sees it) is not possible on Windows and was
+  not added.
+- Keys encrypted with DPAPI cannot be read by another Windows user or on another PC (by design): they must be entered
+  again there; an older version of the program cannot read them.
+- The meeting reminder still reads only window titles (nothing inside the meeting programs).

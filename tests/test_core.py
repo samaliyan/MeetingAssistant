@@ -223,7 +223,103 @@ def test_continue_copy_is_written_at_the_end(app):
     e = s.add("them", time.time(), time.time() + 2, "First question?", "en", [1])
     s.save_if_dirty()                                   # writes both files
     s.update(e["id"], answer="Late answer.", ans_state="done")
-    s.save_if_dirty(final=False)                        # within 20 s: the 'Continue' copy is skipped
+    s.save_if_dirty(final=False)                        # within 5 s: the 'Continue' copy is skipped
     s.save_if_dirty()                                   # nothing new, but the copy is still behind
     back = app.Session.load_last(cfg)
     assert back.ordered()[0]["answer"] == "Late answer."
+
+
+def test_continue_copy_is_at_most_5_seconds_behind(app):
+    """After a crash 'Continue' has the meeting up to a few seconds before it (it was up to 20 s)."""
+    cfg = app.sanitize({})
+    s = app.Session(cfg)
+    s.add("them", time.time(), time.time() + 2, "First line.", "en", [1])
+    s.save_if_dirty()
+    s.add("them", time.time() + 3, time.time() + 5, "Second line.", "en", [2])
+    s.state_t -= 6                                      # 6 s later, a regular save during the meeting
+    s.save_if_dirty(final=False)
+    assert [r["text"] for r in app.Session.load_last(cfg).ordered()] == ["First line.", "Second line."]
+    assert s.state_every == 5.0                         # writing it was quick: it stays every 5 s
+
+
+def test_keys_are_encrypted_in_the_settings_file(app):
+    """API keys and a proxy password are written encrypted (DPAPI on Windows; a stand-in here) and read back;
+    old plain files still load; a key that cannot be read (another Windows user) is empty, with a note."""
+    import json as _json
+    fake = lambda data, protect: bytes(b ^ 0x5A for b in data)          # a stand-in for Windows' DPAPI
+    old = app.SECRET_CODEC[0]
+    app.SECRET_CODEC[0] = fake
+    try:
+        cfg = app.sanitize({"api_key": "gsk_" + "a" * 40, "proxy": "http://me:secret@10.0.0.1:8080",
+                            "providers": [{"id": "p1", "name": "Mine", "kind": "openai", "base_url": "https://x.example/v1",
+                                           "api_key": "sk-" + "b" * 30}]})
+        app.save_config(cfg)
+        raw = open(app.CONFIG_PATH, encoding="utf-8").read()
+        assert "gsk_" not in raw and "sk-bbb" not in raw and "secret" not in raw and raw.count(app.SECRET_TAG) == 3
+        back = app.load_config()
+        assert back["api_key"] == cfg["api_key"] and back["proxy"] == cfg["proxy"]
+        assert back["providers"][0]["api_key"] == "sk-" + "b" * 30
+        app.save_config(back)                                          # the backup copy is encrypted too
+        assert "gsk_" not in open(app.CONFIG_PATH + ".bak", encoding="utf-8").read()
+        # a plain file from an older version still loads (and is encrypted at the next save)
+        with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:
+            _json.dump({"config_version": app.CONFIG_VERSION, "api_key": "gsk_" + "c" * 40}, f)
+        assert app.load_config()["api_key"] == "gsk_" + "c" * 40
+        # another Windows user: cannot be read -> empty, and the user is told
+        app.save_config(app.sanitize({"api_key": "gsk_" + "d" * 40}))
+        def broken(data, protect):
+            if protect:
+                return fake(data, protect)
+            raise OSError("not this user")
+        app.SECRET_CODEC[0] = broken
+        app.CONFIG_NOTE.clear()
+        assert app.load_config()["api_key"] == ""
+        assert any("could not be read" in n for n in app.CONFIG_NOTE)
+        app.CONFIG_NOTE.clear()
+        # no codec (not Windows): written as it is
+        app.SECRET_CODEC[0] = None
+        assert app.protect_secret("abc") == "abc"
+    finally:
+        app.SECRET_CODEC[0] = old
+
+
+def test_a_key_that_cannot_be_read_here_is_never_destroyed(app):
+    """The folder opened on another PC / Windows account: its keys cannot be read there (empty), but saving any
+    other setting there must write them back unchanged - back on the first PC they still work. A new key given
+    there replaces it."""
+    fake = lambda data, protect: bytes(b ^ 0x5A for b in data)
+    old = app.SECRET_CODEC[0]
+    try:
+        app.SECRET_CODEC[0] = fake
+        app.save_config(app.sanitize({"api_key": "gsk_" + "e" * 40, "proxy": "http://u:pw@1.2.3.4:80"}))
+        enc = open(app.CONFIG_PATH, encoding="utf-8").read()
+
+        def other_user(data, protect):
+            if protect:
+                return fake(data, protect)
+            raise OSError("another user")
+        app.SECRET_CODEC[0] = other_user
+        here = app.load_config()
+        assert here["api_key"] == "" and here["proxy"] == ""
+        here["answer_size"] = 31
+        app.save_config(here)                                       # some other setting is saved there
+        app.save_config(here)                                       # (twice: the backup copy too)
+        import json as _j
+        now = _j.load(open(app.CONFIG_PATH, encoding="utf-8"))
+        was = _j.loads(enc)
+        assert now["api_key"] == was["api_key"] and now["proxy"] == was["proxy"]
+        app.SECRET_CODEC[0] = fake                                  # back on the first PC
+        back = app.load_config()
+        assert back["api_key"] == "gsk_" + "e" * 40 and back["proxy"] == "http://u:pw@1.2.3.4:80"
+        # on the other PC a new key is given: it replaces the old one
+        app.SECRET_CODEC[0] = other_user
+        here = app.load_config()
+        app.forget_kept_secret("api_key")
+        here["api_key"] = "gsk_" + "f" * 40
+        app.save_config(here)
+        app.SECRET_CODEC[0] = fake
+        assert app.load_config()["api_key"] == "gsk_" + "f" * 40
+    finally:
+        app.SECRET_CODEC[0] = old
+        app.SECRETS_KEPT.clear()
+        app.CONFIG_NOTE.clear()
