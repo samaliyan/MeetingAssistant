@@ -1453,10 +1453,10 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
         <div class="field" style="margin-top:12px"><span class="label">Keys that work from any program</span>
           <div class="seg" data-key="hotkeys" style="margin-top:6px"><button data-val="ctrl_alt">Ctrl + Alt</button><button data-val="ctrl_alt_shift">Ctrl + Alt + Shift</button><button data-val="off">Off</button></div>
-          <div class="help">On some keyboards Ctrl + Alt is the AltGr key (Polish ó ą ś, German € @ …): then those letters cannot be typed while the program holds them. Choose Ctrl + Alt + Shift, or Off and use the buttons. F2–F10 in this window always work.</div></div>
+          <div class="help">On some keyboards Ctrl + Alt is the AltGr key (Polish ó ą ś, German € @ …): then those letters cannot be typed while the program holds them. Choose Ctrl + Alt + Shift, or Off and use the buttons (with Off only <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>M</kbd> stays, to move the see-through window). F2–F10 in this window always work.</div></div>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Subtitle mode (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. Also the Subtitles button, or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
-        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd>, then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again lock it in place.</div>
+        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd>, then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place.</div>
       </div>
       <div class="field">
         <span class="label">Screen sharing</span>
@@ -2383,7 +2383,7 @@ function upsertEntry(e, silent, batch){
     S.scrTip = Date.now();
     // never by itself: what the meeting says ("look at my screen") cannot take a picture of this screen - you press
     if(featOn("screen") && !OVERLAY) toast("info", "They mention the screen. Read it and get the answer? (or press F3)", {text: "Read my screen", run: readScreen});
-    else if(featOn("screen") && OVERLAY) toast("info", "They mention the screen. Ctrl+Alt+S reads it.");
+    else if(featOn("screen") && OVERLAY && !(S.cfg && S.cfg.hotkeys === "off")) toast("info", "They mention the screen. Ctrl+Alt+S reads it.");
   }
   // the newest answer goes to the answer panel automatically
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");

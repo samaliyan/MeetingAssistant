@@ -633,8 +633,8 @@ def _secret_fields(cfg, fn):
         ps = []
         for p in out["providers"]:
             if isinstance(p, dict) and "api_key" in p:
-                p = dict(p, api_key=fn(p["api_key"], "the key of " + str(p.get("name") or "a service"),
-                                       ("provider", str(p.get("id") or p.get("name") or ""))))
+                pid = re.sub(r"[^a-z0-9_-]", "", str(p.get("id") or "").lower())[:40]   # (as clean_providers has it)
+                p = dict(p, api_key=fn(p["api_key"], "the key of " + str(p.get("name") or "a service"), ("provider", pid)))
             ps.append(p)
         out["providers"] = ps
     pr = out.get("proxy")
@@ -943,8 +943,10 @@ def pac_proxy(url="https://api.groq.com/"):
     with _pac_lock:
         hit = _pac_cache.get(url)
         ev = _pac_busy.get(url)
+        mine = False
         if (hit is None or now - hit[0] >= 300) and ev is None:
             ev = _pac_busy[url] = threading.Event()
+            mine = True
 
             def look(ev=ev):
                 res = ""
@@ -960,7 +962,7 @@ def pac_proxy(url="https://api.groq.com/"):
                     log(f"Windows proxy from the setup script (PAC): {mask_proxy(res)}")
                 ev.set()
             threading.Thread(target=look, daemon=True, name="pac").start()
-    if hit is None and ev is not None:
+    if hit is None and mine:                         # only the first asker waits (and only up to 3 s)
         ev.wait(3.0)
         with _pac_lock:
             hit = _pac_cache.get(url)
@@ -3081,17 +3083,19 @@ class DeepgramLive:
                     buf = b""
                 if off - self.break_off[-1] > 1.0:
                     self.ws.last_rx = time.time()
-                self.break_pos.append(self.sent)
-                self.break_off.append(at - self.sent)
+                self.break_off.append(at - self.sent)      # (the offset first: the reader thread never sees a mark
+                self.break_pos.append(self.sent)           #  without its offset)
             buf += pcm
         if buf:
             self.ws.send(buf)
             self.sent += len(buf) / 32000
 
-    def _wall(self, t):
-        """Wall-clock time of stream time t (Deepgram counts only the audio it got)."""
-        i = bisect.bisect_right(self.break_pos, t + 1e-6) - 1
-        return (self.t_audio0 or time.time()) + t + self.break_off[max(0, i)]
+    def _wall(self, t, end=False):
+        """Wall-clock time of stream time t (Deepgram counts only the audio it got). end=True: the end of a sentence
+        that ends exactly where silence was skipped belongs before the skip, not after it."""
+        n = len(self.break_off)
+        i = (bisect.bisect_left(self.break_pos, t - 1e-6, 0, n) if end else bisect.bisect_right(self.break_pos, t + 1e-6, 0, n)) - 1
+        return (self.t_audio0 or time.time()) + t + self.break_off[max(0, min(i, n - 1))]
 
     def _receive(self):
         try:
@@ -3150,8 +3154,8 @@ class DeepgramLive:
         if self.diarize:
             who = self.spk.most_common(1)[0][0] if self.spk else None
             self.spk = collections.Counter()
-            return self._cb(self.on_final, key, self._wall(start), self._wall(end), text, who)
-        self._cb(self.on_final, key, self._wall(start), self._wall(end), text)
+            return self._cb(self.on_final, key, self._wall(start), self._wall(end, True), text, who)
+        self._cb(self.on_final, key, self._wall(start), self._wall(end, True), text)
 
 
 def ws_close_reason(data):
@@ -7693,6 +7697,7 @@ class Engine:
         self.plan_lock = threading.Lock()
         self.live_retries = collections.Counter()   # how many times a broken live stream was reopened by itself
         self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
+        self.live_lock = threading.RLock()   # one start of live streams at a time (never two streams for one source)
         self.live_backlog = {}         # source -> recent finished sentences (audio) while a live service runs
         self.live_heard = {}           # source -> time up to which the live service wrote the text
         self.done_segs = set()         # sentences that already have their final text
@@ -8046,6 +8051,10 @@ class Engine:
     def start_live(self, captures, retry_dead=False):
         """Starts live streaming for the sources, if the speech-to-text service is a live one.
         retry_dead: after a device change, a stream that broke (not one refused for good) gets a new try."""
+        with self.live_lock:
+            return self._start_live(captures, retry_dead)
+
+    def _start_live(self, captures, retry_dead):
         pid = self.cfg["stt_provider"]
         prov = self.app.provider(pid)
         if not prov or prov.get("kind") != "live" or not prov.get("api_key"):
@@ -8053,10 +8062,15 @@ class Engine:
         proxy = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
         for cap in captures:
             src = cap.source
-            if src in self.live_dead:
+            was_dead = src in self.live_dead
+            if was_dead:
                 if not retry_dead or src in self.live_fatal:
                     continue
                 self.live_dead.discard(src)
+            old = self.live.get(src)
+            if old is not None and not was_dead and old.ok and not old.stop_event.is_set() \
+                    and getattr(cap, "tap", None) == old.feed:
+                continue                                  # (already streaming: a second start changes nothing)
             box = []
             lv = DeepgramLive(src, prov["api_key"], self.cfg["stt_model"] or "nova-3", fixed_lang(self.cfg) or "auto", proxy,
                               on_interim=lambda k, t0, text, s=src: self.live_interim(s, k, t0, text),
@@ -11079,6 +11093,7 @@ class App:
                 elif k == "clear_api_key":
                     if v:
                         new["api_key"] = ""
+                        forget_kept_secret("api_key")
                 elif k in DEFAULTS and k not in INTERNAL_KEYS:
                     new[k] = self._real_proxy(v) if k == "proxy" else v
             new = sanitize(new)
@@ -11089,6 +11104,7 @@ class App:
             svc_keys = [k for k in new if k in ("providers", "api_key", "proxy") or k.endswith(("_provider", "_model"))]
             changed_svc = any(new[k] != self.cfg.get(k) for k in svc_keys)
             changed_hk = new["hotkeys"] != self.cfg.get("hotkeys")
+            changed_live = (new["stt_provider"], new["stt_model"]) != (self.cfg["stt_provider"], self.cfg["stt_model"])
             if new["overlay_pos"] != self.cfg["overlay_pos"]:
                 try:
                     os.remove(OVERLAY_POS_PATH)          # a new choice of top / bottom replaces the place it was left
@@ -11123,23 +11139,26 @@ class App:
         if changed_net:
             self.warm_async()
         if changed_svc:
-            self._revive_services()
+            self._revive_services(live=changed_live)
         if changed_hk:
             log("Keys from any program: " + (hotkey_mods(self.cfg)[1] or "off"))
             if getattr(self.overlay, "on", False):             # the see-through window takes its keys when it opens
                 def reopen():
+                    self.overlay.no_minimize = True                  # (you are in Setup: the window stays)
                     try:
                         self.api_overlay(on=False)
                         self.api_overlay(on=True)
                     except Exception as e:
                         log("overlay reopen:", short(e, 100), level="debug")
+                    finally:
+                        self.overlay.no_minimize = False
                 threading.Thread(target=reopen, daemon=True, name="overlay-keys").start()
         if failed is not None:
             return {"ok": False, "error": "The settings are in use but could not be written to the file: "
                                           + short(failed, 120)}
         return {"ok": True, "config": self.public_config()}
 
-    def _revive_services(self):
+    def _revive_services(self, live=False):
         """A service or model was changed in Setup (a fixed address, a new key …): the ones that failed are tried
         again now, during this meeting, instead of staying off until the next one."""
         for eng in {id(e): e for e in (self.engine, getattr(self.recording, "engine", None)) if e is not None}.values():
@@ -11147,9 +11166,10 @@ class App:
             with eng.models.lock:                                  # (rate-limit pauses stay: they are real)
                 eng.models.dead.clear()
             eng.stt_dead.clear()
-            dead = set(eng.live_dead)
+            dead = set(eng.live_dead) - (set() if live else set(eng.live_fatal))
             if dead and not eng.stop_event.is_set():                # a live service with a new key: open it again
-                eng.live_fatal.clear()                              # (only the streams that broke)
+                if live:
+                    eng.live_fatal.clear()                          # (refused for good: only after its own key changed)
                 caps = [c for c in list(self.captures) if getattr(c, "source", "") in dead]
                 if caps:
                     threading.Thread(target=eng.start_live, args=(caps,), kwargs={"retry_dead": True},
@@ -13067,7 +13087,8 @@ class App:
                 p["use_proxy"] = bool(use_proxy)
             res = self._save_and_publish()
             res["id"] = p["id"]
-        self._revive_services()                                    # a fixed key / address works at once
+            is_live = p["id"] == self.cfg["stt_provider"]
+        self._revive_services(live=is_live)                        # a fixed key / address works at once
         return res
 
     def api_remove_provider(self, id=""):
@@ -15113,10 +15134,12 @@ def run_overlay_helper(argv):
             except (OSError, ValueError):
                 hk_cfg = {}
             hk_mods = hotkey_mods(hk_cfg if isinstance(hk_cfg, dict) else {})[0]
-            ARROWS = [(0x25, (-1, 0)), (0x27, (1, 0)), (0x26, (0, -1)), (0x28, (0, 1)), (0x24, "bigger"), (0x23, "smaller")]
+            ARROWS = [(0x25, (-1, 0)), (0x27, (1, 0)), (0x26, (0, -1)), (0x28, (0, 1)), (0x24, "bigger"), (0x23, "smaller"),
+                      (0x1B, "move")]                              # (Esc ends move mode too)
+            # with the keys Off, only Ctrl+Alt+Shift+M stays (there is no other way to move it)
+            if u.RegisterHotKey(None, 101, (hk_mods if hk_mods is not None else 0x7) | 0x4000, 0x4D):
+                keys[101] = "move"
             if hk_mods is not None:
-                if u.RegisterHotKey(None, 101, hk_mods | 0x4000, 0x4D):
-                    keys[101] = "move"
                 if hk_mods == 0x3:
                     for i, (vk, act) in enumerate(ARROWS, 102):
                         if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4, vk):
@@ -15132,6 +15155,7 @@ def run_overlay_helper(argv):
                     for i, (vk, act) in enumerate(ARROWS, 120):
                         if u.RegisterHotKey(None, i, 0, vk):
                             plain[i] = keys[i] = act
+            moved = [time.time()]
             msg, last, drag = wt.MSG(), 0.0, None
             while not stop.is_set():
                 while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):
@@ -15144,19 +15168,30 @@ def run_overlay_helper(argv):
                         apply(hwnd, *settings())
                         mark_move(st["move"])
                         plain_arrows(st["move"])
+                        moved[0] = time.time()
                     elif isinstance(k, tuple):
+                        moved[0] = time.time()
                         read_rect(hwnd)
                         st["x"] = min(vx + sw - 80, max(vx - st["w"] + 80, st["x"] + k[0] * 40))
                         st["y"] = min(vy + sh - 40, max(vy, st["y"] + k[1] * 40))
                         u.SetWindowPos(hwnd, -1, st["x"], st["y"], 0, 0, 0x1 | 0x10)
                         save_pos()
                     elif k in ("bigger", "smaller"):
+                        moved[0] = time.time()
                         read_rect(hwnd)
                         f = 1.1 if k == "bigger" else 1 / 1.1
                         st["w"] = int(min(sw, max(400, st["w"] * f)))
                         st["h"] = int(min(sh, max(140, st["h"] * f)))
                         u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10)
                         save_pos()
+                if st["move"] and time.time() - moved[0] > 30 and drag is None:
+                    # forgotten in move mode: it locks by itself (the plain arrows belong to the other programs again)
+                    st["move"] = False
+                    read_rect(hwnd)
+                    save_pos()
+                    apply(hwnd, *settings())
+                    mark_move(False)
+                    plain_arrows(False)
                 if st["move"]:                                     # own mouse drag: does not depend on the web view
                     pt = wt.POINT()
                     u.GetCursorPos(ctypes.byref(pt))
@@ -15166,6 +15201,7 @@ def run_overlay_helper(argv):
                         if st["x"] <= pt.x <= st["x"] + st["w"] and st["y"] <= pt.y <= st["y"] + st["h"]:
                             drag = (rb and not lb, pt.x, pt.y, st["x"], st["y"], st["w"], st["h"])
                     elif (lb or rb) and drag:
+                        moved[0] = time.time()
                         rs, x0, y0, ox, oy, ow, oh = drag
                         if rs:                                     # right button: bigger / smaller
                             nw, nh = int(min(sw, max(400, ow + pt.x - x0))), int(min(sh, max(140, oh + pt.y - y0)))
@@ -15472,7 +15508,8 @@ class Overlay:
                 self.style(hwnd)
                 self.main_windows = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
                 for m in self.main_windows:
-                    self.user32().ShowWindow(m, 6)                   # minimize
+                    if not getattr(self, "no_minimize", False):
+                        self.user32().ShowWindow(m, 6)               # minimize
                 self.on = True
             except Exception as e:
                 log("overlay problem:", traceback.format_exc(), level="warn")
@@ -15501,7 +15538,8 @@ class Overlay:
                 if st["active"]:
                     self.main_windows = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
                     for m in self.main_windows:
-                        self.user32().ShowWindow(m, 6)
+                        if not getattr(self, "no_minimize", False):
+                            self.user32().ShowWindow(m, 6)
                     self.on = True
                     if st.get("error"):
                         self.app.hub.toast("warn", st["error"])

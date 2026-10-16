@@ -3305,3 +3305,45 @@ def test_failover_keeps_its_pause_when_the_other_service_cannot_take_it(app):
            "t_end": time.time() - 1, "dur": 1.0, "tries": 0, "t_queued": time.time()}
     eng._process(job, ("first", "m1"))
     assert job["not_before"] - time.time() >= 0.9
+
+
+def test_live_time_marks_are_safe_and_ends_stay_before_a_skip(app):
+    lv = app.DeepgramLive("them", "k", "nova-3", "en", "", lambda *a: None, lambda *a: None, lambda e: None)
+    lv.stop_event.set()
+    lv.t_audio0 = 1000.0
+    lv.break_pos, lv.break_off = [0.0, 5.0], [0.0, 20.0]
+    assert lv._wall(5.0) == 1000.0 + 5.0 + 20.0          # a sentence starting right after the skip: after it
+    assert lv._wall(5.0, end=True) == 1000.0 + 5.0       # a sentence ending right before it: before it
+    lv.break_pos.append(9.0)                              # (a mark being written: its offset not there yet)
+    assert lv._wall(9.5) == 1000.0 + 9.5 + 20.0          # no error, the last complete mark is used
+
+
+def test_starting_live_twice_never_makes_two_streams(app):
+    eng, sess, calls = _engine(app)
+    made = []
+
+    class Lv:
+        def __init__(self, *a, **k):
+            made.append(self)
+            self.ok = True
+            self.stop_event = app.threading.Event()
+
+        def feed(self, *a):
+            pass
+
+        def pause(self, on):
+            pass
+    old = app.DeepgramLive
+    app.DeepgramLive = Lv
+    try:
+        eng.app.provider = lambda pid: {"kind": "live", "api_key": "k", "name": "Deepgram", "use_proxy": False}
+        eng.speech_mode = lambda: {}
+        cap = app.types.SimpleNamespace(source="them", tap=None, preview_every=1.0, seg=None)
+        eng.start_live([cap])
+        eng.start_live([cap], retry_dead=True)
+        assert len(made) == 1
+        eng.live_dead.add("them")                        # it broke: a new start makes a new one
+        eng.start_live([cap], retry_dead=True)
+        assert len(made) == 2
+    finally:
+        app.DeepgramLive = old
