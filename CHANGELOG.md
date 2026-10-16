@@ -17,6 +17,7 @@ The open points of the last audit, fixed and checked one by one.
 - **Keys on AltGr keyboards:** Setup › Display › Keys that work from any program: **Ctrl + Alt** (as before), **Ctrl + Alt + Shift**, or **Off**. The see-through window follows too. Every help text names the keys you chose (what was said in the meeting is never changed). Moving the see-through window: its move key, then drag it or use the arrow keys.
 - **Meeting reminder:** Teams meetings in a web browser are noticed too, and Setup › Meeting has "also these window titles" for meetings named without "Meeting" or "Call".
 - **Very long meetings stay quick:** lines far above the newest 150 are drawn only when you scroll near them (in a 2000-line meeting a change at the end took 70 ms instead of 286 ms).
+- The automatic tests now also run on Windows for every change (before, only in the release, where one of them stopped the first try of this release: it expected a fast disk).
 - New Windows checks with the real program: keys in the settings file are encrypted and read back after a new start; a PAC proxy set for the Windows user is used. 172 automated tests.
 
 ## [6.33]

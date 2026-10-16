@@ -239,7 +239,30 @@ def test_continue_copy_is_at_most_5_seconds_behind(app):
     s.state_t -= 6                                      # 6 s later, a regular save during the meeting
     s.save_if_dirty(final=False)
     assert [r["text"] for r in app.Session.load_last(cfg).ordered()] == ["First line.", "Second line."]
-    assert s.state_every == 5.0                         # writing it was quick: it stays every 5 s
+    # quick to write: it stays every 5 s; a slow disk (writing took over 1 s) makes it every 20 s
+    s.add("them", time.time() + 6, time.time() + 8, "Third line.", "en", [3])
+    real = app.time.time
+    t = [real()]
+    app.time.time = lambda: t[0]
+    try:
+        s.state_t = t[0] - 6
+        s.save_if_dirty(final=False)                        # the clock does not move: the write took no time
+        assert s.state_every == 5.0
+        s.add("them", t[0] + 9, t[0] + 10, "Fourth line.", "en", [4])
+        orig = app.json.dump
+
+        def slow(*a, **k):
+            t[0] += 1.5                                     # this write takes 1.5 s
+            return orig(*a, **k)
+        app.json.dump = slow
+        try:
+            s.state_t = t[0] - 6
+            s.save_if_dirty(final=False)
+        finally:
+            app.json.dump = orig
+        assert s.state_every == 20.0
+    finally:
+        app.time.time = real
 
 
 def test_keys_are_encrypted_in_the_settings_file(app):

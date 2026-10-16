@@ -6792,7 +6792,7 @@ class Session:
                 f.flush()
                 os.fsync(f.fileno())                            # on the disk before it replaces the last good copy
             os.replace(tmp, LAST_MEETING)
-            self.state_every = 5.0 if time.time() - self.state_t < 0.25 else 20.0
+            self.state_every = 5.0 if time.time() - self.state_t < 1.0 else 20.0   # (a really slow disk: less often)
         except (OSError, TypeError, ValueError) as e:
             log("could not keep the meeting for 'Continue':", short(e), level="debug")
 
