@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --quiet --upgrade pip
-          python -m pip install --quiet -r requirements.txt pyinstaller
+          python -m pip install --quiet -r requirements.txt pyinstaller pytest
           python -m pip install --quiet "ctranslate2>=4.6.3,<5" "tokenizers>=0.15" tqdm
           python -m pip install --quiet --no-deps "faster-whisper>=1.1"
           python -m pip install --quiet --prefer-binary --only-binary=llama-cpp-python "llama-cpp-python>=0.3.19" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu || echo "::warning::llama-cpp-python not installed - the exe is built without the local AI engine"
@@ -67,6 +67,9 @@ jobs:
           python -c "import onnxruntime" || { echo "::warning::onnxruntime does not import - left out"; python -m pip uninstall -y -q onnxruntime; }
           python -m pip install --quiet "yt-dlp[default]>=2025.11.12" || echo "::warning::yt-dlp not installed - links cannot be transcribed"
           python -c "import yt_dlp" || { echo "::warning::yt-dlp does not import - left out"; python -m pip uninstall -y -q yt-dlp; }
+
+      - name: Run the tests on Windows (as the release does)
+        run: python -m pytest -q tests
 
       - name: Install the Vulkan SDK (to build whisper.cpp for any graphics card)
         continue-on-error: true
