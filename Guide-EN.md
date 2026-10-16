@@ -1,4 +1,12 @@
-# Meeting Assistant — User Guide (version 6.33)
+# Meeting Assistant — User Guide (version 6.34)
+
+## Version 6.34: safer and steadier
+
+- **Read my screen** happens only when you press it (or F3). When they mention the screen, a message offers the button.
+- Your API keys are saved encrypted for your Windows user.
+- A sentence goes to your next speech-to-text service when the first has a problem.
+- Keys from any program: Setup › Display › Ctrl + Alt, Ctrl + Alt + Shift (AltGr keyboards) or Off.
+- Meeting reminder: Teams in a web browser; your own words for window titles in Setup › Meeting.
 
 ## Version 6.33: install it like any program
 

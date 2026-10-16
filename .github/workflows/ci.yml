@@ -242,6 +242,13 @@ jobs:
           python tests/win_voice_check.py new/MeetingAssistant/MeetingAssistant.exe voice-out | Tee-Object -FilePath voice-report.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Keys kept encrypted (DPAPI), proxy from a setup script (PAC)
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_secrets_check.py new/MeetingAssistant/MeetingAssistant.exe | Tee-Object -FilePath keys-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
   overlay:
     name: Overlay on Windows (exe)
     # the new exe's overlay as a user sees it: real keys (Ctrl+Alt+O / PageUp / T), flags, the main window minimized
