@@ -13,6 +13,7 @@ Windows only (uses WASAPI loopback to hear system audio).
 from __future__ import annotations
 
 import base64
+import bisect
 import concurrent.futures
 import collections
 import datetime
@@ -216,8 +217,8 @@ DEFAULTS = {
     "job_ad": "",                # the job advert (for prep and answers; optional)
     "debrief_scores": True,      # scores (clarity, structure, ...) in the review after a meeting
     "auto_screen": False,        # (no longer used: the screen is read only when the user presses Read my screen / F3)
-    "meeting_words": "",
-    "hotkeys": "ctrl_alt",       # the global keys: ctrl_alt | ctrl_alt_shift (AltGr keyboards) | off         # meeting reminder: also windows whose title has one of these words (comma separated)
+    "meeting_words": "",         # meeting reminder: also windows whose title has one of these words (comma separated)
+    "hotkeys": "ctrl_alt",       # the global keys: ctrl_alt | ctrl_alt_shift (AltGr keyboards) | off
     "coach": True,               # the situation card: phase, difficulty, repeated questions, a tip
     "answer_fa": True,           # the meaning (in my language) under the suggested answer
     "mic_device": "",            # "" = Windows default
@@ -582,6 +583,8 @@ def _dpapi(data, protect):
 
 SECRET_CODEC = [_dpapi if sys.platform == "win32" else None]    # (tests give their own)
 SECRETS_LOST = []                                # keys that could not be read back (another Windows user or PC)
+SECRETS_KEPT = {}       # their encrypted text, written back unchanged: a copy of the folder opened on another PC or
+                        # Windows account must never destroy the keys of the first one (cleared when a new key is given)
 
 
 def protect_secret(v):
@@ -594,7 +597,7 @@ def protect_secret(v):
         return v
 
 
-def reveal_secret(v, what="a key"):
+def reveal_secret(v, what="a key", fid=None):
     if not isinstance(v, str) or not v.startswith(SECRET_TAG):
         return v                                     # (plain: a settings file from before 6.34, or not Windows)
     try:
@@ -604,25 +607,39 @@ def reveal_secret(v, what="a key"):
     except Exception as e:
         log(f"{what} in the settings could not be read:", short(e, 100), level="warn")
         SECRETS_LOST.append(what)
+        if fid is not None:
+            SECRETS_KEPT[fid] = v
         return ""
 
 
+def keep_secret(v, what="", fid=None):
+    """Writing: a secret that could not be read here (still empty) stays as it was in the file."""
+    if (v is None or v == "") and fid in SECRETS_KEPT:
+        return SECRETS_KEPT[fid]
+    return protect_secret(v)
+
+
+def forget_kept_secret(fid):
+    SECRETS_KEPT.pop(fid, None)
+
+
 def _secret_fields(cfg, fn):
-    """The settings with fn() applied to each secret: the Groq key, every service key, a proxy with a password."""
+    """The settings with fn(value, what, field id) applied to each secret: the Groq key, every service key, a proxy
+    with a password."""
     out = dict(cfg)
     if "api_key" in out:
-        out["api_key"] = fn(out["api_key"], "the Groq key") if fn is reveal_secret else fn(out["api_key"])
+        out["api_key"] = fn(out["api_key"], "the Groq key", "api_key")
     if isinstance(out.get("providers"), list):
         ps = []
         for p in out["providers"]:
             if isinstance(p, dict) and "api_key" in p:
-                p = dict(p, api_key=(fn(p["api_key"], "the key of " + str(p.get("name") or "a service"))
-                                     if fn is reveal_secret else fn(p["api_key"])))
+                p = dict(p, api_key=fn(p["api_key"], "the key of " + str(p.get("name") or "a service"),
+                                       ("provider", str(p.get("id") or p.get("name") or ""))))
             ps.append(p)
         out["providers"] = ps
     pr = out.get("proxy")
-    if isinstance(pr, str) and (pr.startswith(SECRET_TAG) or "@" in pr):
-        out["proxy"] = fn(pr, "the proxy password") if fn is reveal_secret else fn(pr)
+    if (isinstance(pr, str) and (pr.startswith(SECRET_TAG) or "@" in pr)) or (pr in ("", None) and "proxy" in SECRETS_KEPT):
+        out["proxy"] = fn(pr, "the proxy password", "proxy")
     return out
 
 
@@ -840,7 +857,7 @@ def save_config(cfg):
         raise OSError("the settings file became readable again - restart the program to use it")
     with _cfg_save_lock:
         tmp = CONFIG_PATH + ".tmp"
-        data = json.dumps(_secret_fields(cfg, protect_secret), ensure_ascii=False, indent=2)   # keys encrypted
+        data = json.dumps(_secret_fields(cfg, keep_secret), ensure_ascii=False, indent=2)   # keys encrypted
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -914,57 +931,80 @@ def _detect_proxy(manual):
 
 
 _pac_cache = {}
+_pac_lock = threading.Lock()
+_pac_busy = {}
 
 
 def pac_proxy(url="https://api.groq.com/"):
     """Windows 'Use setup script' (a PAC file) or 'Automatically detect settings': the proxy WinHTTP chooses for
-    `url` ("" = none / direct). Asked at most every 5 minutes (finding it can take seconds)."""
+    `url` ("" = none / direct). Looked up in the background (finding it can take seconds) and refreshed every
+    5 minutes; the very first time it waits up to 3 s for the answer, after that it never waits."""
     now = time.time()
-    hit = _pac_cache.get(url)
-    if hit and now - hit[0] < 300:
-        return hit[1]
-    res = ""
-    try:
-        res = _winhttp_proxy_for(url)
-    except Exception as e:
-        log("PAC proxy:", short(e, 120), level="debug")
-    _pac_cache[url] = (now, res)
-    if res:
-        log(f"Windows proxy from the setup script (PAC): {mask_proxy(res)}")
-    return res
+    with _pac_lock:
+        hit = _pac_cache.get(url)
+        ev = _pac_busy.get(url)
+        if (hit is None or now - hit[0] >= 300) and ev is None:
+            ev = _pac_busy[url] = threading.Event()
+
+            def look(ev=ev):
+                res = ""
+                try:
+                    res = _winhttp_proxy_for(url)
+                except Exception as e:
+                    log("PAC proxy:", short(e, 120), level="debug")
+                with _pac_lock:
+                    old = _pac_cache.get(url)
+                    _pac_cache[url] = (time.time(), res)
+                    _pac_busy.pop(url, None)
+                if res and (old is None or old[1] != res):
+                    log(f"Windows proxy from the setup script (PAC): {mask_proxy(res)}")
+                ev.set()
+            threading.Thread(target=look, daemon=True, name="pac").start()
+    if hit is None and ev is not None:
+        ev.wait(3.0)
+        with _pac_lock:
+            hit = _pac_cache.get(url)
+    return hit[1] if hit else ""
 
 
 def _winhttp_proxy_for(url):
     import ctypes
     from ctypes import wintypes as wt
+    # the strings WinHTTP hands back are its own memory: kept as raw pointers, read, then given back with GlobalFree
 
     class IECFG(ctypes.Structure):
-        _fields_ = [("fAutoDetect", wt.BOOL), ("lpszAutoConfigUrl", wt.LPWSTR), ("lpszProxy", wt.LPWSTR),
-                    ("lpszProxyBypass", wt.LPWSTR)]
+        _fields_ = [("fAutoDetect", wt.BOOL), ("lpszAutoConfigUrl", ctypes.c_void_p), ("lpszProxy", ctypes.c_void_p),
+                    ("lpszProxyBypass", ctypes.c_void_p)]
 
     class OPTS(ctypes.Structure):
         _fields_ = [("dwFlags", wt.DWORD), ("dwAutoDetectFlags", wt.DWORD), ("lpszAutoConfigUrl", wt.LPCWSTR),
                     ("lpvReserved", ctypes.c_void_p), ("dwReserved", wt.DWORD), ("fAutoLogonIfChallenged", wt.BOOL)]
 
     class INFO(ctypes.Structure):
-        _fields_ = [("dwAccessType", wt.DWORD), ("lpszProxy", wt.LPWSTR), ("lpszProxyBypass", wt.LPWSTR)]
+        _fields_ = [("dwAccessType", wt.DWORD), ("lpszProxy", ctypes.c_void_p), ("lpszProxyBypass", ctypes.c_void_p)]
     w = ctypes.windll.winhttp
     k = ctypes.windll.kernel32
     k.GlobalFree.argtypes = [ctypes.c_void_p]
+    k.GlobalFree.restype = ctypes.c_void_p
+    w.WinHttpGetIEProxyConfigForCurrentUser.argtypes = [ctypes.POINTER(IECFG)]
     w.WinHttpOpen.restype = ctypes.c_void_p
     w.WinHttpOpen.argtypes = [wt.LPCWSTR, wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD]
     w.WinHttpGetProxyForUrl.argtypes = [ctypes.c_void_p, wt.LPCWSTR, ctypes.POINTER(OPTS), ctypes.POINTER(INFO)]
     w.WinHttpCloseHandle.argtypes = [ctypes.c_void_p]
+
+    def take(ptr):
+        if not ptr:
+            return None
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            k.GlobalFree(ptr)
     ie = IECFG()
     if not w.WinHttpGetIEProxyConfigForCurrentUser(ctypes.byref(ie)):
         return ""
-    try:
-        pac, auto = ie.lpszAutoConfigUrl, bool(ie.fAutoDetect)
-    finally:
-        for f in ("lpszAutoConfigUrl", "lpszProxy", "lpszProxyBypass"):
-            v = ctypes.cast(getattr(ie, f), ctypes.c_void_p).value if getattr(ie, f) else None
-            if v:
-                k.GlobalFree(v)
+    pac, auto = take(ie.lpszAutoConfigUrl), bool(ie.fAutoDetect)
+    take(ie.lpszProxy)
+    take(ie.lpszProxyBypass)
     if not pac and not auto:
         return ""
     h = w.WinHttpOpen("MeetingAssistant", 1, None, None, 0)              # 1: no proxy for this lookup itself
@@ -972,20 +1012,16 @@ def _winhttp_proxy_for(url):
         return ""
     try:
         o = OPTS()
-        o.dwFlags = (0x2 if pac else 0) | (0x1 if auto and not pac else 0)  # CONFIG_URL / AUTO_DETECT
-        o.dwAutoDetectFlags = 0x3 if auto and not pac else 0               # DHCP + DNS
-        o.lpszAutoConfigUrl = pac
+        o.dwFlags = 0x2 if pac else 0x1                                    # CONFIG_URL / AUTO_DETECT
+        o.dwAutoDetectFlags = 0 if pac else 0x3                            # (auto-detect: DHCP + DNS)
+        o.lpszAutoConfigUrl = pac                                         # (pac: a str kept alive by this frame)
         o.fAutoLogonIfChallenged = True
         info = INFO()
         if not w.WinHttpGetProxyForUrl(h, url, ctypes.byref(o), ctypes.byref(info)):
             return ""
-        try:
-            return pac_pick(info.dwAccessType, info.lpszProxy or "")
-        finally:
-            for f in ("lpszProxy", "lpszProxyBypass"):
-                v = ctypes.cast(getattr(info, f), ctypes.c_void_p).value if getattr(info, f) else None
-                if v:
-                    k.GlobalFree(v)
+        proxies = take(info.lpszProxy) or ""
+        take(info.lpszProxyBypass)
+        return pac_pick(info.dwAccessType, proxies)
     finally:
         w.WinHttpCloseHandle(h)
 
@@ -2590,6 +2626,7 @@ def strip_think(t):
 # Live speech-to-text (WebSocket) - used for services such as Deepgram
 # ----------------------------------------------------------------------------
 import base64
+import bisect
 import glob
 import hashlib
 import select
@@ -2875,6 +2912,9 @@ class DeepgramLive:
         self.last_audio = 0.0         # when audio was last sent (the service answers while it gets audio)
         self.quiet_run = 0.0          # seconds of silence in a row just now
         self.skipped = 0.0            # seconds of silence not sent (not billed); the timeline skips them
+        self.fpos = 0.0               # the audio clock: seconds since t_audio0, also for audio not sent (silence, pause)
+        self.break_pos, self.break_off = [0.0], [0.0]   # stream time from where (audio clock - stream time) = off
+        self.usage_lock = threading.Lock()
         self.usage_done = False
         self.plock = threading.Lock() # pause and feed never interleave: nothing from a pause is sent
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"live-{source}")
@@ -2888,7 +2928,7 @@ class DeepgramLive:
                 self._drain()                             # speech from before the pause is not sent either
             elif not on and self.paused_at is not None:
                 if self.t_audio0 is not None:
-                    self.t_audio0 += time.time() - self.paused_at
+                    self.fpos += time.time() - self.paused_at       # the next audio comes that much later
                 self.paused_at = None
 
     def _drain(self):
@@ -2912,15 +2952,17 @@ class DeepgramLive:
             self._put(x, rate)
 
     def _put(self, x, rate):
-        if self.t_audio0 is None:
-            self.t_audio0 = time.time() - (rate if x is None else len(x) / rate)
+        """Every queued piece carries its place on the audio clock; the sender notes where the clock and the stream
+        part (silence not sent, a pause, audio lost) so that each result is put at the right time."""
         dur = rate if x is None else len(x) / rate
+        if self.t_audio0 is None:
+            self.t_audio0 = time.time() - dur
         if x is None or (len(x) and float(np.max(np.abs(x))) < LIVE_SILENT):
             # silence: the first moments are sent (they end the sentence), the rest is not - it would be billed as
-            # audio. Deepgram keeps the line open with KeepAlive meanwhile, and the timeline skips what was not sent.
+            # audio. Deepgram keeps the line open with KeepAlive meanwhile.
             self.quiet_run += dur
             if self.quiet_run > LIVE_SILENCE_SENT:
-                self.t_audio0 += dur
+                self.fpos += dur
                 self.skipped += dur
                 return
         else:
@@ -2929,8 +2971,10 @@ class DeepgramLive:
             pcm = np.zeros(int(16000 * rate), dtype=np.int16).tobytes()
         else:
             pcm = (np.clip(resample16k(x, rate), -1, 1) * 32767).astype(np.int16).tobytes()
+        at = self.fpos
+        self.fpos += len(pcm) / 32000
         try:
-            self.q.put_nowait(pcm)
+            self.q.put_nowait((pcm, at))
         except queue.Full:
             self.dropped += len(pcm) / 32000
             now = time.time()
@@ -2941,11 +2985,13 @@ class DeepgramLive:
 
     def _usage(self):
         """The audio sent is counted once, also when the stream broke (it was billed all the same)."""
-        if not self.usage_done:
+        with self.usage_lock:
+            if self.usage_done:
+                return
             self.usage_done = True
-            record_usage("Deepgram (live)", requests=0, audio=self.sent)
-            if self.skipped > 1:
-                log(f"Live {self.source}: {self.skipped:.0f} s of silence were not sent (not billed)", level="debug")
+        record_usage("Deepgram (live)", requests=0, audio=self.sent)
+        if self.skipped > 1:
+            log(f"Live {self.source}: {self.skipped:.0f} s of silence were not sent (not billed)", level="debug")
 
     def stop(self):
         self._usage()
@@ -2994,20 +3040,17 @@ class DeepgramLive:
                         parts.append(self.q.get_nowait())
                     except queue.Empty:
                         break
-                data = b"".join(parts)
-                self.ws.send(data)
-                self.sent += len(data) / 32000
+                self._send_parts(parts)
                 last_send = self.last_audio = time.time()
             if self.ok:
                 try:
                     end = time.time() + 3                 # Stop: what is still queued is sent first ...
                     while self.paused_at is None and time.time() < end:
                         try:
-                            data = self.q.get_nowait()
+                            item = self.q.get_nowait()
                         except queue.Empty:
                             break
-                        self.ws.send(data)
-                        self.sent += len(data) / 32000
+                        self._send_parts([item])
                     self.ws.send('{"type": "CloseStream"}', text=True)
                     rx.join(timeout=5)                    # ... and the last words are waited for (the server closes)
                 except Exception:
@@ -3025,8 +3068,30 @@ class DeepgramLive:
         except Exception:
             log("live text handling problem:", traceback.format_exc(), level="error")
 
+    def _send_parts(self, parts):
+        """Sends pieces in order; where the audio clock jumps (silence not sent, a pause, audio lost) a mark is kept,
+        and after a long jump the 'no answer for 25 s' check starts again (nothing could be answered meanwhile)."""
+        buf = b""
+        for pcm, at in parts:
+            off = at - (self.sent + len(buf) / 32000)
+            if abs(off - self.break_off[-1]) > 0.02:
+                if buf:
+                    self.ws.send(buf)
+                    self.sent += len(buf) / 32000
+                    buf = b""
+                if off - self.break_off[-1] > 1.0:
+                    self.ws.last_rx = time.time()
+                self.break_pos.append(self.sent)
+                self.break_off.append(at - self.sent)
+            buf += pcm
+        if buf:
+            self.ws.send(buf)
+            self.sent += len(buf) / 32000
+
     def _wall(self, t):
-        return (self.t_audio0 or time.time()) + t
+        """Wall-clock time of stream time t (Deepgram counts only the audio it got)."""
+        i = bisect.bisect_right(self.break_pos, t + 1e-6) - 1
+        return (self.t_audio0 or time.time()) + t + self.break_off[max(0, i)]
 
     def _receive(self):
         try:
@@ -8601,8 +8666,10 @@ class Engine:
             age = time.time() - job.setdefault("t_first_fail", time.time())
             if age < 120 and not self.stop_event.is_set():
                 # the next service of the list takes this sentence now (if there is one); this one is tried again later
-                job.setdefault("avoid", {})[target] = time.time() + 30
-                others = any(t != target and job["avoid"].get(t, 0) <= time.time() for t in self.stt_targets(source))
+                now = time.time()
+                job.setdefault("avoid", {})[target] = now + 30
+                others = any(t != target and job["avoid"].get(t, 0) <= now and self._usable(t, job["dur"], now)
+                             for t in self.stt_targets(source))       # (one that can take it now; else: the backoff)
                 job["not_before"] = time.time() + (0.2 if others else min(2 ** job["tries"], 8))
                 if others:
                     log(f"speech-to-text: {pid} failed ({short(e, 80)}) — this sentence goes to the next service", level="warn")
@@ -11002,6 +11069,9 @@ class App:
                           ("meeting" if self.cfg.get("work_mode") == "video" else self.cfg.get("work_mode", "meeting")))
         with self.lock:
             new = dict(self.cfg)
+            for k in ("api_key", "proxy"):
+                if k in values:
+                    forget_kept_secret(k)                   # given again (or cleared on purpose) in Setup
             for k, v in values.items():
                 if k == "api_key":
                     if isinstance(v, str) and v.strip():
@@ -11018,6 +11088,7 @@ class App:
             changed_net = (new["api_key"], new["proxy"]) != (self.cfg["api_key"], self.cfg["proxy"])
             svc_keys = [k for k in new if k in ("providers", "api_key", "proxy") or k.endswith(("_provider", "_model"))]
             changed_svc = any(new[k] != self.cfg.get(k) for k in svc_keys)
+            changed_hk = new["hotkeys"] != self.cfg.get("hotkeys")
             if new["overlay_pos"] != self.cfg["overlay_pos"]:
                 try:
                     os.remove(OVERLAY_POS_PATH)          # a new choice of top / bottom replaces the place it was left
@@ -11053,6 +11124,16 @@ class App:
             self.warm_async()
         if changed_svc:
             self._revive_services()
+        if changed_hk:
+            log("Keys from any program: " + (hotkey_mods(self.cfg)[1] or "off"))
+            if getattr(self.overlay, "on", False):             # the see-through window takes its keys when it opens
+                def reopen():
+                    try:
+                        self.api_overlay(on=False)
+                        self.api_overlay(on=True)
+                    except Exception as e:
+                        log("overlay reopen:", short(e, 100), level="debug")
+                threading.Thread(target=reopen, daemon=True, name="overlay-keys").start()
         if failed is not None:
             return {"ok": False, "error": "The settings are in use but could not be written to the file: "
                                           + short(failed, 120)}
@@ -11063,11 +11144,16 @@ class App:
         again now, during this meeting, instead of staying off until the next one."""
         for eng in {id(e): e for e in (self.engine, getattr(self.recording, "engine", None)) if e is not None}.values():
             n = len(eng.models.dead) + len(eng.stt_dead)
-            with eng.models.lock:
+            with eng.models.lock:                                  # (rate-limit pauses stay: they are real)
                 eng.models.dead.clear()
-                eng.models.cool.clear()
             eng.stt_dead.clear()
-            eng.stt_cool.clear()
+            dead = set(eng.live_dead)
+            if dead and not eng.stop_event.is_set():                # a live service with a new key: open it again
+                eng.live_fatal.clear()                              # (only the streams that broke)
+                caps = [c for c in list(self.captures) if getattr(c, "source", "") in dead]
+                if caps:
+                    threading.Thread(target=eng.start_live, args=(caps,), kwargs={"retry_dead": True},
+                                     daemon=True, name="live-again").start()
             for _m, q in eng._quotas():
                 if q.dead:
                     q.dead = False
@@ -12976,11 +13062,13 @@ class App:
                 p["base_url"] = u
             if isinstance(api_key, str) and clean_key(api_key):
                 p["api_key"] = clean_key(api_key)
+                forget_kept_secret(("provider", p["id"]))           # a new key replaces one that could not be read
             if use_proxy is not None:
                 p["use_proxy"] = bool(use_proxy)
             res = self._save_and_publish()
             res["id"] = p["id"]
-            return res
+        self._revive_services()                                    # a fixed key / address works at once
+        return res
 
     def api_remove_provider(self, id=""):
         with self.lock:
@@ -12997,7 +13085,10 @@ class App:
                 t.start()
             if p:
                 log(f"Service removed: {p['name']}")
-            return self._save_and_publish()
+            forget_kept_secret(("provider", id))
+            res = self._save_and_publish()
+        self._revive_services()
+        return res
 
     def api_provider_test(self, id=""):
         """Checks the address and key, and loads the service's model list."""
@@ -15013,11 +15104,34 @@ def run_overlay_helper(argv):
                               "" if mode != "shown" or not hide else
                               "Windows would not hide the see-through window from screen sharing: it is visible.")
             keys = {}
-            for i, (vk, mod) in enumerate([(0x4D, 0x2 | 0x1 | 0x4000), (0x25, 0x2 | 0x1 | 0x4), (0x27, 0x2 | 0x1 | 0x4),
-                                           (0x26, 0x2 | 0x1 | 0x4), (0x28, 0x2 | 0x1 | 0x4),
-                                           (0x24, 0x2 | 0x1 | 0x4), (0x23, 0x2 | 0x1 | 0x4)], 1):
-                if u.RegisterHotKey(None, 100 + i, mod, vk):
-                    keys[100 + i] = ("move", (-1, 0), (1, 0), (0, -1), (0, 1), "bigger", "smaller")[i - 1]
+            # the keys follow Setup › Display (read when the overlay opens): Ctrl+Alt+M / Ctrl+Alt+Shift+M / none.
+            # Moving with keys: the arrows (Home / End: bigger / smaller) while move mode is on; with Ctrl+Alt also
+            # Ctrl+Alt+Shift+arrows at any time, as before.
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    hk_cfg = json.load(f)
+            except (OSError, ValueError):
+                hk_cfg = {}
+            hk_mods = hotkey_mods(hk_cfg if isinstance(hk_cfg, dict) else {})[0]
+            ARROWS = [(0x25, (-1, 0)), (0x27, (1, 0)), (0x26, (0, -1)), (0x28, (0, 1)), (0x24, "bigger"), (0x23, "smaller")]
+            if hk_mods is not None:
+                if u.RegisterHotKey(None, 101, hk_mods | 0x4000, 0x4D):
+                    keys[101] = "move"
+                if hk_mods == 0x3:
+                    for i, (vk, act) in enumerate(ARROWS, 102):
+                        if u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4, vk):
+                            keys[i] = act
+            plain = {}
+
+            def plain_arrows(on):                                  # only while moving: plain arrows move it
+                for i in list(plain):
+                    u.UnregisterHotKey(None, i)
+                    keys.pop(i, None)
+                plain.clear()
+                if on:
+                    for i, (vk, act) in enumerate(ARROWS, 120):
+                        if u.RegisterHotKey(None, i, 0, vk):
+                            plain[i] = keys[i] = act
             msg, last, drag = wt.MSG(), 0.0, None
             while not stop.is_set():
                 while u.PeekMessageW(ctypes.byref(msg), None, 0x312, 0x312, 1):
@@ -15029,6 +15143,7 @@ def run_overlay_helper(argv):
                             save_pos()
                         apply(hwnd, *settings())
                         mark_move(st["move"])
+                        plain_arrows(st["move"])
                     elif isinstance(k, tuple):
                         read_rect(hwnd)
                         st["x"] = min(vx + sw - 80, max(vx - st["w"] + 80, st["x"] + k[0] * 40))
@@ -15602,7 +15717,7 @@ MEETING_WINDOWS = (
     ("Zoom", r"^Zoom (Meeting|Webinar)$|^Zoom Workplace\s*[-–—]\s*(Meeting|Webinar)$"),
     ("Teams", r"^(?!Chat\b)[^|]*\b(Meeting|Call|Besprechung|Anruf|جلسه|تماس)\b[^|]*\|\s*Microsoft Teams$|^Microsoft Teams (meeting|call)$"),
     # Teams in a web browser (teams.microsoft.com, teams.live.com): the meeting tab's title, then the browser's name
-    ("Teams", r"^(?!Chat\b)[^|]*\b(Meeting|Call|Besprechung|Anruf|جلسه|تماس)\b[^|]*\|\s*Microsoft Teams(\s+\(\w+\))?\s*(and \d+ more pages?\s*)?[-–—]"),
+    ("Teams", r"^(?!Chat\b)[^|]*\b(Meeting|Call|Besprechung|Anruf|جلسه|تماس)\b[^|]*\|\s*Microsoft Teams(\s+\([^)]*\))?\s*(and \d+ more pages?\s*)?[-–—]"),
     ("Google Meet", r"\bMeet\s*[-–—:]\s*[a-z]{3}-[a-z]{4}-[a-z]{3}\b|\bmeet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}\b"),
     ("Webex", r"^(Cisco )?Webex( Meetings?)?$|^Meeting\s*[-–—|]\s*(Cisco )?Webex$"),
 )
@@ -15618,7 +15733,7 @@ def meeting_apps(titles, words=""):
         t = str(t or "")[:300]
         web = re.search(BROWSER_TITLE, t) is not None
         for w in own:
-            if re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", t, re.I) and not re.search(r"Meeting Assistant", t):
+            if re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", t, re.I) and not re.search(r"Meeting Assistant|YouTube", t):
                 found.add(w)
         for name, pat in MEETING_WINDOWS:
             web_pat = name == "Google Meet" or (name == "Teams" and pat.endswith("[-–—]"))

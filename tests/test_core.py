@@ -281,3 +281,45 @@ def test_keys_are_encrypted_in_the_settings_file(app):
         assert app.protect_secret("abc") == "abc"
     finally:
         app.SECRET_CODEC[0] = old
+
+
+def test_a_key_that_cannot_be_read_here_is_never_destroyed(app):
+    """The folder opened on another PC / Windows account: its keys cannot be read there (empty), but saving any
+    other setting there must write them back unchanged - back on the first PC they still work. A new key given
+    there replaces it."""
+    fake = lambda data, protect: bytes(b ^ 0x5A for b in data)
+    old = app.SECRET_CODEC[0]
+    try:
+        app.SECRET_CODEC[0] = fake
+        app.save_config(app.sanitize({"api_key": "gsk_" + "e" * 40, "proxy": "http://u:pw@1.2.3.4:80"}))
+        enc = open(app.CONFIG_PATH, encoding="utf-8").read()
+
+        def other_user(data, protect):
+            if protect:
+                return fake(data, protect)
+            raise OSError("another user")
+        app.SECRET_CODEC[0] = other_user
+        here = app.load_config()
+        assert here["api_key"] == "" and here["proxy"] == ""
+        here["answer_size"] = 31
+        app.save_config(here)                                       # some other setting is saved there
+        app.save_config(here)                                       # (twice: the backup copy too)
+        import json as _j
+        now = _j.load(open(app.CONFIG_PATH, encoding="utf-8"))
+        was = _j.loads(enc)
+        assert now["api_key"] == was["api_key"] and now["proxy"] == was["proxy"]
+        app.SECRET_CODEC[0] = fake                                  # back on the first PC
+        back = app.load_config()
+        assert back["api_key"] == "gsk_" + "e" * 40 and back["proxy"] == "http://u:pw@1.2.3.4:80"
+        # on the other PC a new key is given: it replaces the old one
+        app.SECRET_CODEC[0] = other_user
+        here = app.load_config()
+        app.forget_kept_secret("api_key")
+        here["api_key"] = "gsk_" + "f" * 40
+        app.save_config(here)
+        app.SECRET_CODEC[0] = fake
+        assert app.load_config()["api_key"] == "gsk_" + "f" * 40
+    finally:
+        app.SECRET_CODEC[0] = old
+        app.SECRETS_KEPT.clear()
+        app.CONFIG_NOTE.clear()

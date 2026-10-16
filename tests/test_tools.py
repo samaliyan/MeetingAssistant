@@ -2725,6 +2725,8 @@ def test_meeting_windows_are_recognised(app):
     # the user's own words (Setup › Meeting) for meetings named without "Meeting" or "Call"
     assert f(["Weekly sync | Microsoft Teams", "Standup notes - Notepad"], "weekly sync, ab") == {"weekly sync"}
     assert f(["Meeting Assistant 6.34 — Weekly sync"], "weekly sync") == set()    # (never our own window)
+    assert f(["Meeting with Ali | Microsoft Teams (work or school) - Google Chrome"]) == {"Teams"}
+    assert f(["Weekly sync tutorial - YouTube - Google Chrome"], "weekly sync") == set()
     old = os.environ.get("MA_FAKE_WINDOWS")
     os.environ["MA_FAKE_WINDOWS"] = "Zoom Meeting;;Notes"
     try:
@@ -3154,9 +3156,34 @@ def test_live_service_is_not_sent_long_silence(app):
     lv._put(None, 2.0)                                                        # and a gap (nothing playing)
     for _ in range(10):
         lv._put(speech, 16000)
-    sent = sum(len(lv.q.get_nowait()) for _ in range(lv.q.qsize())) / 32000
-    assert abs(sent - (1.0 + 2.0 + 1.0)) < 0.11, sent
-    assert abs(lv.skipped - 10.0) < 0.11 and abs((lv.t_audio0 - t0) - 10.0) < 0.11
+    items = [lv.q.get_nowait() for _ in range(lv.q.qsize())]
+    assert abs(sum(len(p) for p, _ in items) / 32000 - (1.0 + 2.0 + 1.0)) < 0.11
+    assert abs(lv.skipped - 10.0) < 0.11 and lv.t_audio0 == t0
+
+    class WS:
+        def __init__(self):
+            self.n, self.last_rx = 0, 0.0
+
+        def send(self, data, text=False):
+            self.n += len(data)
+    lv.ws = WS()
+    for k in range(0, len(items), 4):                                        # as the sender does: ~100 ms at a time
+        lv._send_parts(items[k:k + 4])
+    assert abs(lv.sent - 4.0) < 0.11
+    # Deepgram's time 3.5 s (the middle of the second sentence) is 13.5 s after the start on the wall clock;
+    # its time 0.5 s (the first sentence) is unchanged
+    assert abs(lv._wall(3.5) - (t0 + 13.5)) < 0.12 and abs(lv._wall(0.5) - (t0 + 0.5)) < 0.01
+    assert lv.ws.last_rx > 0                                                  # the 'no answer' check starts again
+    # a pause: the time paused is skipped too
+    lv.pause(True)
+    lv.paused_at -= 5.0                                                       # (5 s paused)
+    lv.pause(False)
+    items = []
+    for _ in range(10):
+        lv._put(speech, 16000)
+    items = [lv.q.get_nowait() for _ in range(lv.q.qsize())]
+    lv._send_parts(items)
+    assert abs(lv._wall(4.5) - (t0 + 14.0 + 5.0 + 0.5)) < 0.15
     lv.thread.join(10)                                       # (its own connection attempt has ended by now)
     lv.ok, lv.usage_done, lv.sent = True, False, 4.0
     on = app.USAGE_ON[0]
@@ -3234,3 +3261,47 @@ def test_global_keys_can_avoid_altgr(app):
     page = open(os.path.join(app.WEB_DIR, "index.html"), encoding="utf-8").read()
     assert 'data-key="hotkeys"' in page and "function relabelKeys" in page and 'id="fMeetWords"' in page
     assert "readScreen(); }" not in page.split("They mention the screen")[0][-400:]      # never read by itself
+
+
+def test_pac_lookup_never_holds_up_the_program(app, monkeypatch):
+    """The PAC lookup runs in the background: the first time it waits at most 3 s, later it answers at once with
+    the last value while a new lookup runs."""
+    import time as _t
+    calls = []
+
+    def slow(url):
+        calls.append(url)
+        _t.sleep(0.3)
+        return "http://10.1.1.1:8080"
+    old = app._winhttp_proxy_for
+    app._winhttp_proxy_for = slow
+    app._pac_cache.clear()
+    try:
+        assert app.pac_proxy("https://x.example/") == "http://10.1.1.1:8080"        # first time: waited for it
+        app._pac_cache["https://x.example/"] = (_t.time() - 400, "http://10.1.1.1:8080")   # 5 minutes later
+        t0 = _t.time()
+        assert app.pac_proxy("https://x.example/") == "http://10.1.1.1:8080"        # the last value, at once
+        assert _t.time() - t0 < 0.1
+        _t.sleep(0.5)
+        assert len(calls) == 2 and _t.time() - app._pac_cache["https://x.example/"][0] < 1
+    finally:
+        app._winhttp_proxy_for = old
+        app._pac_cache.clear()
+
+
+def test_failover_keeps_its_pause_when_the_other_service_cannot_take_it(app):
+    """The next service is busy or out of its free limit: the failed one is not hammered every 0.2 s - it waits."""
+    import time
+    eng, sess, calls = _engine(app)
+
+    class Api:
+        def transcribe(self, *a):
+            raise app.Transient("connection reset")
+    eng.app.get_api = lambda pid: Api()
+    eng.app.note_request = lambda: None
+    eng.stt_targets = lambda source: [("first", "m1"), ("groq", "w")]
+    eng._usable = lambda t, d, n: t[0] == "first"                       # the other one cannot take it now
+    job = {"segs": [1], "source": "them", "audio": app.np.zeros(16000, app.np.float32), "t0": time.time() - 2,
+           "t_end": time.time() - 1, "dur": 1.0, "tries": 0, "t_queued": time.time()}
+    eng._process(job, ("first", "m1"))
+    assert job["not_before"] - time.time() >= 0.9
