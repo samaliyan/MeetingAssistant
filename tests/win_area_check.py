@@ -21,6 +21,14 @@ from ctypes import wintypes as wt
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if len(sys.argv) > 2 and sys.argv[1] == "--notes":         # the small pictures as notes on the CI run
+    import base64
+    folder = sys.argv[2]
+    for n in sorted(os.listdir(folder) if os.path.isdir(folder) else []):
+        if n.startswith("small-") and n.endswith(".png"):
+            b = base64.b64encode(open(os.path.join(folder, n), "rb").read()).decode()
+            print(f"::notice title={n}::" + (b if len(b) < 60000 else f"too big ({len(b)} characters)"))
+    sys.exit(0)
 OUT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "area-shots")
 os.makedirs(OUT, exist_ok=True)
 u = ctypes.windll.user32
@@ -95,6 +103,8 @@ def save(name, raw, full, crop=None):
     w, h, data = app.crop_bgra(raw, full, crop) if crop else (full[2], full[3], raw)
     with open(os.path.join(OUT, name + ".png"), "wb") as f:
         f.write(app.encode_png(w, h, data, max_width=4000))
+    with open(os.path.join(OUT, "small-" + name + ".png"), "wb") as f:
+        f.write(app.encode_png(w, h, data, max_width=560))
 
 
 def png_rgb(data):
