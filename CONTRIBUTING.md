@@ -28,4 +28,4 @@ python -m pytest tests
 
 1. Raise `VERSION` in `app.py` and add its section to `CHANGELOG.md`.
 2. Commit to `main` with `[release]` in the commit message.
-3. GitHub Actions runs the tests, builds `MeetingAssistant.exe` and publishes the release `vX.Y`.
+3. GitHub Actions runs the tests, builds the program and its installer `MeetingAssistant-Setup.exe` and publishes the release `vX.Y`.

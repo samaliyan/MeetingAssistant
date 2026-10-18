@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.34"
+VERSION = "6.35"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -156,6 +156,9 @@ WINDOW_PROFILE = os.path.join(DATA_DIR, ".window")
 MODELS_DIR = os.path.join(DATA_DIR, "models")          # local speech-to-text models (downloaded or copied here)
 PORT_FILE = os.path.join(DATA_DIR, ".port")
 LAST_MEETING = os.path.join(DATA_DIR, ".last_meeting.json")   # lets "Continue" work after a restart too
+STREAM_EVERY = 0.15              # streamed text is sent to the window at most this often (s): it looks the same, costs
+STREAM_EVERY_ANSWER = 0.1        # far less work in a long meeting (the answer a little more often: it is read live)
+LAST_OWNER = [None]               # (start time, file) of the meeting kept there: an older meeting never replaces it
 BASE_URL = os.environ.get("MA_BASE_URL", "https://api.groq.com/openai/v1")
 try:
     DEFAULT_PORT = int(os.environ.get("MA_PORT", "17650"))
@@ -202,7 +205,7 @@ DEFAULTS = {
     "config_version": CONFIG_VERSION,
     "api_key": "",
     "proxy": "",
-    "languages": ["en", "de"],   # the meeting is in one of these (one = fixed, several = detected among them)
+    "languages": ["en"],         # the meeting is in one of these (one = fixed, several = detected among them)
     "my_language": "fa",         # translations, explanations, summary and the answer's meaning are in this language
     "answer_language": "same",   # "same" = the language of the question, or a language code
     "context": "",
@@ -211,7 +214,7 @@ DEFAULTS = {
     "me_label": "Me",
     "them_label": "Person 1",
     "transcribe_me": True,
-    "translate_me": True,        # a translation under my own lines too
+    "translate_me": False,       # a translation under my own lines too (off: fewer requests, less moving text)
     "answer_me": False,          # test mode: suggest answers to your own lines too
     "answer_mode": "fast",       # fast | smart
     "job_ad": "",                # the job advert (for prep and answers; optional)
@@ -333,7 +336,7 @@ def in_person(cfg):
 
 
 def coach_on(cfg):
-    return bool(cfg.get("coach")) and feat(cfg, "coach")
+    return feat(cfg, "coach")                         # (one switch: Setup › Features › Coach)
 
 
 def feature_off(cfg, name):
@@ -468,7 +471,7 @@ def clean_langs(v):
         c = str(c).lower()
         if c in LANGS and c not in out:
             out.append(c)
-    return out[:6] or ["en", "de"]
+    return out[:6] or ["en"]
 
 
 _log_lock = threading.Lock()
@@ -583,6 +586,7 @@ def _dpapi(data, protect):
 
 SECRET_CODEC = [_dpapi if sys.platform == "win32" else None]    # (tests give their own)
 SECRETS_LOST = []                                # keys that could not be read back (another Windows user or PC)
+SECRETS_PLAIN = []                               # keys read in plain text (a settings file from before 6.34)
 SECRETS_KEPT = {}       # their encrypted text, written back unchanged: a copy of the folder opened on another PC or
                         # Windows account must never destroy the keys of the first one (cleared when a new key is given)
 
@@ -599,6 +603,8 @@ def protect_secret(v):
 
 def reveal_secret(v, what="a key", fid=None):
     if not isinstance(v, str) or not v.startswith(SECRET_TAG):
+        if isinstance(v, str) and v:
+            SECRETS_PLAIN.append(what)
         return v                                     # (plain: a settings file from before 6.34, or not Windows)
     try:
         if SECRET_CODEC[0] is None:
@@ -706,6 +712,7 @@ def load_config():
         try: ver = float(str(ver).strip())
         except (TypeError, ValueError): ver = CONFIG_VERSION   # unreadable: keep the settings as they are
     SECRETS_LOST.clear()
+    SECRETS_PLAIN.clear()
     saved = _secret_fields(saved, reveal_secret)
     if SECRETS_LOST:
         CONFIG_NOTE.append("Saved keys could not be read on this Windows account (" + ", ".join(SECRETS_LOST)
@@ -719,6 +726,10 @@ def load_config():
     if ver < 6 and isinstance(f_old, dict) and f_old.get("answers") is False and f_old.get("after") is False:
         # 6.19 added parts that need the answers service: someone who used the program without one keeps it that way
         cfg["features"] = {**f_old, "say": False, "notes": False}
+    if cfg.get("coach") is False:
+        # up to 6.34 the coach had a second switch (Answers › "Interview situation card"): one switch now
+        cfg["features"] = {**(cfg.get("features") if isinstance(cfg.get("features"), dict) else {}), "coach": False}
+        cfg["coach"] = True
     if "languages" not in saved and saved.get("language") in LANGS:
         cfg["languages"] = [saved["language"]]          # earlier versions: one "language" (or "auto")
     for key in ("local_model", "llm_model"):
@@ -846,6 +857,23 @@ def clean_providers(v):
 _cfg_save_lock = threading.Lock()
 
 
+def reseal_secrets(cfg):
+    """Keys still in plain text from an older version are written encrypted at once - in the backup copy too."""
+    if not SECRETS_PLAIN or SECRET_CODEC[0] is None or CONFIG_LOCKED[0]:
+        return False
+    try:
+        save_config(cfg)
+        with _cfg_save_lock:
+            shutil.copyfile(CONFIG_PATH, CONFIG_PATH + ".bak.tmp")
+            os.replace(CONFIG_PATH + ".bak.tmp", CONFIG_PATH + ".bak")   # the old backup had the plain key
+        log("Saved keys are now kept encrypted (" + ", ".join(SECRETS_PLAIN) + ")")
+        SECRETS_PLAIN.clear()
+        return True
+    except OSError as e:
+        log("keys could not be written encrypted yet:", short(e, 100), level="warn")
+        return False
+
+
 def save_config(cfg):
     if CONFIG_LOCKED[0]:
         # the real settings could not be read at start: writing now would replace them with defaults
@@ -892,18 +920,36 @@ def save_config(cfg):
 _proxy_cache = {}
 
 
-def detect_proxy(manual):
-    """Cached for 5 s: reading the Windows proxy setting for every request is wasted work."""
+PAC_GROQ = "https://api.groq.com/"
+PAC_DEEPGRAM = "https://api.deepgram.com/"
+PAC_HF = "https://huggingface.co/"
+
+
+def pac_url(base):
+    """The address a PAC script is asked about for one service ('scheme://host/')."""
+    try:
+        u = urllib.parse.urlsplit(str(base or ""))
+        return f"{u.scheme or 'https'}://{u.hostname}/" if u.hostname else PAC_GROQ
+    except ValueError:
+        return PAC_GROQ
+
+
+def detect_proxy(manual, url=None):
+    """Cached for 5 s: reading the Windows proxy setting for every request is wasted work.
+    url: the service it is for (a PAC setup script may send each address its own way; default: Groq)."""
     now = time.time()
-    hit = _proxy_cache.get(manual)
+    key = (manual, url or PAC_GROQ)
+    hit = _proxy_cache.get(key)
     if hit and now - hit[0] < 5:
         return hit[1]
-    res = _detect_proxy(manual)
-    _proxy_cache[manual] = (now, res)
-    return res
+    res = _detect_proxy(manual, url or PAC_GROQ)
+    if res[1] != "pending":                              # (a PAC answer not found yet is not kept)
+        _proxy_cache[key] = (now, res)
+        return res
+    return "", ""
 
 
-def _detect_proxy(manual):
+def _detect_proxy(manual, url=PAC_GROQ):
     """Manual proxy if given, otherwise the Windows system proxy (e.g. v2rayN 'system proxy')."""
     p = (manual or "").strip()
     source = "manual"
@@ -915,7 +961,9 @@ def _detect_proxy(manual):
             sysp = {}
         p = sysp.get("https") or sysp.get("http") or sysp.get("socks") or ""     # (a SOCKS-only system proxy too)
         if not p and sys.platform == "win32":
-            p = pac_proxy()                                  # a proxy chosen by a PAC script (or found automatically)
+            p = pac_proxy(url)                               # a proxy chosen by a PAC script (or found automatically)
+            if p is None:
+                return "", "pending"                         # still looking it up: asked again on the next request
             if p:
                 source = "system (PAC)"
         # Windows proxies speak plain HTTP even for https:// targets
@@ -942,11 +990,11 @@ def pac_proxy(url="https://api.groq.com/"):
     now = time.time()
     with _pac_lock:
         hit = _pac_cache.get(url)
-        ev = _pac_busy.get(url)
-        mine = False
+        busy = _pac_busy.get(url)
+        ev, began = busy if busy else (None, now)
         if (hit is None or now - hit[0] >= 300) and ev is None:
-            ev = _pac_busy[url] = threading.Event()
-            mine = True
+            ev = threading.Event()
+            _pac_busy[url] = (ev, now)
 
             def look(ev=ev):
                 res = ""
@@ -962,11 +1010,11 @@ def pac_proxy(url="https://api.groq.com/"):
                     log(f"Windows proxy from the setup script (PAC): {mask_proxy(res)}")
                 ev.set()
             threading.Thread(target=look, daemon=True, name="pac").start()
-    if hit is None and mine:                         # only the first asker waits (and only up to 3 s)
-        ev.wait(3.0)
+    if hit is None and ev is not None:               # the very first time: wait for it, at most 3 s after it began
+        ev.wait(max(0.0, 3.0 - (time.time() - began)))  # (a lookup that hangs never makes every request wait again)
         with _pac_lock:
             hit = _pac_cache.get(url)
-    return hit[1] if hit else ""
+    return hit[1] if hit else None                   # None: not known yet (it is never cached as "direct")
 
 
 def _winhttp_proxy_for(url):
@@ -1658,6 +1706,17 @@ class MeetingAudio:
             if st is None:
                 st = self.files[source] = self._open(source, now - len(y) / 16000)
             gap = (now - len(y) / 16000) - (st["t0"] + st["n"] / 16000)
+            if gap > 600:
+                # a long break (the PC slept): a new part with its own start time instead of minutes of silence
+                # (writing hours of silence would hold this thread while new sound piles up and is lost)
+                try:
+                    st["f"].close()
+                except Exception:
+                    pass
+                self.parts.append({"source": source, "file": os.path.basename(st["path"]), "t0": st["t0"],
+                                   "dur": round(st["n"] / 16000, 2)})
+                st = self.files[source] = self._open(source, now - len(y) / 16000)
+                gap = 0.0
             if gap > 1.0:                                     # the device was away: silence keeps the times right
                 left = int(min(gap, 4 * 3600) * 16000)
                 quiet = np.zeros(16000 * 10, np.float32)
@@ -2748,8 +2807,12 @@ class WSClient:
                     pass
                 sock.close()
                 msg = f"{status_line} {rest.decode(errors='replace')[:200]}".strip()
-                if code in (401, 403):
+                body = rest.decode(errors="replace").lower()
+                if code == 401 or (code == 403 and re.search(r"invalid_auth|credential|api[ _-]?key|insufficient_permission|unauthori", body)):
                     raise AuthError("The live service rejected the API key: " + msg, code)
+                if code == 403:                             # not the key: a block from this network / region (VPN off?)
+                    raise Transient("The live service refused the connection (403 — blocked from this network; "
+                                    "is your VPN / proxy on?): " + msg, code)
                 if code == 402:
                     raise AuthError("The live service says there is no credit left: " + msg, code)
                 raise Transient("Live connection refused: " + msg, code)
@@ -3125,6 +3188,7 @@ class DeepgramLive:
                     if m.get("is_final"):
                         if words:
                             self.words = (self.words + " " + words).strip()
+                            self.final_end = end                 # the live service answered up to here
                             if self.diarize:
                                 for w in alt.get("words") or []:
                                     sp = w.get("speaker") if isinstance(w, dict) else None
@@ -3142,7 +3206,9 @@ class DeepgramLive:
                     raise Transient("Live service error: " + short(m.get("description") or m.get("err_msg") or m))
         except Exception as e:
             if not self.stop_event.is_set():
-                self._fail(e)
+                if self.words:                              # the words already heard first (ending where the service
+                    self._finish(getattr(self, "final_end", 0.0) or self.sent)   # answered): the backup service
+                self._fail(e)                               # then writes only what comes after them
         if self.words:
             self._finish(self.sent)
 
@@ -5764,6 +5830,26 @@ class ModelDownload:
                     if h.hexdigest() != sha:
                         os.remove(path)
                         raise DownloadError(f"{name} arrived damaged and was deleted — press Download again")
+                elif not download_looks_real(path):
+                    os.remove(path)                               # no check sum: at least never keep a web page as a model
+                    raise DownloadError(f"the site sent a web page instead of {name} (a block page? Try with the "
+                                        "VPN / proxy) — it was deleted")
+
+
+def download_looks_real(path):
+    """A downloaded model file without a check sum: not an HTML page (block or login page answered with 200), and a
+    .json file really is JSON."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(512).lstrip()
+        if head[:1] == b"<" and re.match(rb"<(!doctype|html|head|body|\?xml)", head[:20], re.I):
+            return False
+        if path.lower().endswith(".json"):
+            with open(path, "r", encoding="utf-8") as f:
+                json.load(f)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 _NET_RE = re.compile(r"403|429|451|cannot reach|connect|timed out|timeout|reset|refused|ssl|proxy|answered|unreachable", re.I)
@@ -6568,6 +6654,8 @@ class Session:
             if not s.entries:
                 return None
             s.dirty = False
+            if LAST_OWNER[0] is None:
+                LAST_OWNER[0] = (s.started.timestamp(), s.path)
             return s
         except Exception as e:                                 # never a reason for the program not to start
             log("the last meeting could not be read (Continue is not offered):", short(e, 100), level="warn")
@@ -6784,14 +6872,19 @@ class Session:
     def _save_state(self, rows):
         if self.recording or not rows:
             return
+        me = (self.started.timestamp(), self.path)
+        own = LAST_OWNER[0]
+        if own and own[1] != self.path and own[0] > me[0] and own[0] < time.time() + 3600 and os.path.exists(LAST_MEETING):
+            return                                              # a late save of an older meeting (summary, review…)
         self.state_t = time.time()
         try:
             tmp = LAST_MEETING + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.state(), f, ensure_ascii=False)
+                f.write(json.dumps(self.state(), ensure_ascii=False))   # (one write: several times faster than json.dump)
                 f.flush()
                 os.fsync(f.fileno())                            # on the disk before it replaces the last good copy
             os.replace(tmp, LAST_MEETING)
+            LAST_OWNER[0] = me
             self.state_every = 5.0 if time.time() - self.state_t < 1.0 else 20.0   # (a really slow disk: less often)
         except (OSError, TypeError, ValueError) as e:
             log("could not keep the meeting for 'Continue':", short(e), level="debug")
@@ -7674,6 +7767,9 @@ class Engine:
         self.stop_event = threading.Event()
         self.busy = 0
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="llm")
+        # answers and the coach's help have their own threads: they never wait behind a pile of translations
+        self.ans_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="answer")
+        self.dropped = [0, 0.0]        # sentences (and seconds of speech) that could not be written
         self.lang_guess = meeting_langs(self.cfg)[0]
         self.lang_sure = 0
         self.last_text = {"me": "", "them": ""}
@@ -7695,11 +7791,14 @@ class Engine:
         self.me_voice_at = 0.0         # last time the microphone heard the user (voice, not text)
         self.plan = None               # the auto answer that waits a moment for the rest of a question
         self.plan_lock = threading.Lock()
+        self.mark_wait = None          # (time F7 was pressed while someone spoke, its fallback timer)
         self.live_retries = collections.Counter()   # how many times a broken live stream was reopened by itself
         self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
         self.live_lock = threading.RLock()   # one start of live streams at a time (never two streams for one source)
         self.live_backlog = {}         # source -> recent finished sentences (audio) while a live service runs
         self.live_heard = {}           # source -> time up to which the live service wrote the text
+        self.live_talk_at = {}         # source -> last time the live service showed words still being spoken
+        self.live_told = set()         # sources whose live failure was already shown (a failed reopen is not shown again)
         self.done_segs = set()         # sentences that already have their final text
         self.done_order = collections.deque()
         self.previews = {}             # seg -> preview state
@@ -7708,6 +7807,8 @@ class Engine:
         self.spec_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-update")
         # finished live lines have their own queue: they never wait behind slow translations or answers
         self.live_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-lines")
+        # my lines have their own: my line may wait a moment for theirs (echo check) without holding theirs up
+        self.live_pool_me = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-lines-me")
         self.workers = [threading.Thread(target=self._stt_worker, daemon=True, name=f"stt{i}")
                         for i in range(STT_WORKERS if workers else 0)]
         for w in self.workers:
@@ -7865,8 +7966,8 @@ class Engine:
 
     def _check_reply(self):
         """After a line of the user: numbers and notes about the reply to the latest question."""
-        if not (coach_on(self.cfg) or feat(self.cfg, "answers")):
-            return                                         # nobody shows it
+        if not coach_on(self.cfg):
+            return                                         # only the coach shows it
         rows = self.session.ordered()
         q = next((r for r in reversed(rows) if r["source"] == "them"
                   and len(re.findall(r"\w+", r.get("text") or "")) >= 5), None)
@@ -8055,11 +8156,13 @@ class Engine:
             return self._start_live(captures, retry_dead)
 
     def _start_live(self, captures, retry_dead):
+        if getattr(self, "live_closed", False):
+            return                                          # the meeting is ending
         pid = self.cfg["stt_provider"]
         prov = self.app.provider(pid)
         if not prov or prov.get("kind") != "live" or not prov.get("api_key"):
             return
-        proxy = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
+        proxy = detect_proxy(self.cfg["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else ""
         for cap in captures:
             src = cap.source
             was_dead = src in self.live_dead
@@ -8121,11 +8224,12 @@ class Engine:
         for cap in self.app.captures:
             if cap.source == source and (lv is None or cap.tap == lv.feed):
                 cap.tap = None
-                if source == "them":
-                    self.app.apply_preview()
+                self.app.apply_preview()                    # (only the source that gets live text is changed)
         what = "the other side" if source == "them" else "your microphone"
         log(f"Live speech-to-text stopped for {what}: {err}", level="error")
-        if source not in self.live_fatal and self.live_retries[source] < 12 and not self.stop_event.is_set():
+        if source not in self.live_fatal and not self.stop_event.is_set():
+            # tried again 10, 20 … 60 s later, then every minute for as long as the meeting runs (a VPN that is
+            # off for a while must not stop the live text for the rest of the meeting)
             self.live_retries[source] += 1
             tm = threading.Timer(min(60, 10 * self.live_retries[source]), self._live_reopen, (source,))
             tm.daemon = True
@@ -8148,19 +8252,31 @@ class Engine:
         if left:
             log(f"{len(left)} sentence(s) the live service did not write are written by the backup service")
         targets = self.stt_targets(source)
-        if targets:
+        if source in self.live_told and not isinstance(err, AuthError):
+            pass                                            # (told once: a failed reopen is only logged)
+        elif targets:
             by = "the local model" if targets[0][0] == "local" else self.app.provider(targets[0][0])["name"]
             self.hub.toast("error", f"Live text stopped ({short(err, 120)}). Continuing with {by} for {what}.")
         else:
             self.hub.toast("error", f"Live text stopped ({short(err, 120)}). Nothing else can write {what} now: "
-                                    "add Groq (free) or a local model in Setup › Services.")
+                                    "add Groq (free) or a local model in Setup › Services."
+                                    + ("" if source in self.live_fatal else " It is tried again every minute."))
+        self.live_told.add(source)
         self.hub.publish("speech_mode", **self.speech_mode())
+
+    def _live_works(self, source):
+        """Words came from the live service: the stream works (again)."""
+        self.live_retries[source] = 0
+        if source in self.live_told:
+            self.live_told.discard(source)
+            self.hub.toast("ok", "Live text is back for " + ("the other side." if source == "them" else "your microphone."))
 
     def live_interim(self, source, key, t0, text):
         if key in self.done_segs or self.paused or (source == "me" and self.say_mode):
             return                                          # (say mode: my words are not shown or translated)
         self._plan_more_coming(source)
-        self.live_retries[source] = 0                     # the stream works again
+        self.live_talk_at[source] = time.time()           # (an echo check waits for this sentence to finish)
+        self._live_works(source)                          # the stream works again
         self.hub.publish("speaking", seg=key, source=source, t0=t0, phase="speaking", text=text, live=True)
         words = self.cfg["live_tr_words"]
         if words > 0:                                   # 0 = translate only the finished sentence (fewest tokens)
@@ -8169,7 +8285,7 @@ class Engine:
     def live_final(self, source, key, t0, t_end, text, speaker=None):
         text = re.sub(r"\s+", " ", text).strip()
         self.live_heard[source] = max(self.live_heard.get(source, 0.0), t_end)   # the live service answered up to here
-        self.live_retries[source] = 0
+        self._live_works(source)
         if self.paused or not normalize_words(text) or (source == "me" and self.say_mode):
             self._mark_done([key])
             self.previews.pop(key, None)
@@ -8267,9 +8383,11 @@ class Engine:
                 stable = stable_words(st, text)
                 self.hub.publish("speaking", seg=seg_id, source=source, t0=t0, phase="speaking",
                                  text=text, stable=stable, live=False)
-                if target[0] != "local":
+                if self.cfg["live_tr_words"] <= 0:
+                    pass                                    # "translation at sentence end": nothing while they speak
+                elif target[0] != "local":
                     self._preview_translate(seg_id, source, text, min_new=1)
-                elif self.cfg["live_tr_words"] > 0 and stable:
+                elif stable:
                     # the local model updates very often: translate only words that two updates in a row
                     # agree on (they do not change any more), and only every few new words (saves tokens)
                     self._preview_translate(seg_id, source, " ".join(text.split()[:stable]),
@@ -8346,7 +8464,7 @@ class Engine:
             if key in self.done_segs:
                 return False
             now = time.time()
-            if now - last[0] > 0.08:
+            if now - last[0] > STREAM_EVERY:            # (each update makes the window work: about 7 a second look the same)
                 last[0] = now
                 self.hub.publish("speaking", seg=key, source=source, phase="speaking", translation=t.strip())
             return None
@@ -8415,6 +8533,22 @@ class Engine:
             self.previews.pop(seg_id, None)
             self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")
         elif kind == "segment":
+            if not self.stt_targets(source):
+                # no service can write it now (only a live service is set and it is reopening, or the key was removed):
+                # it is not left waiting for 5 minutes - it is counted as lost and the user is told once
+                self._mark_done([seg_id])
+                self.previews.pop(seg_id, None)
+                self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")
+                self.dropped[0] += 1
+                self.dropped[1] += float(kw.get("dur") or 0.0)
+                log("a sentence could not be written: no speech-to-text service can take it now", level="warn")
+                reopening = ((self.app.provider(self.cfg["stt_provider"]) or {}).get("kind") == "live"
+                             and source not in self.live_dead)       # (a device change: back in a second)
+                if not reopening and time.time() - getattr(self, "no_stt_told", 0.0) > 120:
+                    self.no_stt_told = time.time()
+                    self.hub.toast("error", "Nothing can write what is said right now: no speech-to-text service is "
+                                            "working. Check Setup › Services (Groq is free).")
+                return
             st = self.previews.get(seg_id)
             if (st and st.get("text") and st.get("by") == "local" and st.get("spec") and not st.get("busy")
                     and self.cfg["stt_provider"] == "local" and st.get("covered", 0) >= kw["dur"] - 0.3
@@ -8531,18 +8665,23 @@ class Engine:
                     if job.get("not_before", 0) > now:
                         continue                                    # waiting before a retry
                     # never let my own lines take the last free slot: the other side must never wait
-                    if job["source"] == "me" and self.busy >= STT_WORKERS - 1:
+                    if job["source"] == "me" and self.busy >= STT_WORKERS - 1 \
+                            and not (in_person(self.cfg) and not self.file_mode):   # (in person every line is "me")
                         continue
                     model = self._pick_model(job["source"], job["dur"], now, job.get("avoid"))
                     if model is None:
                         continue
                     self.pending.pop(i)
-                    # pieces of the same speaker that are already waiting are sent together
+                    # pieces of the same speaker that are already waiting and follow each other are sent together
+                    # (in person the microphone hears several people: their sentences are never joined; in a meeting
+                    # only pieces close in time with nothing of the other side in between, so the order stays right)
                     k = 0
-                    while k < len(self.pending):
+                    joinable = not (in_person(self.cfg) and job["source"] == "me" and not self.file_mode)
+                    while joinable and k < len(self.pending):
                         o = self.pending[k]
                         if (o["source"] == job["source"] and bool(o.get("say")) == bool(job.get("say"))
                                 and job["dur"] + o["dur"] <= MAX_MERGED
+                                and (self.file_mode or self._adjacent(job, o))
                                 and self._usable(model, job["dur"] + o["dur"], now)):
                             gap = np.zeros(4000, dtype=np.float32)          # 0.25 s pause
                             job = {**job, "segs": job["segs"] + o["segs"],
@@ -8560,6 +8699,15 @@ class Engine:
                     return job, model
                 self.cv.wait(0.2)
         return None, None
+
+    def _adjacent(self, job, o, gap=4.0):
+        """o follows job closely (same speaker kept talking) and no line of the other side lies between them."""
+        if o["t0"] < job["t0"] or o["t0"] - job["t_end"] > gap:
+            return False
+        for j in list(self.pending) + list(self.inflight.values()):
+            if j["source"] != job["source"] and job["t_end"] - 0.2 < j["t0"] < o["t0"] + 0.2:
+                return False
+        return True
 
     def _requeue(self, job, failed=True):
         job["t_try"] = time.time()                          # "no service for 5 minutes" counts from here
@@ -8727,8 +8875,42 @@ class Engine:
             self.lang_guess = detected
 
         if not text:
-            return self._drop(job)
+            return self._drop(job, lost=False)              # (a cough, music: no words)
         self.accept_text(source, text, detected or "", job["t0"], job["t_end"], job["segs"], job.get("timing", {}))
+
+    def mark_when_written(self, at):
+        """F7 while someone speaks: the sentence spoken at that moment is marked as soon as its text is written
+        (or, if none comes within 20 s, the newest line then)."""
+        with self.plan_lock:
+            old = self.mark_wait
+            if old:
+                old[1].cancel()
+            tm = threading.Timer(20, self._mark_fallback, (at,))
+            tm.daemon = True
+            self.mark_wait = (at, tm)
+            tm.start()
+
+    def _mark_fallback(self, at):
+        with self.plan_lock:
+            if not self.mark_wait or self.mark_wait[0] != at:
+                return
+            self.mark_wait = None
+        rows = [r for r in self.session.ordered() if r["t0"] <= at + 1 and (r.get("text") or "").strip()]
+        e = self.session.mark(rows[-1]["id"], True) if rows else None    # the newest line from before the key press
+        if e:
+            self.hub.publish("entry", entry=e)
+            self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
+
+    def _mark_if_waiting(self, e):
+        with self.plan_lock:
+            w = self.mark_wait
+            if not w or not (e["t0"] - 1.0 <= w[0] <= e["t_end"] + 1.5):
+                return e
+            self.mark_wait = None
+            w[1].cancel()
+        m = self.session.mark(e["id"], True)
+        self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
+        return m or e
 
     def accept_text(self, source, text, lang, t0, t_end, segs, timing, speaker=None):
         """A finished sentence (from any service): show it, translate it, maybe answer it."""
@@ -8748,7 +8930,7 @@ class Engine:
                 self.echo_warned = True
                 self.hub.toast("warn", "Your microphone is hearing the other person's voice. "
                                        "Use headphones for a clean transcript.")
-            return self._drop(job)
+            return self._drop(job, lost=False)
 
         text = apply_glossary(text, glossary_terms(self.cfg))
         self.last_text[source] = text
@@ -8764,6 +8946,8 @@ class Engine:
         ans_on = (source == "them" or c["answer_me"]) and not self.file_mode and feat(c, "answers")
         e = self.session.update(e["id"], tr_state="pending" if tr_on else "off",
                                 ans_state="thinking" if ans_on else "off", timing=timing)
+        if self.mark_wait:
+            e = self._mark_if_waiting(e)                    # F7 was pressed while this sentence was spoken
         self.hub.publish("entry", entry=e)
         if not self.file_mode:
             self.stats.add("text", e["t_text"] - t_end)
@@ -8866,8 +9050,11 @@ class Engine:
             self._publish(eid, ans_state="none")
 
     def _submit_live(self, source, key, t0, t_end, text, speaker=None):
+        with self.cv:                                       # (at once: a failure right after must not write it twice)
+            self.live_heard[source] = max(self.live_heard.get(source, 0.0), t_end)
         try:
-            self.live_pool.submit(self.live_final, source, key, t0, t_end, text, speaker)
+            (self.live_pool_me if source == "me" else self.live_pool).submit(
+                self.live_final, source, key, t0, t_end, text, speaker)
         except RuntimeError:                                # the meeting is already closed
             pass
 
@@ -8883,8 +9070,10 @@ class Engine:
                 self.done_segs.discard(self.done_order.popleft())
 
     def _submit(self, fn, *args):
+        # answers and "say it" never wait behind a pile of translations (each has its own threads)
+        quick = getattr(fn, "__func__", None) in (Engine._answer, Engine._say_speech)
         try:
-            self.pool.submit(fn, *args)
+            (self.ans_pool if quick else self.pool).submit(fn, *args)
             return True
         except RuntimeError:          # engine already closed
             return False
@@ -8900,10 +9089,14 @@ class Engine:
             self.tr_inflight -= 1
         return False
 
-    def _drop(self, job):
-        """A sentence that will not be written: its row disappears and its free-plan request is given back."""
+    def _drop(self, job, lost=True):
+        """A sentence that will not be written: its row disappears and its free-plan request is given back.
+        lost=False: nothing was lost (no words in it, or an echo of the other side) - it is not counted as lost."""
         if job.get("qh"):
             self._refund(job.get("qt"), job.pop("qh"))
+        if lost and not job.get("say"):
+            self.dropped[0] += len(job["segs"])
+            self.dropped[1] += float(job.get("dur") or 0.0)
         self._mark_done(job["segs"])
         for s in job["segs"]:
             self.previews.pop(s, None)
@@ -8918,7 +9111,9 @@ class Engine:
             while time.time() < end:
                 busy = [j for j in list(self.inflight.values()) + list(self.pending)
                         if j["source"] == "them" and j["t0"] < job["t_end"] + 1 and j["t_end"] > job["t0"] - 1]
-                if not busy:
+                # a live service is still writing the other side's sentence (its words are not final yet)
+                talking = self.live_mode("them") and time.time() - self.live_talk_at.get("them", 0.0) < 1.2
+                if not busy and not talking:
                     return
                 self.cv.wait(0.1)
 
@@ -9031,6 +9226,10 @@ class Engine:
         e = self.session.get(eid)
         if not e:
             return
+        if not feat(self.cfg, "translate"):                 # turned off while it waited: no request is sent
+            if e.get("tr_state") in ("pending", "streaming"):
+                self._publish(eid, tr_state="off")
+            return
         current = lambda: gen is None or self.tr_gen[eid] == gen      # a hand-corrected line replaces this one
         c = self.cfg
         topic = (f"\nMeeting topic (for terminology): {c['context'][:300]}" if c["context"] else "") + glossary_note(c)
@@ -9051,7 +9250,7 @@ class Engine:
                     self.stats.add("translation", now - e["t_text"])
             if not current():
                 return False
-            if now - state["last"] >= 0.06:
+            if now - state["last"] >= STREAM_EVERY:
                 state["last"] = now
                 self._publish(eid, translation=t.strip(), tr_state="streaming")
 
@@ -9083,6 +9282,10 @@ class Engine:
         if not e:
             return
         c = self.cfg
+        if not feat(c, "answers"):                          # turned off while it waited: no request is sent
+            if e.get("ans_state") in ("thinking", "streaming"):
+                self._publish(eid, ans_state="off")
+            return
         with self.tr_lock:                                  # two answers for one line: only the newest streams
             self.ans_gen[eid] += 1
             gen = self.ans_gen[eid]
@@ -9141,7 +9344,7 @@ class Engine:
                 state["first"] = now
                 if not force:
                     self.stats.add("answer", now - e["t_text"])
-            if now - state["last"] >= 0.06:
+            if now - state["last"] >= STREAM_EVERY_ANSWER:
                 state["last"] = now
                 ans, fa = split_answer(t)
                 self._publish(eid, answer=ans, answer_fa=fa, ans_state="streaming")
@@ -9271,7 +9474,7 @@ class Engine:
 
         def on_text(t):
             now = time.time()
-            if now - last[0] > 0.06:
+            if now - last[0] > STREAM_EVERY:
                 last[0] = now
                 self._publish(eid, explain=t.strip(), ex_state="streaming")
         try:
@@ -9531,6 +9734,8 @@ class Engine:
                     return                                  # a newer sentence is already on screen
                 self.say_last = n
                 self.hub.publish("say", heard=heard, **kw)
+        if not feat(self.cfg, "say"):
+            return show(state="error", note="Say it in my language was turned off.")   # (turned off while it waited)
         try:
             r = self.say(heard, "", "natural")
             if not r.get("text"):
@@ -9765,19 +9970,47 @@ class Engine:
             except APIError as e:
                 self.app.set_net(False, None, str(e))
 
-    def finish(self, timeout=25):
-        """Called on Stop: lets the last sentences finish, then closes."""
+    def finish(self, timeout=25, patient=0.0, on_wait=None):
+        """Called on Stop: lets the last sentences finish, then closes.
+        patient: after `timeout`, keep waiting (up to this many more seconds) while sentences are still being written
+        (a free limit or a slow model at the very end must not throw the last answers away). on_wait(n) is called once
+        when that longer wait begins. Returns (sentences, seconds of speech) that could not be written."""
         end = time.time() + timeout
-        if self.live:
+        with self.live_lock:
+            self.live_closed = True                         # (no stream may be opened after this: none is left open)
             streams = list(self.live.values())
+        if streams:
             for lv in streams:
                 lv.stop()                                   # sends what is queued, then waits for the last words
             for lv in streams:
                 lv.thread.join(timeout=max(1.0, min(9.0, end - time.time())))
             self.live_pool.shutdown(wait=True)              # the last live lines are written before closing
+            self.live_pool_me.shutdown(wait=True)
         with self.cv:
             while (self.pending or self.busy) and time.time() < end:
                 self.cv.wait(0.3)
+            if patient > 0 and (self.pending or self.busy):
+                hard = time.time() + patient
+                seen, moved = None, time.time()
+                told = False
+                while (self.pending or self.busy) and time.time() < hard:
+                    now_ = (len(self.pending), self.busy, len(self.done_order))
+                    if now_ != seen:
+                        seen, moved = now_, time.time()
+                    elif time.time() - moved > 30:
+                        break                                   # nothing moves any more: waiting longer helps nobody
+                    if self.fatal or (self.pending and not self.busy
+                                      and all(self._no_stt_left(j["source"]) for j in self.pending)):
+                        break                                   # no service can take them
+                    if not told and on_wait:
+                        told = True
+                        n = len(self.pending) + self.busy
+                        self.cv.release()
+                        try:
+                            on_wait(n)
+                        finally:
+                            self.cv.acquire()
+                    self.cv.wait(0.3)
             left = list(self.pending)
             if left:
                 log(f"{len(left)} sentence(s) could not be written before the end "
@@ -9789,13 +10022,14 @@ class Engine:
             self._drop(j)                                   # their rows do not stay on "writing…"
         # lines already being translated/answered keep going in the background
         self.close(cancel=False)
+        return tuple(self.dropped)
 
     def close(self, cancel=True):
         """Frees all of this engine's threads (queued work is dropped when cancel is True)."""
         self.stop_event.set()
-        for p in (self.live_pool, self.pool, self.pv_pool, self.spec_pool):
+        for p in (self.live_pool, self.live_pool_me, self.pool, self.ans_pool, self.pv_pool, self.spec_pool):
             try:
-                p.shutdown(wait=False, cancel_futures=cancel or p is not self.pool)
+                p.shutdown(wait=False, cancel_futures=cancel or p not in (self.pool, self.ans_pool))
             except Exception:
                 pass
 
@@ -10524,7 +10758,7 @@ class RecordingJob:
             return
         if not os.path.isfile(model):
             self._emit(True, state="speakers", frac=0.0, note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…")
-            dl = ModelDownload(SPK_MODEL, detect_proxy(self.app.cfg["proxy"])[0],
+            dl = ModelDownload(SPK_MODEL, detect_proxy(self.app.cfg["proxy"], PAC_HF)[0],
                                lambda st: self._emit(frac=st['done'] / max(1, st['total']),
                                                      note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
             dl.cancel = self.cancel
@@ -10579,6 +10813,7 @@ class RecordingJob:
         lang = fixed_lang(c)
         prompt = eng._stt_prompt("them")
         buf, start = np.zeros(0, np.float32), 0.0              # start: position (s) of buf[0] in the recording
+        skipped = []                                           # (start, seconds) of pieces the model could not read
         it = iter(blocks)
         done = False
         while not done and not self.cancel.is_set():
@@ -10598,8 +10833,16 @@ class RecordingJob:
                     segs, got = LOCAL.transcribe_long(win, lang, prompt)
                     break
                 except (Transient, LocalLoading) as e:
-                    if attempt == 2 or self.cancel.is_set():
+                    if self.cancel.is_set():
                         return short(e, 160)
+                    if attempt == 2:                           # this piece is skipped; the rest of the file still is read
+                        log(f"Recording: the piece at {start / 60:.1f} min was skipped ({short(e, 100)})", level="warn")
+                        skipped.append((start, cut / 16000))
+                        segs, got = [], None
+                        if len(skipped) >= 3 and all(skipped[-k - 1][0] + skipped[-k - 1][1] >= skipped[-k][0] - 0.01
+                                                     for k in (1, 2)):
+                            return short(e, 160)               # three pieces in a row: the model itself is not working
+                        break
                     log(f"Recording: the piece at {start / 60:.1f} min is tried again ({short(e, 100)})", level="warn")
                     self._emit(note="A short problem — trying this part again…")
                     for _ in range(50):
@@ -10628,6 +10871,9 @@ class RecordingJob:
             start += cut / 16000
             pos[0] = start
             self._emit(pos=pos[0])
+        if skipped:
+            where = ", ".join(f"{a / 60:.0f}–{(a + d) / 60:.0f} min" for a, d in skipped[:4])
+            return f"the local model could not read {where}" + (" …" if len(skipped) > 4 else "")
         return ""
 
     def run(self):
@@ -10688,6 +10934,9 @@ class RecordingJob:
                 eng.pool.shutdown(wait=False, cancel_futures=True)   # queued translations are not needed any more
             left = len(eng.pending) + eng.busy
             eng.finish(timeout=1 if self.cancel.is_set() else 30)
+            lost_n, lost_s = eng.dropped
+            if lost_n and not problem and not self.cancel.is_set():
+                problem = f"{lost_n} part(s) ({lost_s:.0f} s of speech) could not be written"
             for e in self.session.ordered():                # cancelled translations do not keep spinning
                 if e.get("tr_state") in ("pending", "streaming") and (self.cancel.is_set() or problem):
                     eng._publish(e["id"], tr_state="error" if not e.get("translation") else "done")
@@ -10892,6 +11141,7 @@ def export_bytes(session, fmt):
 class App:
     def __init__(self):
         self.cfg = load_config()
+        reseal_secrets(self.cfg)                       # (keys from before 6.34 are written encrypted now)
         if TIDIED:
             try:
                 save_config(self.cfg)                  # paths that moved into the Data folder are stored
@@ -10981,7 +11231,26 @@ class App:
     def _real_proxy(self, v):
         """The window shows the proxy with its password as ***: sent back unchanged, it means the saved one."""
         cur = self.cfg.get("proxy") or ""
-        return cur if isinstance(v, str) and "***" in v and v.strip() == mask_proxy(cur) else v
+        if not isinstance(v, str) or "***" not in v:
+            return v
+        v = v.strip()
+        if v == mask_proxy(cur):
+            return cur
+        if "@" not in v or "@" not in cur:
+            return v
+
+        def parts(p):
+            scheme, sep, rest = p.partition("://")
+            if not sep:
+                scheme, rest = "", p
+            cred, _, host = rest.rpartition("@")
+            return (scheme + "://" if sep else ""), cred, host
+        pre, cred, host = parts(v)
+        _p, old_cred, _h = parts(cur)
+        same_user = cred == "***" or (":" in cred and cred.split(":", 1)[1] == "***"
+                                      and cred.split(":", 1)[0] == old_cred.split(":", 1)[0])
+        # only the address or port was changed: the saved password stays (never a literal "***")
+        return pre + old_cred + "@" + host if same_user else v
 
     def api_proxy_status(self):
         p, src = self.shown_proxy()
@@ -11105,6 +11374,8 @@ class App:
             changed_svc = any(new[k] != self.cfg.get(k) for k in svc_keys)
             changed_hk = new["hotkeys"] != self.cfg.get("hotkeys")
             changed_live = (new["stt_provider"], new["stt_model"]) != (self.cfg["stt_provider"], self.cfg["stt_model"])
+            relive = changed_live or (self._live_kind(new["stt_provider"]) and (
+                fixed_lang(new) != fixed_lang(self.cfg) or new.get("diarize") != self.cfg.get("diarize")))
             if new["overlay_pos"] != self.cfg["overlay_pos"]:
                 try:
                     os.remove(OVERLAY_POS_PATH)          # a new choice of top / bottom replaces the place it was left
@@ -11139,7 +11410,9 @@ class App:
         if changed_net:
             self.warm_async()
         if changed_svc:
-            self._revive_services(live=changed_live)
+            self._revive_services(live=changed_live, streams=not relive)
+        if relive:
+            self._relive()
         if changed_hk:
             log("Keys from any program: " + (hotkey_mods(self.cfg)[1] or "off"))
             if getattr(self.overlay, "on", False):             # the see-through window takes its keys when it opens
@@ -11158,7 +11431,39 @@ class App:
                                           + short(failed, 120)}
         return {"ok": True, "config": self.public_config()}
 
-    def _revive_services(self, live=False):
+    def _live_kind(self, pid):
+        return (self.provider(pid) or {}).get("kind") == "live"
+
+    def _relive(self):
+        """The speech-to-text service (or its language) was changed during the meeting: the live streams are closed
+        and opened with the new settings (or not at all when the new service is not a live one)."""
+        eng = self.engine
+        if not self.running or eng is None or eng.stop_event.is_set() or self.recording:
+            return
+
+        def run():
+            try:
+                with eng.live_lock:
+                    old = list(eng.live.items())
+                    eng.live.clear()
+                    eng.live_dead.clear()
+                    eng.live_fatal.clear()
+                    eng.live_retries.clear()
+                    eng.live_told.clear()                      # (a problem of the new stream is told again)
+                    for src, lv in old:
+                        for c in list(self.captures):
+                            if c.source == src and c.tap == lv.feed:
+                                c.tap = None
+                        lv.stop()                              # its last words are still written
+                    self.apply_preview()
+                    if self.running and self.engine is eng:
+                        eng.start_live(list(self.captures))
+                eng.hub.publish("speech_mode", **eng.speech_mode())
+            except Exception as e:
+                log("live streams could not be changed:", short(e, 120), level="warn")
+        threading.Thread(target=run, daemon=True, name="live-change").start()
+
+    def _revive_services(self, live=False, streams=True):
         """A service or model was changed in Setup (a fixed address, a new key …): the ones that failed are tried
         again now, during this meeting, instead of staying off until the next one."""
         for eng in {id(e): e for e in (self.engine, getattr(self.recording, "engine", None)) if e is not None}.values():
@@ -11167,7 +11472,7 @@ class App:
                 eng.models.dead.clear()
             eng.stt_dead.clear()
             dead = set(eng.live_dead) - (set() if live else set(eng.live_fatal))
-            if dead and not eng.stop_event.is_set():                # a live service with a new key: open it again
+            if dead and streams and not eng.stop_event.is_set():   # (streams=False: _relive opens them)                # a live service with a new key: open it again
                 if live:
                     eng.live_fatal.clear()                          # (refused for good: only after its own key changed)
                 caps = [c for c in list(self.captures) if getattr(c, "source", "") in dead]
@@ -11261,14 +11566,16 @@ class App:
                       "backup": ok and pid != "groq" and c["use_backup"] and bool(c["api_key"])}
         return out
 
-    def needed_tasks(self, for_file=False):
-        """The tasks the parts turned on need: speech to text always; translation and answers only when used."""
+    def needed_tasks(self, for_file=False, at_start=False):
+        """The tasks the parts turned on need: speech to text always; translation and answers only when used.
+        at_start: only parts that work DURING the meeting decide whether it can start (prep, the review and full
+        notes are pressed later and say themselves when no service is set)."""
         c = self.cfg
         need = ["stt"]
         if feat(c, "translate"):
             need.append("tr")
-        if not for_file and (feat(c, "answers") or coach_on(c) or feat(c, "prep") or feat(c, "after") or feat(c, "screen")
-                             or feat(c, "say") or feat(c, "notes")):
+        later = not at_start and (feat(c, "prep") or feat(c, "after") or feat(c, "notes"))
+        if not for_file and (feat(c, "answers") or coach_on(c) or feat(c, "screen") or feat(c, "say") or later):
             need.append("ans")                         # (screen reading uses the answers service unless another is set)
         return tuple(need)
 
@@ -11276,10 +11583,10 @@ class App:
         st = self.task_status()
         return [st[t]["label"] + (f" ({st[t]['why']})" if st[t]["why"] else "") for t in tasks if not st[t]["ok"]]
 
-    def used_services(self):
+    def used_services(self, at_start=False):
         c = self.cfg
         used = []
-        for t in self.needed_tasks():                       # (a part that is turned off needs no service)
+        for t in self.needed_tasks(at_start=at_start):                       # (a part that is turned off needs no service)
             pid = c[f"{t}_provider"]
             if (self.provider(pid) or {}).get("kind") in ("live", "local", "llm"):
                 continue
@@ -11300,7 +11607,7 @@ class App:
             raise APIError(f"The service '{pid}' is not set up any more.")
         if not prov["base_url"]:
             raise APIError(f"{prov['name']}: the address (base URL) is empty.")
-        p = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
+        p = detect_proxy(self.cfg["proxy"], pac_url(prov["base_url"]))[0] if prov.get("use_proxy", True) else ""
         sig = (prov["base_url"], prov["api_key"], p)
         with self.api_lock:
             cached = self.apis.get(pid)
@@ -11379,7 +11686,7 @@ class App:
         Returns an error text, or "" when everything is fine. Pressing Start a second time within 90 s starts
         anyway (a slow connection, or a key that only lacks the permission to list models)."""
         try:
-            services = self.used_services()
+            services = self.used_services(at_start=True)      # (only what the meeting itself needs is checked)
         except Exception:
             return ""
         if time.time() - self.preflight_fail < 90 or not services:
@@ -11408,28 +11715,27 @@ class App:
             self.preflight_fail = time.time()
             msg = short(err, 140).rstrip(". ")
             if isinstance(err, AuthError):
-                return (f"{name} refused the key ({msg}). Open Setup › Connection and paste a valid key, then press Start. "
-                        "(If the key is right, pressing Start once more starts anyway.)")
-            return (f"{msg}. Check the internet / VPN, then press Start again "
-                    "(pressing Start once more starts anyway).")
+                return (f"{name} refused the key ({msg}). Open Setup › Services and paste a valid key. "
+                        "If the key is right, press Start anyway.")
+            return f"{msg}. Check the internet / VPN, then press Start again — or press Start anyway."
         self.preflight_fail = 0.0
         return ""
 
     def api_start(self, resume=False):
         """resume=True: go on with the last meeting (same file, same transcript) instead of a new one."""
-        if not self.running and not self.stopping and not self.missing_tasks(self.needed_tasks()):
+        if not self.running and not self.stopping and not self.missing_tasks(self.needed_tasks(at_start=True)):
             bad = self.preflight()
             if bad:
-                return {"ok": False, "error": bad}
+                return {"ok": False, "error": bad, "anyway": True}     # (a second Start within 90 s starts anyway)
         with self.lock:
             if self.running:
                 return {"ok": True}
             c = self.cfg
-            missing = self.missing_tasks(self.needed_tasks())
+            missing = self.missing_tasks(self.needed_tasks(at_start=True))
             if missing:
                 return {"ok": False, "error": "setup", "missing": missing}
             if pyaudio is None:
-                return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
             if self.stopping:
                 return {"ok": False, "error": "Still finishing the previous meeting — try again in a moment."}
             if self.recording:
@@ -11583,10 +11889,12 @@ class App:
             with self.lock:
                 if not self.running or self.engine is not engine:
                     return True
-                for lv in list(engine.live.values()):
-                    lv.stop()
-                engine.live.clear()
-                self._stop_captures()                        # the unfinished sentence is still written
+                # first the captures (the unfinished sentence goes to the live stream that heard it), then the streams
+                self._stop_captures()
+                with engine.live_lock:                       # (a reopen timer cannot add a stream in between)
+                    for lv in list(engine.live.values()):
+                        lv.stop()
+                    engine.live.clear()
             err, mic, spk = None, "", ""
             for attempt in range(3):                         # a new Bluetooth device needs a moment
                 try:
@@ -11645,8 +11953,12 @@ class App:
 
         def finish():
             self.last_engine = engine
+            lost = (0, 0.0)
             try:
-                engine.finish()
+                before = tuple(engine.dropped)
+                after = engine.finish(patient=90, on_wait=lambda n: self.hub.toast(
+                    "info", f"Writing the last {n} sentence(s) before saving — this can take a minute…"))
+                lost = (after[0] - before[0], after[1] - before[1])
             finally:
                 session.save_if_dirty()
                 USAGE_ON[0] = False
@@ -11658,7 +11970,12 @@ class App:
                     self.session = None
                     self._set_review(Engine(self, session, workers=False))
                 self.publish_running()
-                self.hub.toast("ok", "Meeting saved.")
+                if lost[0]:
+                    self.hub.toast("warn", f"Meeting saved, but the last {lost[0]} sentence(s) ({lost[1]:.0f} s of speech) "
+                                           "could not be written: no speech-to-text service answered in time."
+                                           + (" The meeting sound is kept." if ar is not None else ""))
+                else:
+                    self.hub.toast("ok", "Meeting saved.")
                 self._gpu_reload_if_waiting()
         threading.Thread(target=finish, daemon=True).start()
         return {"ok": True}
@@ -11672,7 +11989,7 @@ class App:
             self.monitor_until = 0.0
             if on:
                 if pyaudio is None:
-                    return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                    return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
                 try:
                     problems, mic, spk = self._start_captures(lambda *a, **k: None, True)
                 except Exception as e:
@@ -11710,8 +12027,9 @@ class App:
         return {"ok": True}
 
     def api_explain(self, entry_id=None, text=""):
-        if not (feat(self.cfg, "translate") or feat(self.cfg, "answers")):
-            return feature_off(self.cfg, "translate")
+        off = feature_off(self.cfg, "translate")          # the meaning of selected words belongs to Translation
+        if off:
+            return off
         eng = self.helper()
         if not eng or entry_id is None:
             return {"ok": False, "error": "There is no transcript yet."}
@@ -12014,7 +12332,7 @@ class App:
             return {"ok": False, "error": "Start the meeting first."}
         text = str(text or "").strip()[:400]
         if not coach_on(eng.cfg):
-            return {"ok": False, "error": "The coach is off (Settings)."}
+            return {"ok": False, "error": "The coach is off (Setup › Features › Coach)."}
         if not eng._help_lock.acquire(blocking=False):
             return {"ok": False, "error": "The coach is still answering. One moment."}
         try:
@@ -12061,11 +12379,14 @@ class App:
         if not live:
             return {"ok": False, "error": "Start the meeting first."}
         if not self.cfg.get("transcribe_me"):
-            return {"ok": False, "error": "Your microphone is not used (Setup › Audio: write what I say)."}
+            return {"ok": False, "error": "Your microphone is not used: turn on Setup › Audio › Transcribe my voice."}
         if not any(getattr(c, "source", "") == "me" for c in (self.captures or [])):
             return {"ok": False, "error": "No microphone is being heard. Choose it in Setup › Audio and start again."}
         ml = self.cfg["my_language"]
         targets = eng.stt_targets("me")
+        if not targets:
+            return {"ok": False, "error": "Say mode needs Groq (free) or a local model to write your words: "
+                                          "add one in Setup › Services."}
         if targets and all(t[0] == "local" for t in targets) and isinstance(LOCAL.model, VoskModel) \
                 and vosk_lang(LOCAL.path or "") != ml:
             return {"ok": False, "error": f"The light Vosk model does not understand {lang_name(ml)}. Use a Whisper model "
@@ -12103,6 +12424,23 @@ class App:
                         self.hub.publish("meeting_found", app=name)
             except Exception as e:
                 log("meeting watch:", short(e, 120), level="debug")
+
+    def api_open_last(self):
+        """Shows the last meeting (after the program was closed and opened again) to read it, summarize it, review it
+        or export it - nothing is listened to; Continue goes on with it."""
+        with self.lock:
+            if self.running or self.stopping or self.recording:
+                return {"ok": False, "error": "Stop first."}
+            s = self.resumable
+            if s is None or not os.path.isfile(s.path):
+                return {"ok": False, "error": "There is no earlier meeting to open."}
+            self.last_session = s
+            self._set_review(Engine(self, s, workers=False))
+        self.hub.publish("session", session_file=s.path, entries=s.ordered(), summary=s.summary, feedback=s.feedback,
+                         coach_notes=s.coach_notes, names=dict(s.names), my_notes=s.my_notes, notes_full=s.notes_full,
+                         has_audio=session_has_audio(s))
+        self.publish_running()
+        return {"ok": True}
 
     def _shown_session(self):
         eng = self.helper()
@@ -12185,7 +12523,7 @@ class App:
             if purpose == "test" and self.voices.me is None:
                 return {"ok": False, "error": "Learn your voice first."}
             if pyaudio is None and not os.environ.get("MA_TEST_MIC_WAV"):
-                return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
             try:
                 import onnxruntime  # noqa: F401
             except Exception:
@@ -12265,7 +12603,7 @@ class App:
         try:
             if not os.path.isfile(voice_model_path()):
                 emit(state="download", note=f"Downloading the voice model ({SPK_MODEL['mb']} MB, once)…", progress=0)
-                dl = ModelDownload(SPK_MODEL, detect_proxy(self.cfg["proxy"])[0],
+                dl = ModelDownload(SPK_MODEL, detect_proxy(self.cfg["proxy"], PAC_HF)[0],
                                    lambda st: emit(progress=round(100 * st['done'] / max(1, st['total'])),
                                                    note=f"Downloading the voice model… {round(100 * st['done'] / max(1, st['total']))}%"))
                 dl.cancel = cancel
@@ -12351,14 +12689,28 @@ class App:
             and lang != c["my_language"] and not (e.get("translation") or "").strip()
         if want_tr:
             fields["tr_state"] = "pending"
+        was = e.get("ans_state")
         if who == "me":
-            fields["ans_state"] = "off" if e.get("ans_state") in ("thinking", "none") else e.get("ans_state")
+            if was in ("thinking", "none", "streaming"):
+                fields.update(ans_state="off", answer="", answer_fa="")    # my own words are not answered
+            if eng is not None:
+                eng.ans_gen[entry_id] += 1                 # an answer being written for it stops
+                with eng.plan_lock:
+                    p = eng.plan
+                if p and p.get("eid") == entry_id:
+                    eng._plan_cancel()
+        ask = (who == "them" and eng is not None and eng is self.engine and self.running and was == "off"
+               and feat(c, "answers") and looks_askable(e.get("text") or "", lang))
+        if ask:
+            fields["ans_state"] = "thinking"
         e = s.update(entry_id, **fields)
         self.hub.publish("entry", entry=e)
         self._session_changed(s)
         if want_tr and eng is not None and not eng._submit_tr(entry_id):
             e = s.update(entry_id, tr_state="error")
             self.hub.publish("entry", entry=e)
+        if ask:
+            eng._plan_answer(e, lang)                      # it was the other person's question: it gets its answer
         self.hub.publish("voice", **self.voices.status())
         return {"ok": True, "entry": e}
 
@@ -12378,6 +12730,12 @@ class App:
             eid = int(entry_id.strip())
         else:
             return {"ok": False, "error": "That line is not in the transcript any more."}
+        eng = self.engine
+        if eid is None and self.running and eng is not None and s is eng.session and self._someone_speaking(eng):
+            # pressed while a sentence is being spoken: THAT sentence is the moment (marked when it is written)
+            eng.mark_when_written(time.time())
+            self.hub.toast("ok", "★ The sentence being spoken now will be marked.")
+            return {"ok": True, "pending": True}
         e = s.mark(eid, on if isinstance(on, bool) else None)
         if not e:
             return {"ok": False, "error": "Nothing has been said yet." if eid is None else "That line is not in the transcript any more."}
@@ -12386,6 +12744,11 @@ class App:
         if eid is None:
             self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
         return {"ok": True, "id": e["id"], "marked": e["marked"]}
+
+    def _someone_speaking(self, eng):
+        if any(getattr(getattr(c, "seg", None), "active", False) for c in list(self.captures)):
+            return True
+        return any(time.time() - t < 1.5 for t in list(eng.live_talk_at.values()))
 
     def api_rename_speaker(self, key="", name="", session_file=None):
         s = self._shown_session()
@@ -12613,7 +12976,7 @@ class App:
         keys = [p["name"] for p in c.get("providers", []) if p.get("api_key")] + (["Groq"] if c.get("api_key") else [])
         add("Services with a key", "ok" if keys else "bad", ", ".join(keys) if keys else "none yet: Setup › Services")
         add("Proxy", "info", "set" if c.get("proxy") else "none (if the services do not answer from your country, set one)")
-        latest = "not in this copy. Download the latest MeetingAssistant.exe from github.com/samaliyan/MeetingAssistant/releases"
+        latest = "not in this copy. Download the latest MeetingAssistant-Setup.exe from github.com/samaliyan/MeetingAssistant/releases and run it"
         gpus = gpu_names()
         if gpus:
             nv = any("nvidia" in g.lower() for g in gpus)
@@ -12637,7 +13000,9 @@ class App:
         add("ffmpeg (for m4a / mp4 files and links)", "ok" if ffp else "warn",
             ("found: " + ffp) if ffp else "not found: only mp3, wav, flac and ogg files can be read, and links do not work. "
             "To install it, open cmd, type this line and press Enter:\nwinget install Gyan.FFmpeg")
-        if overlay_live and sys.platform == "win32":
+        if overlay_live and not feat(self.cfg, "overlay"):
+            add("Overlay test", "info", "The overlay is turned off in Setup › Features.")
+        elif overlay_live and sys.platform == "win32":
             if self.overlay.on:
                 add("Overlay test", "info", "The overlay is already on. Turn it off first (Ctrl+Alt+O).")
             else:
@@ -13080,7 +13445,9 @@ class App:
                 if u != p["base_url"]:
                     p["models"] = []
                 p["base_url"] = u
+            new_key = False
             if isinstance(api_key, str) and clean_key(api_key):
+                new_key = clean_key(api_key) != p.get("api_key")
                 p["api_key"] = clean_key(api_key)
                 forget_kept_secret(("provider", p["id"]))           # a new key replaces one that could not be read
             if use_proxy is not None:
@@ -13088,13 +13455,17 @@ class App:
             res = self._save_and_publish()
             res["id"] = p["id"]
             is_live = p["id"] == self.cfg["stt_provider"]
-        self._revive_services(live=is_live)                        # a fixed key / address works at once
+        relive = is_live and new_key and self._live_kind(p["id"])
+        self._revive_services(live=is_live, streams=not relive)    # a fixed key / address works at once
+        if relive:
+            self._relive()                                         # a working live stream moves to the new key
         return res
 
     def api_remove_provider(self, id=""):
         with self.lock:
             p = self.provider(id)
             self.cfg["providers"] = [x for x in self.cfg["providers"] if x["id"] != id]
+            was_stt = self.cfg["stt_provider"] == id
             for t in TASKS:
                 if self.cfg[f"{t}_provider"] == id:
                     self.cfg[f"{t}_provider"], self.cfg[f"{t}_model"] = "groq", ""
@@ -13109,6 +13480,8 @@ class App:
             forget_kept_secret(("provider", id))
             res = self._save_and_publish()
         self._revive_services()
+        if was_stt:
+            self._relive()                                         # its live streams close; Groq writes from now on
         return res
 
     def api_provider_test(self, id=""):
@@ -13122,7 +13495,7 @@ class App:
             return {"ok": False, "error": "Paste the API key first."}
         if prov.get("kind") == "live":
             try:
-                proxy = detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else ""
+                proxy = detect_proxy(self.cfg["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else ""
                 secs = deepgram_check(prov["api_key"], proxy, seconds=0.5)
             except APIError as e:
                 log(f"{prov['name']} test failed: {e}", level="error")
@@ -13263,7 +13636,7 @@ class App:
         lines = row["lines"]
         base = (prov.get("base_url") or "").rstrip("/")
         if prov.get("kind") == "live":                       # Deepgram: real balance in dollars
-            api = GroqAPI(prov["api_key"], detect_proxy(self.cfg["proxy"])[0] if prov.get("use_proxy", True) else "",
+            api = GroqAPI(prov["api_key"], detect_proxy(self.cfg["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else "",
                           base or "https://api.deepgram.com/v1", prov["name"])
             try:
                 auth = {"Authorization": f"Token {prov['api_key']}"}
@@ -13410,7 +13783,7 @@ class App:
             results.append(row)
 
         def stt_live(prov, model):
-            proxy = detect_proxy(c["proxy"])[0] if prov.get("use_proxy", True) else ""
+            proxy = detect_proxy(c["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else ""
             secs = deepgram_check(prov["api_key"], proxy, model or "nova-3", fixed_lang(c) or "auto")
             return {"detail": f"LIVE — connected in {secs:.1f} s; words appear while they are spoken"}
 
@@ -13456,7 +13829,7 @@ class App:
     def api_find_models(self, kind="llm", sort="popular"):
         """Looks on Hugging Face for models this program can download; shows size, memory and processor needs."""
         kind = "stt" if kind == "stt" else "llm"
-        proxy = detect_proxy(self.cfg["proxy"])[0]
+        proxy = detect_proxy(self.cfg["proxy"], PAC_HF)[0]
         try:
             res = hf_search(kind, "new" if sort == "new" else "popular", proxy)
         except APIError as e:
@@ -13622,7 +13995,7 @@ class App:
             os.makedirs(MODELS_DIR, exist_ok=True)
         except OSError as e:
             return {"ok": False, "error": f"Cannot create the models folder ({short(e, 100)})."}
-        proxy = detect_proxy(self.cfg["proxy"])[0]
+        proxy = detect_proxy(self.cfg["proxy"], PAC_HF)[0]
 
         def progress(st):
             self.hub.publish("download", download=st)
@@ -13742,8 +14115,10 @@ class App:
     def apply_preview(self):
         every, first = self.preview_plan()
         spec = self.spec_plan()
-        for cap in self.captures:
-            if cap.source == "them" and cap.tap is None:
+        caps = list(self.captures)
+        src = "them" if any(c.source == "them" for c in caps) else "me"   # in person: the microphone gets the live text
+        for cap in caps:
+            if cap.source == src and cap.tap is None:
                 cap.preview_every, cap.preview_min = every, first
                 cap.spec_final = spec
                 if cap.seg:
@@ -13907,7 +14282,7 @@ class App:
         except OSError as e:
             return {"ok": False, "error": f"Cannot create the models folder next to the program ({short(e, 100)}). "
                                           "Move the program to a normal folder (not Program Files)."}
-        proxy = detect_proxy(self.cfg["proxy"])[0]
+        proxy = detect_proxy(self.cfg["proxy"], PAC_HF)[0]
 
         def progress(st):
             self.hub.publish("download", download=st)
@@ -14149,14 +14524,20 @@ class App:
                 if c.error and c.error not in self.reported:
                     self.reported.add(c.error)
                     self.hub.toast("error", ("Microphone: " if c.source == "me" else "Computer sound: ") + c.error)
-            self.hub.publish("level", **lv)
+            # only when it changed (2 decimals are what a meter shows): silence sends nothing, the window stays idle
+            key = tuple((k, None if v is None else round(v, 2)) for k, v in sorted(lv.items()))
+            if key != state.get("lv") or now - state.get("lv_t", 0) > 2.0:
+                state["lv"], state["lv_t"] = key, now
+                self.hub.publish("level", **lv)
         if self.monitor_until and now > self.monitor_until:
             with self.lock:
                 if self.monitor_until and not self.running:
                     self._stop_captures()
                 self.monitor_until = 0.0
             self.publish_running()
-        if now - last_save > 3.0:                        # the meeting file: rewritten at most every 3 s
+        # the meeting file: rewritten at most every 3 s (every 10 s in a very long meeting: it is rewritten whole)
+        big = self.session is not None and len(self.session.entries) > 600
+        if now - last_save > (10.0 if big else 3.0):
             last_save = now
             for s in (self.session, self.last_session):
                 if s:
@@ -14483,7 +14864,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(413, json.dumps({"ok": False, "error": "Request too large."}))
         try:
             body = json.loads(self.rfile.read(n) or b"{}") if n else {}
-        except (ValueError, OSError):
+        except (ValueError, OSError, RecursionError):   # (a very deeply nested body too)
             body = None
         if not isinstance(body, dict):              # broken or cut-off request: never act on half of it
             self.close_connection = True
@@ -15385,6 +15766,7 @@ OVERLAY_POS_PATH = os.path.join(DATA_DIR, ".overlay_pos.json")
 OV_KEYS = {"toggle": (0x4F, "O"), "more": (0x21, "PageUp"), "less": (0x22, "PageDown"), "screen": (0x53, "S"), "answer": (0x41, "A"), "coach": (0x48, "H"), "up": (0x26, "Up"), "down": (0x28, "Down"), "prev": (0x25, "Left"), "next": (0x27, "Right"),
            "mark": (0x4B, "K"), "say": (0x4A, "J"), "subs": (0x54, "T")}      # (new keys go at the end: the ids stay)
 OV_MEETING_KEYS = {"mark": "marks", "say": "say"}      # registered only during a meeting (and while that part is on)
+OV_PART_KEYS = {"toggle": "overlay", "screen": "screen", "answer": "answers", "coach": "coach"}  # taken only while on
 
 
 def hotkey_mods(cfg):
@@ -15678,12 +16060,14 @@ class Overlay:
             for i in list(names) + list(arrows) + list(live):
                 u.UnregisterHotKey(None, i)
             names.clear(); arrows.clear(); live.clear()
+        parts_now = None
         while not self.app.closing.is_set():
             mods, prefix = hotkey_mods(self.app.cfg)
-            if mods != mods_now:                                     # first time, or Setup changed the keys
+            parts = tuple(feat(self.app.cfg, p_) for p_ in OV_PART_KEYS.values())
+            if mods != mods_now or parts != parts_now:              # first time, or Setup changed the keys / parts
                 drop_all()
-                tried, live_want, mods_now = False, set(), mods
-                if mods is not None:
+                tried, live_want, mods_now, parts_now = False, set(), mods, parts
+                if mods is not None and feat(self.app.cfg, "overlay"):    # a part that is off takes no key
                     for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
                         if cmd != "toggle":
                             continue                                 # the others only while it is on / in a meeting
@@ -15716,6 +16100,8 @@ class Overlay:
                 for i, (cmd, (vk, label)) in enumerate(OV_KEYS.items(), 1):
                     if cmd == "toggle" or cmd in OV_MEETING_KEYS:
                         continue
+                    if cmd in OV_PART_KEYS and not feat(self.app.cfg, OV_PART_KEYS[cmd]):
+                        continue                                     # (that part is off: its key stays free)
                     once = 0x4000 if cmd in ("screen", "answer", "coach", "more", "less", "subs") else 0   # no auto-repeat for these
                     if u.RegisterHotKey(None, i, mods | once, vk):
                         arrows[i] = cmd
@@ -16021,7 +16407,8 @@ def bring_old_copy(old, data_dir=None):
                           "or choose that folder there.")
     folder = os.path.dirname(old)
     return (f"Your settings{f' and {meetings} saved meetings' if meetings else ''} were brought over from the earlier "
-            f"copy in {folder}.{models} That copy is not needed any more.")
+            f"copy in {folder}.{models} That copy is not needed any more: you can delete that folder (its settings "
+            "file still has your API keys in plain text).")
 
 
 def first_start_of_installed_copy():

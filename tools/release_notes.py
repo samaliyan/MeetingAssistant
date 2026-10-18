@@ -11,5 +11,5 @@ if not m or not m.group(1).strip():
     sys.exit(f"CHANGELOG.md has no section for version {version} - add it before releasing")
 body = m.group(1).strip()
 sys.stdout.reconfigure(encoding="utf-8")
-print(body + "\n\nDownload **MeetingAssistant.exe**, put it in its own folder and run it. "
-      "Full guide: Guide-EN.md (English) or Guide-FA.md (Persian).")
+print(body + "\n\nDownload **MeetingAssistant-Setup.exe** and run it (it installs or updates the program; your settings, "
+      "meetings and models are kept). Full guide: Guide-EN.md (English) or Guide-FA.md (Persian).")

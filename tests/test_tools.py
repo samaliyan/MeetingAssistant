@@ -1109,7 +1109,7 @@ def test_help_key_is_single_flight(app):
     r = a.api_coach_help("x")
     assert not r["ok"] and "still" in r["error"]
     eng._help_lock.release()
-    eng.cfg["coach"] = False
+    eng.cfg["features"] = {"coach": False}                        # 6.35: one switch (Setup › Features › Coach)
     assert "off" in a.api_coach_help("x")["error"]
 
 
@@ -2605,6 +2605,7 @@ def test_say_mode_routes_my_speech_to_a_sentence(app):
     eng.app.hub = hub
     eng.cfg["my_language"] = "fa"
     eng.cfg["languages"] = ["en"]
+    eng.cfg["api_key"] = "gsk_test"
     try:
         seen = {}
 
@@ -2671,6 +2672,11 @@ def test_say_mode_action_checks(app):
         class Cap: source = "me"
         a.captures = [Cap()]
         a.hub = _RecHub()
+        eng.cfg["api_key"] = ""
+        eng.cfg["stt_provider"] = "groq"
+        res = a.api_say_mode(on=True)                                     # nothing could write my words: refused
+        assert not res["ok"] and "Groq" in res["error"] and not eng.say_mode
+        eng.cfg["api_key"] = "gsk_test"
         assert a.api_say_mode(on=True) == {"ok": True, "on": True} and eng.say_mode
         assert any("mute" in t.lower() for _, t in a.hub.toasts)
         assert a.api_say_mode() == {"ok": True, "on": False} and not eng.say_mode     # the key switches it

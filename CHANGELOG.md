@@ -2,6 +2,107 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.35]
+
+A strict review of the whole program by six independent reviewers (processes, display, flow, features and their
+switches, performance, security and setup), every finding checked, the real ones fixed, and the fixes reviewed again.
+
+**While you read, nothing moves**
+- **The answer you are reading is never replaced.** A new question waits in a yellow bar ("New question Q5 — Show now
+  Space") while the mouse is on the answer, while you speak, for 3 seconds after you stop, and — if you have not spoken
+  yet — for 30 seconds after the answer appeared. Then it comes by itself. **Space** (or a click on the bar, or
+  Ctrl + →) shows it at once. In the see-through window the bar says Ctrl+Alt+→.
+- **The coach is two short lines while an answer is shown**: its state ("Your turn · the answer is ready", your time,
+  Ask F4, Details) and the most important thing now — a warning, "now 1:40 · aim 1:00–2:00 · wrap up", or its tip. Its
+  height never changes, so the answer never jumps when you start speaking or when the next question arrives. The
+  waiting question sits in the answer's header, so it does not push the answer down either.
+- **The answer always keeps room:** at least 40 % of its card, in small and narrow windows and at 150 % text too (the
+  question block, coach and notes give way). Narrow windows give the answer 70 % of the height.
+- The "Writing…" badge says which question it is for ("Writing the answer to Q3…").
+- During a meeting messages are slim lines over the status bar at the bottom (never over what is said, the answer
+  or its buttons), at most two; problems close by themselves after 25 seconds (the log keeps them). A small answer
+  area makes the question above it shorter (one line, a click shows it all), so the answer stays in view.
+
+**Easier and safer to use**
+- **F9 during a meeting must be pressed twice** (within 3 seconds) to stop it — one slip of the finger never ends the
+  interview. The Stop button still stops at once.
+- **The mode (Meeting / In person / Video) is chosen before the meeting**: the switch is not in the header while a
+  meeting runs (one click could drop the microphone). The mode bar is one short line during the session.
+- **After Stop** a bar offers **Summary · How did I do? · Export**.
+- **The last meeting after a restart**: the start screen has **Open the last meeting** — read it, summarize it, review
+  it or export it, without listening.
+- **Start shows "Starting… checking"**; if the services cannot be reached, the message has **Start anyway** and
+  **Open Services** buttons (no hidden "press Start again").
+- The status says **Setup needed** or **Offline** instead of "Ready" when nothing would work; the start screen shows the
+  meeting language (with a Change button).
+- **Say mode** shows "Say mode ON · F6 ends" on its button for as long as it is on.
+- F2 works while you type in My notes; F8 and Shift+F9 say why when there is nothing to pause or continue.
+- **F7 while someone is speaking** marks that sentence (when it is written), not the line before it.
+- Help (?) and Setup › Display list the same keys, all of them (F2–F10, Space, Esc, the keys from any program), and
+  only for the parts that are on; the help fits short windows.
+- The Video mode has one name everywhere, and the film's sound is called "Video", not "Person 1".
+- "Forget my voice" asks first.
+- New users: the meeting language is English only, and your own lines are not translated (you can change both).
+
+**Every part can be turned off — and then it is really off**
+- A part that is off takes **no global key**: Ctrl+Alt+O only while the Overlay is on; the overlay's S / A / H only
+  while Screen reading / Answers / Coach are on.
+- **"Translation while they speak: Sentence end"** now really sends no translation while they speak — with every
+  service (Groq and OpenAI previews ignored it).
+- The settings, help lines and buttons of a part that is off are hidden (Answers, Overlay, Screen reading, Summary
+  scores, search "also answer my question", Try the overlay, meeting reminder words).
+- **The coach has one switch** (Setup › Features › Coach); the old second switch "Interview situation card" is gone
+  (if you had turned it off, the coach stays off).
+- Translations, answers and say-it sentences that were still waiting when you turn the part off are not sent.
+- Start needs a service only for the parts that work during the meeting (prep, the review and full notes say it when
+  you use them).
+- Changed on purpose: "Explain" (the meaning of selected words) belongs to Translation — it is off when Translation is
+  off; the check of your reply (length, pace, filler words) belongs to the Coach.
+
+**Nothing gets lost**
+- **Stop no longer throws away the last sentences** when a service was slow or at its free limit: it keeps writing them
+  (up to 1½ more minutes while they still move) and says so; anything that still could not be written is told with
+  its length.
+- **A recording says "Incomplete"** when parts of it could not be written (it said "done"). In fast file mode a piece
+  the local model cannot read is skipped and named; the rest of the file is still read.
+- **"Continue last" always continues the newest meeting** — a late summary or review of an older meeting no longer
+  takes its place.
+- **Waiting pieces are joined only when they follow each other** (within 4 seconds, nothing of the other side in
+  between): in-person mode never joins different people's sentences into one line, and a line never spans your reply.
+- Changing the audio device during a live (Deepgram) meeting no longer writes a sentence twice or shows a false
+  "No speech-to-text service" message.
+- A live stream that fails no longer writes its last words twice.
+- The kept meeting sound starts a new part after a long sleep instead of writing hours of silence (which lost the
+  sound after waking).
+- Changing a line to "me" stops its answer; changing it to the other person gives a question its answer.
+
+**Live service (Deepgram) and network**
+- A **403 from Deepgram** that is a network block (VPN off) is no longer taken for a wrong key: the stream is tried
+  again. Broken live streams are tried again every minute for the whole meeting (it stopped after about 10 minutes),
+  with one message instead of twelve, and "Live text is back" when it works.
+- Changing the speech-to-text service, its key, the meeting language or speaker separation during a meeting moves the
+  live streams to the new settings at once.
+- Say mode is refused (with the reason) when only a live service could write your words.
+- A Windows **PAC setup script** is asked for each service's own address (Deepgram, Hugging Face …), and an answer
+  that is not known yet is never kept as "direct".
+- Answers and say-it have their own threads: they never wait behind a pile of translations.
+- The echo check also waits for the other side's live sentence.
+
+**Security and setup**
+- **Keys from before 6.34 are encrypted at once** at the first start (and the backup copy too), not at the next change.
+- **Uninstall** with "also delete my settings" deletes only the Data folder (it deleted the whole program folder — a
+  problem if it was an existing folder with other files).
+- Changing only the address or port of a proxy keeps its saved password (it saved a literal "***").
+- A web page (block page) answered instead of a model file is never kept as the model.
+- Release notes and Check this computer name MeetingAssistant-Setup.exe.
+
+**Faster in long meetings** (measured with 2000 lines on a slow laptop simulation)
+- A change in the transcript no longer makes the browser re-check the whole page (one style rule did that: 1.3 s
+  delay per line → about 0.1 s).
+- Grouping and drawing only look at the newest lines; the window is told about streamed text about 7 times a second,
+  not 16; changing a setting no longer redraws every line; the see-through window builds only the last lines; sound
+  levels are sent only when they change; very long meetings are saved every 10 s (every 3 s below 600 lines).
+
 ## [6.34]
 
 The open points of the last audit, fixed and checked one by one.
