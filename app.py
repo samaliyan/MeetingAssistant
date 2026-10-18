@@ -990,11 +990,11 @@ def pac_proxy(url="https://api.groq.com/"):
     now = time.time()
     with _pac_lock:
         hit = _pac_cache.get(url)
-        ev = _pac_busy.get(url)
-        mine = False
+        busy = _pac_busy.get(url)
+        ev, began = busy if busy else (None, now)
         if (hit is None or now - hit[0] >= 300) and ev is None:
-            ev = _pac_busy[url] = threading.Event()
-            mine = True
+            ev = threading.Event()
+            _pac_busy[url] = (ev, now)
 
             def look(ev=ev):
                 res = ""
@@ -1010,8 +1010,8 @@ def pac_proxy(url="https://api.groq.com/"):
                     log(f"Windows proxy from the setup script (PAC): {mask_proxy(res)}")
                 ev.set()
             threading.Thread(target=look, daemon=True, name="pac").start()
-    if hit is None and ev is not None:               # the very first time everybody waits for it (at most 3 s)
-        ev.wait(3.0)
+    if hit is None and ev is not None:               # the very first time: wait for it, at most 3 s after it began
+        ev.wait(max(0.0, 3.0 - (time.time() - began)))  # (a lookup that hangs never makes every request wait again)
         with _pac_lock:
             hit = _pac_cache.get(url)
     return hit[1] if hit else None                   # None: not known yet (it is never cached as "direct")
@@ -1706,7 +1706,7 @@ class MeetingAudio:
             if st is None:
                 st = self.files[source] = self._open(source, now - len(y) / 16000)
             gap = (now - len(y) / 16000) - (st["t0"] + st["n"] / 16000)
-            if gap > 60:
+            if gap > 600:
                 # a long break (the PC slept): a new part with its own start time instead of minutes of silence
                 # (writing hours of silence would hold this thread while new sound piles up and is lost)
                 try:
@@ -3188,6 +3188,7 @@ class DeepgramLive:
                     if m.get("is_final"):
                         if words:
                             self.words = (self.words + " " + words).strip()
+                            self.final_end = end                 # the live service answered up to here
                             if self.diarize:
                                 for w in alt.get("words") or []:
                                     sp = w.get("speaker") if isinstance(w, dict) else None
@@ -3205,9 +3206,9 @@ class DeepgramLive:
                     raise Transient("Live service error: " + short(m.get("description") or m.get("err_msg") or m))
         except Exception as e:
             if not self.stop_event.is_set():
-                if self.words:
-                    self._finish(self.sent)                 # the words already heard first: the backup service
-                self._fail(e)                               # then only writes what comes after them
+                if self.words:                              # the words already heard first (ending where the service
+                    self._finish(getattr(self, "final_end", 0.0) or self.sent)   # answered): the backup service
+                self._fail(e)                               # then writes only what comes after them
         if self.words:
             self._finish(self.sent)
 
@@ -6873,7 +6874,7 @@ class Session:
             return
         me = (self.started.timestamp(), self.path)
         own = LAST_OWNER[0]
-        if own and own[1] != self.path and own[0] > me[0] and os.path.exists(LAST_MEETING):
+        if own and own[1] != self.path and own[0] > me[0] and own[0] < time.time() + 3600 and os.path.exists(LAST_MEETING):
             return                                              # a late save of an older meeting (summary, review…)
         self.state_t = time.time()
         try:
@@ -8155,6 +8156,8 @@ class Engine:
             return self._start_live(captures, retry_dead)
 
     def _start_live(self, captures, retry_dead):
+        if getattr(self, "live_closed", False):
+            return                                          # the meeting is ending
         pid = self.cfg["stt_provider"]
         prov = self.app.provider(pid)
         if not prov or prov.get("kind") != "live" or not prov.get("api_key"):
@@ -8531,12 +8534,20 @@ class Engine:
             self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")
         elif kind == "segment":
             if not self.stt_targets(source):
-                # only a live service writes this source and it is not running at this moment (reopening):
-                # nothing else could ever take this sentence, so it is not left waiting for 5 minutes
+                # no service can write it now (only a live service is set and it is reopening, or the key was removed):
+                # it is not left waiting for 5 minutes - it is counted as lost and the user is told once
                 self._mark_done([seg_id])
                 self.previews.pop(seg_id, None)
                 self.hub.publish("speaking", seg=seg_id, source=source, phase="discard")
-                log("a sentence was heard while the live service was reopening and no backup service is set", level="warn")
+                self.dropped[0] += 1
+                self.dropped[1] += float(kw.get("dur") or 0.0)
+                log("a sentence could not be written: no speech-to-text service can take it now", level="warn")
+                reopening = ((self.app.provider(self.cfg["stt_provider"]) or {}).get("kind") == "live"
+                             and source not in self.live_dead)       # (a device change: back in a second)
+                if not reopening and time.time() - getattr(self, "no_stt_told", 0.0) > 120:
+                    self.no_stt_told = time.time()
+                    self.hub.toast("error", "Nothing can write what is said right now: no speech-to-text service is "
+                                            "working. Check Setup › Services (Groq is free).")
                 return
             st = self.previews.get(seg_id)
             if (st and st.get("text") and st.get("by") == "local" and st.get("spec") and not st.get("busy")
@@ -8689,7 +8700,7 @@ class Engine:
                 self.cv.wait(0.2)
         return None, None
 
-    def _adjacent(self, job, o, gap=1.5):
+    def _adjacent(self, job, o, gap=4.0):
         """o follows job closely (same speaker kept talking) and no line of the other side lies between them."""
         if o["t0"] < job["t0"] or o["t0"] - job["t_end"] > gap:
             return False
@@ -8864,7 +8875,7 @@ class Engine:
             self.lang_guess = detected
 
         if not text:
-            return self._drop(job)
+            return self._drop(job, lost=False)              # (a cough, music: no words)
         self.accept_text(source, text, detected or "", job["t0"], job["t_end"], job["segs"], job.get("timing", {}))
 
     def mark_when_written(self, at):
@@ -8884,7 +8895,8 @@ class Engine:
             if not self.mark_wait or self.mark_wait[0] != at:
                 return
             self.mark_wait = None
-        e = self.session.mark(None)
+        rows = [r for r in self.session.ordered() if r["t0"] <= at + 1 and (r.get("text") or "").strip()]
+        e = self.session.mark(rows[-1]["id"], True) if rows else None    # the newest line from before the key press
         if e:
             self.hub.publish("entry", entry=e)
             self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
@@ -8918,7 +8930,7 @@ class Engine:
                 self.echo_warned = True
                 self.hub.toast("warn", "Your microphone is hearing the other person's voice. "
                                        "Use headphones for a clean transcript.")
-            return self._drop(job)
+            return self._drop(job, lost=False)
 
         text = apply_glossary(text, glossary_terms(self.cfg))
         self.last_text[source] = text
@@ -9077,11 +9089,12 @@ class Engine:
             self.tr_inflight -= 1
         return False
 
-    def _drop(self, job):
-        """A sentence that will not be written: its row disappears and its free-plan request is given back."""
+    def _drop(self, job, lost=True):
+        """A sentence that will not be written: its row disappears and its free-plan request is given back.
+        lost=False: nothing was lost (no words in it, or an echo of the other side) - it is not counted as lost."""
         if job.get("qh"):
             self._refund(job.get("qt"), job.pop("qh"))
-        if not job.get("say"):
+        if lost and not job.get("say"):
             self.dropped[0] += len(job["segs"])
             self.dropped[1] += float(job.get("dur") or 0.0)
         self._mark_done(job["segs"])
@@ -9963,8 +9976,10 @@ class Engine:
         (a free limit or a slow model at the very end must not throw the last answers away). on_wait(n) is called once
         when that longer wait begins. Returns (sentences, seconds of speech) that could not be written."""
         end = time.time() + timeout
-        if self.live:
+        with self.live_lock:
+            self.live_closed = True                         # (no stream may be opened after this: none is left open)
             streams = list(self.live.values())
+        if streams:
             for lv in streams:
                 lv.stop()                                   # sends what is queued, then waits for the last words
             for lv in streams:
@@ -9982,7 +9997,7 @@ class Engine:
                     now_ = (len(self.pending), self.busy, len(self.done_order))
                     if now_ != seen:
                         seen, moved = now_, time.time()
-                    elif time.time() - moved > 45:
+                    elif time.time() - moved > 30:
                         break                                   # nothing moves any more: waiting longer helps nobody
                     if self.fatal or (self.pending and not self.busy
                                       and all(self._no_stt_left(j["source"]) for j in self.pending)):
@@ -11395,7 +11410,7 @@ class App:
         if changed_net:
             self.warm_async()
         if changed_svc:
-            self._revive_services(live=changed_live)
+            self._revive_services(live=changed_live, streams=not relive)
         if relive:
             self._relive()
         if changed_hk:
@@ -11434,6 +11449,7 @@ class App:
                     eng.live_dead.clear()
                     eng.live_fatal.clear()
                     eng.live_retries.clear()
+                    eng.live_told.clear()                      # (a problem of the new stream is told again)
                     for src, lv in old:
                         for c in list(self.captures):
                             if c.source == src and c.tap == lv.feed:
@@ -11447,7 +11463,7 @@ class App:
                 log("live streams could not be changed:", short(e, 120), level="warn")
         threading.Thread(target=run, daemon=True, name="live-change").start()
 
-    def _revive_services(self, live=False):
+    def _revive_services(self, live=False, streams=True):
         """A service or model was changed in Setup (a fixed address, a new key …): the ones that failed are tried
         again now, during this meeting, instead of staying off until the next one."""
         for eng in {id(e): e for e in (self.engine, getattr(self.recording, "engine", None)) if e is not None}.values():
@@ -11456,7 +11472,7 @@ class App:
                 eng.models.dead.clear()
             eng.stt_dead.clear()
             dead = set(eng.live_dead) - (set() if live else set(eng.live_fatal))
-            if dead and not eng.stop_event.is_set():                # a live service with a new key: open it again
+            if dead and streams and not eng.stop_event.is_set():   # (streams=False: _relive opens them)                # a live service with a new key: open it again
                 if live:
                     eng.live_fatal.clear()                          # (refused for good: only after its own key changed)
                 caps = [c for c in list(self.captures) if getattr(c, "source", "") in dead]
@@ -11567,10 +11583,10 @@ class App:
         st = self.task_status()
         return [st[t]["label"] + (f" ({st[t]['why']})" if st[t]["why"] else "") for t in tasks if not st[t]["ok"]]
 
-    def used_services(self):
+    def used_services(self, at_start=False):
         c = self.cfg
         used = []
-        for t in self.needed_tasks():                       # (a part that is turned off needs no service)
+        for t in self.needed_tasks(at_start=at_start):                       # (a part that is turned off needs no service)
             pid = c[f"{t}_provider"]
             if (self.provider(pid) or {}).get("kind") in ("live", "local", "llm"):
                 continue
@@ -11670,7 +11686,7 @@ class App:
         Returns an error text, or "" when everything is fine. Pressing Start a second time within 90 s starts
         anyway (a slow connection, or a key that only lacks the permission to list models)."""
         try:
-            services = self.used_services()
+            services = self.used_services(at_start=True)      # (only what the meeting itself needs is checked)
         except Exception:
             return ""
         if time.time() - self.preflight_fail < 90 or not services:
@@ -11940,7 +11956,7 @@ class App:
             lost = (0, 0.0)
             try:
                 before = tuple(engine.dropped)
-                after = engine.finish(patient=150, on_wait=lambda n: self.hub.toast(
+                after = engine.finish(patient=90, on_wait=lambda n: self.hub.toast(
                     "info", f"Writing the last {n} sentence(s) before saving — this can take a minute…"))
                 lost = (after[0] - before[0], after[1] - before[1])
             finally:
@@ -13439,8 +13455,9 @@ class App:
             res = self._save_and_publish()
             res["id"] = p["id"]
             is_live = p["id"] == self.cfg["stt_provider"]
-        self._revive_services(live=is_live)                        # a fixed key / address works at once
-        if is_live and new_key and self._live_kind(p["id"]):
+        relive = is_live and new_key and self._live_kind(p["id"])
+        self._revive_services(live=is_live, streams=not relive)    # a fixed key / address works at once
+        if relive:
             self._relive()                                         # a working live stream moves to the new key
         return res
 

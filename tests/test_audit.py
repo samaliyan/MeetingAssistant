@@ -51,6 +51,7 @@ def test_a_dropped_sentence_is_counted_but_a_say_sentence_is_not(app):
     try:
         eng._drop(_job(np, 1, "them", time.time(), dur=2.0))
         eng._drop(_job(np, 2, "me", time.time(), dur=1.0, say=True))
+        eng._drop(_job(np, 3, "them", time.time(), dur=1.5), lost=False)     # a cough: no words, nothing lost
         assert eng.dropped == [1, 2.0]
     finally:
         eng.stop_event.set()
@@ -256,3 +257,47 @@ def test_a_web_page_is_never_kept_as_a_model_file(app, tmp_path):
         f.write('{"a": 1}')
     assert app.download_looks_real(good) and app.download_looks_real(real_json)
     assert not app.download_looks_real(page)
+
+
+def test_a_cough_at_the_end_is_not_reported_as_lost(app):
+    np = app.np
+    eng, sess, _ = _engine(app)
+    try:
+        class Api:
+            def transcribe(self, *a):
+                return {"text": "", "segments": []}
+        eng.app.get_api = lambda pid: Api()
+        eng.app.note_request = lambda: None
+        eng._process(_job(np, 1, "them", time.time() - 2), ("groq", "whisper-large-v3"))
+        assert eng.dropped == [0, 0.0]
+    finally:
+        eng.stop_event.set()
+
+
+def test_a_failing_live_stream_hands_unanswered_sentences_to_the_backup(app):
+    lv = app.DeepgramLive.__new__(app.DeepgramLive)
+    got = []
+    lv.words, lv.utt_start, lv.utt, lv.sid, lv.source, lv.diarize = "hello there", 1.0, 0, 1, "them", False
+    lv.final_end, lv.sent = 2.5, 30.0                      # words answered up to 2.5 s; 30 s of sound were sent
+    lv._wall = lambda t, end=False: 1000.0 + t
+    lv.on_final = lambda k, t0, t1, text: got.append((t0, t1, text))
+    lv._finish(getattr(lv, "final_end", 0.0) or lv.sent)
+    assert got == [(1001.0, 1002.5, "hello there")]         # not "heard up to 30 s": the rest goes to the backup
+
+
+def test_f7_while_someone_speaks_marks_that_sentence(app):
+    eng, sess, _ = _engine(app)
+    try:
+        t = time.time()
+        old = sess.add("them", t - 20, t - 15, "An earlier line.", "en", [1])
+        eng.mark_when_written(t)
+        eng.cfg["features"] = {"translate": False, "answers": False}
+        eng.accept_text("them", "The sentence being spoken when F7 was pressed.", "en", t - 1, t + 3, [2], {})
+        rows = sess.ordered()
+        assert [r["marked"] for r in rows] == [False, True] and eng.mark_wait is None
+        eng.mark_when_written(t + 10)                       # nothing comes: the newest line from before is marked
+        later = sess.add("them", t + 30, t + 32, "Said after the key.", "en", [3])
+        eng._mark_fallback(t + 10)
+        assert [r["marked"] for r in sess.ordered()] == [False, True, False]
+    finally:
+        eng.stop_event.set()

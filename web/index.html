@@ -249,14 +249,19 @@ body.subs .entry.cont.has-tr .fa,body.subs .entry.cont.pending.has-tr .live-fa{m
 /* ---------- answer panel ---------- */
 .answer-card .card-head h2 svg{color:var(--amber)}
 .thinking{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;color:var(--amber);background:var(--amber-soft);border:1px solid var(--amber-border);padding:2px 9px;border-radius:999px}
-.answer-body{flex:1 1 auto;overflow-y:auto;padding:16px 18px;min-height:max(40%,7.5em)}
+.answer-body{flex:1 1 auto;overflow-y:auto;padding:16px 18px;min-height:max(38%,6em)}
+.answer-card{overflow:hidden}                       /* (nothing of it is ever drawn over the transcript or the status bar) */
 .answer-card > :not(.answer-body){flex-shrink:0}
-.answer-card .notes[open]{max-height:30%;overflow:auto}
+.answer-card > .coach,.answer-card > .saycard,.answer-card > .notes{flex-shrink:1;min-height:0;overflow:auto}   /* these give way first */
+.answer-card .notes[open]{max-height:30%}
 .answer-body.more{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 18px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 18px),transparent)}
 .q-block{padding:8px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);margin-bottom:10px}
 .q-label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;display:flex;gap:6px}
-.q-orig{margin:0;font-size:1.02rem;line-height:1.5;color:var(--text-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.q-block.open .q-orig{-webkit-line-clamp:unset}.q-orig{cursor:pointer}
+.q-orig{margin:0;font-size:1.02rem;line-height:1.5;color:var(--text-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.q-block.open .q-orig,.q-block.open .q-fa{-webkit-line-clamp:unset}.q-orig,.q-fa{cursor:pointer}
+/* the question never takes the answer's place: its translation at most 3 lines (a click shows all of it) */
+.answer-body .q-fa{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+@media (max-height:760px),(max-width:980px){ .answer-body .q-orig{-webkit-line-clamp:1} .answer-body .q-fa{-webkit-line-clamp:2} }
 .q-fa{margin:4px 0 0;font-family:var(--font-tr);color:var(--text);font-size:1.15rem;line-height:1.8;font-weight:500;text-align:start}
 .a-text{font-size:var(--answer-size);line-height:1.5;font-weight:500;letter-spacing:-.005em;color:var(--text);overflow-wrap:anywhere;margin:0;white-space:pre-wrap;max-width:66ch}
 .a-lead{font-weight:700;color:var(--text)}
@@ -279,7 +284,7 @@ body.subs .entry.cont.has-tr .fa,body.subs .entry.cont.pending.has-tr .live-fa{m
 .answer-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
 body.ov{background:#414958;color:#e9edf3;overflow:hidden}
 body.ov #ovBox{position:fixed;inset:0;display:flex;flex-direction:column;padding:8px 12px;background:#414958;border:1px solid rgba(255,255,255,.14);box-sizing:border-box}
-body.ov #newQ{margin:0 0 6px;padding:2px 8px;font-size:.8rem;background:#57607a;border:0;color:#e9edf3}
+body.ov #newQ{position:absolute;top:4px;right:8px;z-index:3;max-width:60%;margin:0;padding:2px 8px;font-size:.8rem;background:#57607a;border:0;border-radius:8px;color:#e9edf3}
 body.ov #newQ span,body.ov #newQ u{display:none}
 body.ov .answer-body{padding:2px 4px;opacity:max(.6,calc(var(--ovtext,85) / 100));text-shadow:0 1px 2px rgba(0,0,0,.45);flex:1 12 auto;min-height:2.4em;overflow-y:auto}
 body.ov .q-label,body.ov .a-fa-label,body.ov .rep-note{display:none}
@@ -327,7 +332,7 @@ body.inperson #mThem{display:none}
 .modebar .mb-icon{display:inline-flex}
 .modebar .mb-text{flex:1 1 320px;min-width:0;font-size:.92rem;line-height:1.5}
 .modebar.short{padding:5px 12px;flex-wrap:nowrap}
-.modebar.short .mb-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modebar.short .mb-text{line-height:1.4}
 .modebar .mb-text span{color:var(--text-2)}
 .note-box{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;margin-bottom:10px;border-radius:10px;background:var(--accent-soft);color:var(--accent-text);font-size:.88rem;line-height:1.5}
 .note-box[hidden]{display:none}
@@ -349,6 +354,9 @@ body.ov.subs #ovSub{flex:1 1 auto;min-height:0;display:flex;flex-direction:colum
 #ovSub .sub-empty{color:#c9d0db;opacity:.75;font-size:.9rem;text-align:center}
 .coach{max-height:min(34vh,40%);overflow-y:auto;flex:none;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);display:grid;gap:6px;font-size:.88rem}
 .coach.compact .co-body > :not(#coHelp){display:none}
+.co-one{display:none;height:1.55em;line-height:1.55em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-2);cursor:pointer}
+.coach.compact .co-one{display:block}
+.co-one.alert{color:var(--danger);font-weight:600} .co-one.over{color:var(--warn);font-weight:600}
 .co-name{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);flex:none}
 .co-top .co-more kbd{margin-inline-start:4px}
 .co-more{margin-inline-start:auto;min-height:28px;padding:2px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--accent-text);font:inherit;font-size:.86rem;font-weight:600;cursor:pointer}
@@ -423,6 +431,9 @@ body.ov.subs #ovSub{flex:1 1 auto;min-height:0;display:flex;flex-direction:colum
 .endbar .eb-acts{display:flex;gap:6px;flex-wrap:wrap;flex:1}
 .endbar .cx-x{border:0;background:none;color:var(--muted);cursor:pointer;font-size:1.1rem;line-height:1;padding:2px 6px}
 .newq{display:flex;gap:8px;align-items:center;padding:8px 14px;background:var(--warn-soft);color:var(--text);border-top:1px solid var(--border);border-bottom:1px solid var(--border);font-size:.82rem;cursor:pointer}
+.card-head .newq{flex:1 1 auto;min-width:0;padding:4px 10px;border:1px solid var(--amber-border);border-radius:999px;white-space:nowrap}
+.card-head .newq b{flex:none}
+.card-head.q-wait .ans-title,.card-head.q-wait #thinking{display:none}
 .newq span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .newq u{color:var(--accent);white-space:nowrap}
 .ans-nav{display:inline-flex;align-items:center;gap:2px;font-size:.78rem;color:var(--muted)}
@@ -452,11 +463,14 @@ body.ov.subs #ovSub{flex:1 1 auto;min-height:0;display:flex;flex-direction:colum
 
 /* ---------- toasts ---------- */
 .toasts{position:fixed;bottom:46px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60;width:min(400px,calc(100vw - 32px))}
-/* during a meeting: at the top of the transcript (its oldest lines), never over the newest line, the answer or the buttons */
-body.capturing .toasts{right:auto;left:16px;bottom:auto;top:172px;width:min(380px,calc(50vw - 40px))}
-body.capturing.focus .toasts{top:64px}            /* (over the answer card's title, never over its buttons) */
 .toasts{pointer-events:none} .toasts .toast{pointer-events:auto}   /* the empty space around messages never blocks a click */
-@media (max-width:980px){body.capturing .toasts{top:auto;bottom:46px;width:min(400px,calc(100vw - 32px))}}
+/* during a meeting: slim messages over the status bar at the bottom - never over what is said, the answer or its
+   buttons (at most two, two lines each; the log keeps the whole text) */
+body.capturing .toasts{right:auto;left:8px;top:auto;bottom:3px;width:min(560px,calc(60vw - 16px));gap:4px}
+body.capturing .toast{padding:4px 10px;font-size:.8rem;line-height:1.35;box-shadow:var(--shadow);align-items:center}
+body.capturing .toast .msg{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+body.capturing .toast .msg .act-btn,body.capturing .toast .msg br{display:none}
+body.capturing .toast .act-inline{display:inline-block;margin:0 0 0 8px;padding:1px 8px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer;flex:none}
 body.modal-open .toasts{bottom:auto;top:16px;left:auto;right:16px}   /* a dialog is open: messages at the top, never on its buttons */
 body.drawer-open .toasts{right:calc(min(560px,100vw) + 16px)}   /* never on top of Setup */
 @media (max-width:980px){body.drawer-open .toasts{right:auto;left:16px;bottom:16px}}
@@ -579,6 +593,7 @@ body.capturing #modeSeg,body.capturing #mbLeave{display:none}
 body.f-answers-off .notes textarea{min-height:34vh}
 .notes .n-actions{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
 .stat-list{font-size:.84rem;color:var(--text-2);margin:-2px 0 10px}
+.toast .act-inline{display:none}
 .toast .act-btn.ghost{background:transparent;color:var(--accent);margin-inline-start:8px}
 .toast .act-btn{margin-top:6px;display:inline-block;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:8px;padding:3px 12px;font:inherit;font-weight:600;cursor:pointer}
 body.ov .saycard{margin:0 0 6px;border-color:#9fb4e0;background:rgba(0,0,0,.18);color:#eef1f6}
@@ -854,6 +869,10 @@ body.focus .layout > section.card{display:none}
 body.focus .answer-card{width:min(1100px,100%);margin:0 auto;order:0}
 body.focus .q-orig{font-size:1.2rem;-webkit-line-clamp:unset}
 body.focus .q-fa{font-size:1.5rem}
+body.focus .answer-body .q-fa{-webkit-line-clamp:unset}
+.q-block.tight .q-orig,.q-block.tight .q-fa{-webkit-line-clamp:1}
+.q-block.tighter .q-orig{display:none}
+.q-block.tight{padding-top:5px;padding-bottom:5px;margin-bottom:6px}
 body.focus .nowstrip{display:block;border-top:1px solid var(--border);padding:10px 18px;background:var(--surface-2)}
 .nowstrip .ns-h{display:flex;gap:8px;align-items:center;font-size:.76rem;color:var(--muted);margin-bottom:2px}
 .nowstrip .ns-o{margin:0;font-size:.95rem;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1065,6 +1084,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       </div>
       <div class="coach" id="coach" hidden>
         <div class="co-top"><b class="co-name">Coach</b><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-more" id="coAskTop" title="Ask the coach what to do now (F4)">Ask <kbd>F4</kbd></button><button class="co-more" id="coMore" aria-expanded="false">Details</button></div>
+        <div class="co-one" id="coOne" role="button" tabindex="0" title="Open the coach's details"></div>
         <div class="co-body" id="coBody">
           <div class="co-how" id="coHow" hidden></div>
           <div class="co-chips" id="coChips"></div>
@@ -1483,7 +1503,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <div class="seg" data-key="hotkeys" style="margin-top:6px"><button data-val="ctrl_alt">Ctrl + Alt</button><button data-val="ctrl_alt_shift">Ctrl + Alt + Shift</button><button data-val="off">Off</button></div>
           <div class="help">On some keyboards Ctrl + Alt is the AltGr key (Polish ó ą ś, German € @ …): then those letters cannot be typed while the program holds them. Choose Ctrl + Alt + Shift, or Off and use the buttons (with Off only <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>M</kbd> stays, to move the see-through window). F2–F10 in this window always work.</div></div>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Video mode — subtitles (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. The same as the Video button at the top (before a meeting), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
-        <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
+        <label class="toggle" style="margin-top:8px" data-part="overlay"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
         <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd>, then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place.</div>
       </div>
       <div class="field">
@@ -1813,7 +1833,7 @@ function stopPlay(){                                      // a line still playin
 }
 function clearTranscript(){
   stopPlay();
-  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.coach = null; S.check = null; S.coHelp = null; S.coTok = (S.coTok || 0) + 1; S.meStart = 0; S.coLiveHtml = S.coChipHtml = ""; S.pinned = false; S.queued = null; $("#newQ").hidden = true; S.ctxHidden = null; $("#ctxBar").hidden = true;
+  S.entries.clear(); S.pend.forEach(p=>p.remove()); S.pend.clear(); list.innerHTML = ""; S.panelId = null; S.coach = null; S.check = null; S.coHelp = null; S.coTok = (S.coTok || 0) + 1; S.meStart = 0; S.coLiveHtml = S.coChipHtml = ""; S.pinned = false; clearQueued(); S.ctxHidden = null; $("#ctxBar").hidden = true;
   S.newBelow = 0; setJump(); S.qNums = new Map();
 }
 function newSession(m){
@@ -2116,6 +2136,7 @@ new ResizeObserver(() => { if(feedAtBottom) feed.scrollTop = feed.scrollHeight; 
 $("#jump").onclick = () => { feed.scrollTop = feed.scrollHeight; S.newBelow = 0; setJump(); };
 (() => {
   const card = document.querySelector(".answer-card"); let t = 0;
+  card.addEventListener("mousemove", () => { S.readMoveAt = Date.now(); }, {passive: true});
   card.addEventListener("mouseenter", () => {
     clearTimeout(t);
     if(OVERLAY || S.readRight) return;
@@ -2439,6 +2460,8 @@ function housekeepSoon(){                                  // a streaming word d
   housekeepAt = requestAnimationFrame(() => { housekeepAt = 0; markLatest(); groupTurns(); updateCtx(); updateNav(); fitSoon(); });
 }
 function upsertEntry(e, silent, batch){
+  const was = S.entries.get(e.id);
+  const regroup = !!was && (was.source !== e.source || was.speaker !== e.speaker || was.who !== e.who);
   S.entries.set(e.id, e);
   (e.seg_ids||[]).forEach(id => { const p = S.pend.get(id); if(p){ p.remove(); S.pend.delete(id); } });
   let el = document.getElementById("e"+e.id);
@@ -2482,7 +2505,8 @@ function upsertEntry(e, silent, batch){
   if(!has) renderAnswerIfIdle();
   renderSumBtn();
   if(added && OVERLAY) while(list.children.length > 120) list.firstElementChild.remove();   // (see replayEntries)
-  if(added){ markLatest(); groupTurns(); updateCtx(); updateNav(); } else housekeepSoon();
+  const far = added && (() => { let n = 0, x = el; while(x && n <= 120){ x = x.nextElementSibling; n++; } return n > 120; })();
+  if(added){ markLatest(); groupTurns(far); updateCtx(); updateNav(); } else if(regroup) groupTurns(true); else housekeepSoon();
   renderSubsSoon();
 }
 function iAmSpeaking(){ return S.running && Date.now() - S.meAt < 2500; }
@@ -2491,26 +2515,29 @@ function iAmSpeaking(){ return S.running && Date.now() - S.meAt < 2500; }
 const READ_HOLD = 30000;
 function readingLock(cur){
   if(!S.running || !cur || !cur.answer || OVERLAY && S.ovScreenUntil) return false;
-  if(S.readRight || iAmSpeaking()) return true;
+  if(S.readRight && Date.now() - (S.readMoveAt || 0) < 20000) return true;   // (a mouse left there for minutes does not)
+  if(iAmSpeaking()) return true;
   const shown = S.shownAt || 0;
   if(S.meAt > shown + 800) return Date.now() - S.meAt < 3000;     // you answered with it: done 3 s after you stop
   return Date.now() - shown < READ_HOLD;
 }
 function showQueued(){
   const e = S.queued != null ? S.entries.get(S.queued) : null, box = $("#newQ");
-  if(!e || !e.answer){ box.hidden = true; return; }
+  if(!e || !e.answer){ box.hidden = true; box.parentElement.classList.remove("q-wait"); return; }
   const n = qNumOf(e);
   const how = OVERLAY && !(S.cfg && S.cfg.hotkeys === "off") ? " — Ctrl+Alt+→ shows it" : "";   // (the see-through window cannot be clicked)
   box.querySelector("b").textContent = (n ? `New question Q${n}` : "New question") + how;
   $("#newQText").textContent = "“" + (e.question || e.text).slice(0, 140) + "”";
-  box.hidden = false;
+  box.hidden = false; box.parentElement.classList.add("q-wait");
 }
-function clearQueued(){ S.queued = null; $("#newQ").hidden = true; }
+function clearQueued(){ S.queued = null; $("#newQ").hidden = true; $("#newQ").parentElement.classList.remove("q-wait"); }
 function takeQueued(){
+  $("#newQ").parentElement.classList.remove("q-wait");
   if(S.queued == null){ $("#newQ").hidden = true; return; }
   const id = S.queued; S.queued = null; $("#newQ").hidden = true;
   S.pinned = false; S.panelId = id; renderAnswer(); refreshChips(); updateNav();
 }
+if(!OVERLAY) document.querySelector(".answer-card .card-head h2").after($("#newQ"));   // (in the header: nothing moves)
 $("#newQ").onclick = takeQueued;
 $("#newQ").onkeydown = ev => { if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); takeQueued(); } };
 setInterval(() => {                                // when you are done with the answer on screen, the newest comes up by itself
@@ -2910,6 +2937,15 @@ function renderCoach(){
   if(txt && tip.textContent !== txt){ tip.setAttribute("dir", "auto"); tip.textContent = txt; }
   const sayEl = $("#coSay"), sayTxt = !nudge && c && c.say && txt ? c.say : "";   // the exact words, in the language of the meeting, on their own line
   sayEl.hidden = !sayTxt; if(sayTxt && sayEl.textContent !== sayTxt) sayEl.textContent = "“" + sayTxt + "”";
+  // the one line of the compact coach: the most important thing now (a warning, your time, else the tip)
+  const one = $("#coOne");
+  let oneT = "", oneC = "";
+  const lo = q && q.qmin || 0, hi = q && q.qmax || 0, elT = S.meStart && speaking ? Math.floor((Date.now() - S.meStart) / 1000) : 0;
+  if(alt){ oneT = "⚠ " + alt; oneC = "alert"; }
+  else if(elT && hi){ oneT = `Now ${mmss(elT)} · aim ${mmss(lo)}–${mmss(hi)}` + (elT > hi ? " · wrap up with one closing sentence" : ""); oneC = elT > hi ? "over" : ""; }
+  else if(txt){ oneT = txt + (sayTxt ? " “" + sayTxt + "”" : ""); }
+  if(one.textContent !== oneT){ one.textContent = oneT; one.setAttribute("dir", "auto"); one.title = oneT || "Open the coach's details"; }
+  one.className = "co-one" + (oneC ? " " + oneC : "");
   if(OVERLAY){                                                        // one short line for the see-through window
     const oc = $("#ovCoach");
     const hp = S.coHelp && (S.coHelp.busy || (S.coHelpAt && Date.now() - S.coHelpAt < 75000)) ? (S.coHelp.busy ? "…" : (S.coHelp.text ? (p => p.main + (p.say ? "\n“" + p.say + "”" : ""))(splitSay(S.coHelp.text)) : (S.coHelp.err || ""))) : "";
@@ -2966,6 +3002,7 @@ $("#coMore").onclick = () => {
   renderCoach();
 };
 $("#coAskTop").onclick = () => askCoach("");
+$("#coOne").onclick = () => $("#coMore").click();
 $("#coNotes").onclick = () => openNotes(false);
 function openNotes(auto){
   const n = S.notes || {}, b = n.brief && typeof n.brief === "object" ? n.brief : {};
@@ -3001,7 +3038,7 @@ function findOnLeft(id){                                  // the line of this an
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 function showAnswerOf(id, pin){
-  S.queued = null; $("#newQ").hidden = true;
+  clearQueued();
   const l = answeredList(), last = l[l.length - 1];
   S.panelId = id; S.pinned = !!pin && !(last && last.id === id);       // choosing the newest answer means "follow again"
   renderAnswer(); refreshChips(); updateNav();
@@ -3180,14 +3217,25 @@ function renderAnswer(){
     <p class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></p>
     ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
   body.querySelector(".q-orig").textContent = e.question || e.text;
-  body.querySelector(".q-orig").onclick = ev => ev.currentTarget.parentNode.classList.toggle("open");
+  body.querySelectorAll(".q-orig, .q-fa").forEach(x => x.onclick = ev => { ev.currentTarget.closest(".q-block").classList.toggle("open"); fitQ(); });
   if(e.translation) body.querySelector(".q-fa").textContent = e.translation;
+  fitQ();
   body.querySelector(".q-find").onclick = () => findOnLeft(e.id);
   setAnswerText(body.querySelector(".a-text"), e.answer);
   if(showFa) body.querySelector(".a-fa p").textContent = e.answer_fa;
   requestAnimationFrame(() => body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8));
   if(S.flashId !== e.id){ S.flashId = e.id; const a = body.querySelector(".a-text"); a.classList.add("fresh"); setTimeout(() => a.classList.remove("fresh"), 900); }
 }
+/* A small answer area: the question gives way so the answer is always in view - first one line of each, then only
+   its translation in one line (a click on it shows all of it). */
+function fitQ(){
+  const b = $("#answerBody"), q = b && b.querySelector(".q-block"); if(!q || OVERLAY) return;
+  q.classList.remove("tight", "tighter");
+  if(q.classList.contains("open") || !b.clientHeight) return;
+  const room = b.clientHeight * 0.42;
+  if(q.offsetHeight > room){ q.classList.add("tight"); if(q.offsetHeight > room) q.classList.add("tighter"); }
+}
+window.addEventListener("resize", () => requestAnimationFrame(fitQ));
 function updMore(){                                   // more text below: a fade, and in the overlay a small sign with the key
   const b = $("#answerBody"); if(!b) return;
   const more = b.style.display !== "none" && b.scrollHeight - b.scrollTop - b.clientHeight > 8;
@@ -3613,6 +3661,8 @@ function toast(level, text, action, ms){
     const b = document.createElement("button"); b.className = "act-btn"; b.textContent = action.text;
     b.onclick = () => { t.remove(); action.run(); };
     t.querySelector(".msg").appendChild(document.createElement("br")); t.querySelector(".msg").appendChild(b);
+    const bi = document.createElement("button"); bi.className = "act-inline"; bi.textContent = action.text;   // (the slim form)
+    bi.onclick = b.onclick; t.insertBefore(bi, t.querySelector(".x"));
   }
   t.querySelector(".x").onclick = () => t.remove();
   $("#toasts").appendChild(t);
@@ -4622,10 +4672,14 @@ document.addEventListener("keydown", ev => {
     ev.preventDefault();
     if(ev.shiftKey && !S.running && !S.resume){ toast("info", "There is no earlier meeting to continue."); return; }
     if(S.running && !ev.shiftKey){                        // one slip of the finger never ends the meeting
-      if(Date.now() - (S.stopArm || 0) > 3000){ S.stopArm = Date.now(); toast("warn", "Press F9 again to stop the meeting.", null, 3000); return; }
+      if(Date.now() - (S.stopArm || 0) > 3000){ S.stopArm = Date.now(); recentToasts.delete("Press F9 again to stop the meeting."); toast("warn", "Press F9 again to stop the meeting.", null, 3000); return; }
       S.stopArm = 0;
     }
     toggleRun(ev.shiftKey);
+  }
+  else if(ev.key === " " && S.running && $("#newQ").hidden && document.activeElement?.tagName === "BUTTON"
+          && !document.activeElement.closest(".modal, .drawer, .toolpop, .helppop, .toast")){
+    ev.preventDefault(); document.activeElement.blur();   // (Space now means "show the new question", never Pause or Stop)
   }
   else if(ev.key === " " && !$("#newQ").hidden && !ev.ctrlKey && !ev.altKey && !ev.metaKey
           && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && !document.activeElement?.isContentEditable

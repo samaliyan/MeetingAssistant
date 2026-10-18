@@ -1,15 +1,18 @@
 # What is tested, and how
 
 This file says, part by part, how the program is checked and what cannot be checked without a real Windows computer,
-real sound or real services. It is updated with every audit (last: 6.19, two independent reviewers of the new parts plus a re-review of the fixes; 6.17: seven reviewers).
+real sound or real services. It is updated with every audit (last: 6.35, six independent reviewers of the whole program — processes, display, flow, features and switches, performance, security/setup — plus two re-reviewers of the fixes; 6.19 and 6.17 before).
 
 Ways of checking:
 
-- **Unit** = automatic tests (`python -m pytest tests`, run on Ubuntu and on Windows in the release job).
-- **Browser** = the web page is opened in a real browser against the real program with fake services (done by hand
-  before a release, not part of CI).
+- **Unit** = automatic tests (`python -m pytest tests`, run on Ubuntu and on Windows for every change, and again in the
+  release job).
+- **Browser** = the web page is opened in a real browser against the real program with fake services (done before a
+  release, not part of CI): live meeting, reading lock, coach line, sizes 820–1920 px, 100 % and 150 % text, dark,
+  overlay, video and in-person modes, settings with every part off.
 - **Review** = read by independent reviewers who did not write the code.
-- **Windows check** = `.github/workflows/windows-check.yml` opens the overlay on a real Windows machine (best effort).
+- **Windows check** = the CI jobs on a real Windows machine: the exe starts and closes, the overlay opens, voice
+  learning, keys kept encrypted (DPAPI), a PAC proxy, install / update / uninstall.
 - **By hand** = only a person on a real machine can confirm it.
 
 | Part | Unit | Browser | Review | Windows check | Only by hand |
@@ -51,11 +54,34 @@ Ways of checking:
 | 6.19 summary with decisions and action items, Copy as message, glossary from the advert, filler words and pace | yes (prompts, merging, limits, counting "like,") | yes (summary, message text, glossary button) | yes | – | quality of real model text |
 | 6.19 meeting reminder (window titles) | yes (titles of Zoom, Teams, Meet, Webex; web pages and chats not counted; once per 10 minutes) | yes (fake window list → message → Start) | yes | – | the real window titles of Zoom, Teams and Meet on Windows |
 | Features switches (Setup › Features, presets, hiding, Start needs) | yes (settings, needed services, every action refused when off, lines not translated / answered) | yes (presets, text-only meeting, coach-only panel, narrow window, overlay) | yes (2 reviews) | – | WebView2 look |
-| Build (exe) and release | – | – | yes | build job | first run of the exe on a clean PC |
+| Build (exe), installer and release | – | – | yes | build, start, install / update / uninstall jobs | Windows SmartScreen on a new PC |
+| 6.35 reading lock, coach line, room for the answer, end bar, keys list, parts off hidden | – | yes (run_ui9: answer never moves when you speak or a question arrives; Space; sizes; overlay) | yes (re-review with the reviewer's own probes) | – | WebView2 focus after Alt+Tab, real mouse use |
+| 6.35 Stop keeps the last sentences, lost speech counted, joins, Continue owner, live retries, live settings changed in a meeting | yes | – | yes (re-review reproduced and re-checked) | – | real Groq limits at the end of a meeting, a real Deepgram outage |
 
 Setup › Services › **Check this computer** tests the Windows parts on the user's own machine and can copy a report.
 
-## Known open points (after 6.34)
+## Known open points (after 6.35)
+
+Fixed in 6.35 (each checked; tests or browser checks named in the table): the answer being read is never replaced and
+never moves; parts that are off take no key, show no settings and send nothing; Stop keeps writing the last sentences;
+a recording says when it is incomplete; Continue is always the newest meeting; in-person lines are never joined;
+live streams retry for the whole meeting and follow setting changes; a Deepgram 403 from a network block is not taken
+for a wrong key; keys from before 6.34 are encrypted at once; uninstall deletes only the Data folder; long meetings
+stay quick (one style rule cost 1.3 s per line at 2000 lines).
+
+Still open:
+
+- Three ways to get "what to say" overlap (Answer now F2, Help me say, Ask coach F4): kept as they are; one combined
+  "help" may come later.
+- A very small answer area at 150 % text (820 × 700) shows only the first line of the answer at once (it scrolls).
+- The see-through window has no keys to start, stop or pause the meeting (the main window does it).
+- Waiting pieces of one speaker are joined only within 4 seconds: after a long network break the backlog takes more
+  requests than before.
+- A Windows PAC script that hangs makes the very first request wait up to 3 s.
+- Real Windows parts not seen by a person in this audit: focus after Alt+Tab, the global keys on AltGr keyboards,
+  a real Deepgram outage, real Groq limits at the end of a meeting.
+
+### From the 6.34 audit (still true)
 
 Fixed in 6.34 (each with a test; the Windows parts with a check on a real Windows machine): speech to text moves on to
 the next service after a temporary error; a model that failed is tried again when Setup changes the services; a Windows

@@ -3,7 +3,7 @@
 ## Version 6.35: nothing moves while you read
 
 - **The answer you read stays.** A new question waits in a yellow bar while your mouse is on the answer, while you speak, and for 30 seconds while you read it silently. Press **Space** (or click the bar) to see it at once.
-- **The coach is one line** while an answer is shown, so the answer never jumps. **Details** opens the rest; **Ask F4** asks it.
+- **The coach is two short lines** while an answer is shown (its state, and its warning, your time or its tip), so the answer never jumps. **Details** opens the rest; **Ask F4** asks it. The waiting question sits in the answer's header.
 - **F9 during a meeting: press it twice** to stop (the Stop button stops at once).
 - The mode (Meeting / In person / Video) is chosen before Start; during a meeting the switch is hidden.
 - After Stop: **Summary · How did I do? · Export**. After a restart: **Open the last meeting** on the start screen.

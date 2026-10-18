@@ -12,13 +12,16 @@ switches, performance, security and setup), every finding checked, the real ones
   Space") while the mouse is on the answer, while you speak, for 3 seconds after you stop, and — if you have not spoken
   yet — for 30 seconds after the answer appeared. Then it comes by itself. **Space** (or a click on the bar, or
   Ctrl + →) shows it at once. In the see-through window the bar says Ctrl+Alt+→.
-- **The coach is one line while an answer is shown** ("Coach · Your turn · the answer is ready · Ask F4 · Details"), so
-  the answer never jumps down when you start speaking or when the next question arrives. **Details** opens the rest.
+- **The coach is two short lines while an answer is shown**: its state ("Your turn · the answer is ready", your time,
+  Ask F4, Details) and the most important thing now — a warning, "now 1:40 · aim 1:00–2:00 · wrap up", or its tip. Its
+  height never changes, so the answer never jumps when you start speaking or when the next question arrives. The
+  waiting question sits in the answer's header, so it does not push the answer down either.
 - **The answer always keeps room:** at least 40 % of its card, in small and narrow windows and at 150 % text too (the
   question block, coach and notes give way). Narrow windows give the answer 70 % of the height.
 - The "Writing…" badge says which question it is for ("Writing the answer to Q3…").
-- Messages appear at the top of the transcript during a meeting (never over the newest line, the answer or its
-  buttons), at most two at a time; problems close by themselves after 25 seconds (the log keeps them).
+- During a meeting messages are slim lines over the status bar at the bottom (never over what is said, the answer
+  or its buttons), at most two; problems close by themselves after 25 seconds (the log keeps them). A small answer
+  area makes the question above it shorter (one line, a click shows it all), so the answer stays in view.
 
 **Easier and safer to use**
 - **F9 during a meeting must be pressed twice** (within 3 seconds) to stop it — one slip of the finger never ends the
@@ -52,18 +55,20 @@ switches, performance, security and setup), every finding checked, the real ones
   (if you had turned it off, the coach stays off).
 - Translations, answers and say-it sentences that were still waiting when you turn the part off are not sent.
 - Start needs a service only for the parts that work during the meeting (prep, the review and full notes say it when
-  you use them). "Explain" belongs to Translation.
+  you use them).
+- Changed on purpose: "Explain" (the meaning of selected words) belongs to Translation — it is off when Translation is
+  off; the check of your reply (length, pace, filler words) belongs to the Coach.
 
 **Nothing gets lost**
 - **Stop no longer throws away the last sentences** when a service was slow or at its free limit: it keeps writing them
-  (up to 2½ more minutes while they still move) and says so; anything that still could not be written is told with
+  (up to 1½ more minutes while they still move) and says so; anything that still could not be written is told with
   its length.
 - **A recording says "Incomplete"** when parts of it could not be written (it said "done"). In fast file mode a piece
   the local model cannot read is skipped and named; the rest of the file is still read.
 - **"Continue last" always continues the newest meeting** — a late summary or review of an older meeting no longer
   takes its place.
-- **Waiting pieces are joined only when they follow each other**: in-person mode never joins different people's
-  sentences into one line, and a line never spans your reply.
+- **Waiting pieces are joined only when they follow each other** (within 4 seconds, nothing of the other side in
+  between): in-person mode never joins different people's sentences into one line, and a line never spans your reply.
 - Changing the audio device during a live (Deepgram) meeting no longer writes a sentence twice or shows a false
   "No speech-to-text service" message.
 - A live stream that fails no longer writes its last words twice.
