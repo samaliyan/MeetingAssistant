@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.35"
+VERSION = "6.36"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -7745,6 +7745,8 @@ def _pick_area(raw, full, hint_mon, hide, timeout, stop, on_ready):
                 u.SetCapture(hwnd)
                 invalidate([hint])
                 return 0
+            if msg == 0x0200 and st["down"] and not (wp & 0x0001):   # the button came up elsewhere: as if here
+                return proc(hwnd, 0x0202, 0, lp)
             if msg == 0x0200 and st["down"]:             # mouse move while drawing
                 old = sel()
                 st["cur"] = xy(lp)
@@ -7783,6 +7785,10 @@ def _pick_area(raw, full, hint_mon, hide, timeout, stop, on_ready):
                 if ((u.GetAsyncKeyState(0x1B) & 0x8000) or time.monotonic() - st["t0"] > timeout
                         or (stop and stop.is_set())):
                     finish(None)
+                    return 0
+                st["ticks"] = st.get("ticks", 0) + 1
+                if st["ticks"] % 10 == 0:                # twice a second: above other always-on-top windows
+                    u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x2 | 0x1 | 0x10)
                 return 0
             if msg == 0x02E0:                            # a DPI change: the window keeps its exact place
                 return 0
@@ -7886,12 +7892,13 @@ def _pick_area(raw, full, hint_mon, hide, timeout, stop, on_ready):
         st["hwnd"] = hwnd
         if hide:
             u.SetWindowDisplayAffinity(hwnd, 0x11)       # the other side of a screen share keeps seeing the real screen
-        hook = u.SetWindowsHookExW(13, _PICK["hook"], hinst, 0)   # WH_KEYBOARD_LL (if refused: the timer polls Esc)
         u.ShowWindow(hwnd, 4)                            # SW_SHOWNOACTIVATE
         u.UpdateWindow(hwnd)
         u.SetTimer(hwnd, 1, 50, None)
         if on_ready:
             on_ready(hwnd)
+        # WH_KEYBOARD_LL, only now: the loop below answers it at once (if refused: the timer polls Esc)
+        hook = u.SetWindowsHookExW(13, _PICK["hook"], hinst, 0)
         msg = wt.MSG()
         while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             u.TranslateMessage(ctypes.byref(msg))
@@ -7941,6 +7948,10 @@ def encode_png(w, h, bgra, max_width=1920):
 
 
 SCREEN_CAPTURE = sys.platform == "win32"        # (a switch the tests can turn on)
+
+
+def _countdown_wait(seconds):
+    time.sleep(seconds)                         # (its own name: the tests replace it, never time.sleep itself)
 
 
 # ---- old meetings: search -------------------------------------------------------
@@ -12790,6 +12801,8 @@ class App:
             if draw:
                 full = virt if virt[2] * virt[3] <= 25_000_000 else rects["cursor_monitor"]   # (memory: ~5 copies)
                 raw = grab_rect(full)
+                if self.leaving.is_set():
+                    return None
                 pub(state="working", text="", note="Draw a box around the question with the mouse. Esc cancels.")
                 c = self.cfg
                 hide = bool(c.get("hide_from_share") or c.get("overlay_hide")) and capture_hide_supported()
@@ -12825,7 +12838,7 @@ class App:
             for i in range(0 if now else int(c["screen_delay"]), 0, -1):
                 pub(state="working", text="", note=(f"In {i} s you draw a box around the question — switch to that screen now."
                                                     if draw else f"Picture in {i} s — switch to the screen you want read."))
-                time.sleep(1)
+                _countdown_wait(1)
                 if self.leaving.is_set():
                     return pub(state="cancelled", text="", note="The program is closing.")
             if not draw:
@@ -16026,8 +16039,9 @@ def run_overlay_helper(argv):
         ex = (ex & ~0x20) if st["move"] else (ex | 0x20)       # click-through, except in move mode
         u.SetWindowLongPtrW(hwnd, -20, ex)
         u.SetLayeredWindowAttributes(hwnd, 0, int(alpha * 255 / 100) if not st["move"] else 255, 2)
-        if place:
-            u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10 | 0x40 | 0x20)
+        if place:                                                # (no climbing while an area is drawn)
+            u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"],
+                           0x10 | 0x40 | 0x20 | (0x4 if u.FindWindowW(None, PICK_TITLE) else 0))
         elif not u.FindWindowW(None, PICK_TITLE):            # (while an area is drawn it stays under that screen)
             u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x2 | 0x1 | 0x10)
         want = (WDA_EXCLUDEFROMCAPTURE if hide else 0)
@@ -16567,7 +16581,8 @@ class Overlay:
                 found = self.find(lambda t: OV_TITLE in t)
                 if found:
                     gone = 0
-                    self.style(found[0])
+                    if not _PICK_LOCK.locked():                 # (an area is being drawn: stay under it)
+                        self.style(found[0])
                 else:
                     gone += 1
                     if gone >= 3:

@@ -421,7 +421,7 @@ body.ov.subs #ovSub{flex:1 1 auto;min-height:0;display:flex;flex-direction:colum
 .pr-better{padding:8px 10px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);margin:6px 0;line-height:1.6;white-space:pre-wrap}
 #ovScreen{flex:1;min-height:0;overflow-y:auto;font-size:1rem;line-height:1.5}
 #ovScreen[hidden]{display:none}
-ul.pl{padding-inline-start:4px;list-style-position:inside}
+ul.pl,.tool-body ul.pl{padding-inline-start:4px;list-style-position:inside}
 .notes-sec{margin:0 0 12px}
 .notes-sec h4{margin:0 0 4px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .notes-sec ul{margin:0;padding:0 18px;line-height:1.7}
@@ -3426,7 +3426,7 @@ function mdLite(t, perLine){
     const li = /^[-*•]\s+/.test(l);
     if(!l) return;                                          // a blank line inside a list keeps the list
     if(!li && ul){ out.push("</ul>"); ul = false; }
-    if(/^#{1,4}\s/.test(l)) out.push(`<h3${d(l)}>${inline(l.replace(/^#+\s*/, ""))}</h3>`);
+    if(/^#{1,4}\s/.test(l)){ prev = ""; out.push(`<h3${d(l)}>${inline(l.replace(/^#+\s*/, ""))}</h3>`); }    // (a heading never takes the line before's direction)
     else if(li){
       const dl = d(l);
       if(!ul){ out.push(perLine ? `<ul class="pl"${dl}>` : "<ul>"); ul = true; }    // (bullets inside: lines of both directions)

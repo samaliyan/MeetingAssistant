@@ -261,7 +261,7 @@ def test_countdown_only_for_the_button_not_for_the_global_key(job, monkeypatch, 
     a, calls = job
     a.cfg["screen_delay"] = "2"
     slept = []
-    monkeypatch.setattr(app.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(app, "_countdown_wait", lambda s: slept.append(s))
     a._screen_job(now=True)
     assert slept == [] and calls["read"]
     a._screen_job()
@@ -326,7 +326,7 @@ def test_box_outside_the_picture_is_cut_to_it(job, app):
 def test_closing_during_the_countdown_ends_the_job(job, app, monkeypatch):
     a, calls = job
     a.cfg["screen_delay"] = "3"
-    monkeypatch.setattr(app.time, "sleep", lambda s: a.leaving.set())
+    monkeypatch.setattr(app, "_countdown_wait", lambda s: a.leaving.set())
     a._screen_job()
     assert calls["grab"] == [] and _states(calls)[-1] == "cancelled" and not a.screen_busy
 

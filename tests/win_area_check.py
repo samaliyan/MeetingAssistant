@@ -201,7 +201,8 @@ try:
     res, secs, err, hwnd = run_picker(virt, before, steps=drag)
     check("box drawn with the mouse comes back in screen pixels", res == (TX + 50, TY + 60, 400, 200), f"{res} {err or ''}")
     check("the box window covers all screens, on top, not in the taskbar",
-          seen.get("rect") == tuple(virt) and seen.get("ex", 0) & 0x88 == 0x88, f"{seen.get('rect')} ex={hex(seen.get('ex', 0))}")
+          seen.get("rect") == tuple(virt) and seen.get("ex", 0) & 0x08000088 == 0x08000088,
+          f"{seen.get('rect')} ex={hex(seen.get('ex', 0))} (topmost, tool window, never activated)")
     check("not hidden from capture when hiding is off", seen.get("aff") == 0, hex(seen.get("aff", -1)))
     if "drawing" in seen:
         d = seen["drawing"]
@@ -249,6 +250,22 @@ try:
     res, secs, err, _ = run_picker(virt, before, steps=click_then_drag)
     check("a plain click does not end it; a box dragged up-left does", seen.get("after_click_open") and res == BLUE, f"{res}")
 
+    def past_the_edge(h):                                 # dragged beyond the left / top edge: cut at the edge
+        pump(0.3)
+        u.PostMessageW(h, 0x0201, 1, lp(TX + 100 - fx, TY + 100 - fy))
+        u.PostMessageW(h, 0x0200, 1, lp(-60, -40))
+        u.PostMessageW(h, 0x0202, 0, lp(-60, -40))
+    res, secs, err, _ = run_picker(virt, before, steps=past_the_edge)
+    check("a box dragged past the edge stays inside the picture", res == (fx, fy, TX + 100 - fx, TY + 100 - fy), f"{res}")
+
+    def lost_up(h):                                       # the button came up where the box window did not see it
+        pump(0.3)
+        u.PostMessageW(h, 0x0201, 1, lp(TX + 10 - fx, TY + 10 - fy))
+        u.PostMessageW(h, 0x0200, 1, lp(TX + 110 - fx, TY + 60 - fy))
+        u.PostMessageW(h, 0x0200, 0, lp(TX + 120 - fx, TY + 70 - fy))   # moved with no button held
+    res, secs, err, _ = run_picker(virt, before, steps=lost_up)
+    check("a lost button-up ends the box where the mouse is", res == (TX + 10, TY + 10, 110, 60), f"{res}")
+
     # 4. the real mouse and the real Esc key (best effort: the runner's desktop may not take input)
     def real_mouse(h):
         pump(0.3)
@@ -265,6 +282,15 @@ try:
     root.focus_force()
     pump(0.4)
     fg_before = u.GetForegroundWindow()
+
+    def tap_esc():
+        u.keybd_event(0x1B, 0, 0, 0)
+        pump(0.1)
+        u.keybd_event(0x1B, 0, 2, 0)
+        pump(0.4)
+    ESC_SEEN.clear()
+    tap_esc()
+    esc_reaches_test_window = bool(ESC_SEEN)              # (the control: without a box, Esc reaches the test window)
     ESC_SEEN.clear()
 
     def real_esc(h):
@@ -277,9 +303,15 @@ try:
     pump(0.3)
     check("real Esc key (also without the keyboard focus)", res is None and secs is not None and secs < 4,
           f"{res} {secs and round(secs, 2)}s", hard=False)
-    check("the box window does not take the focus from the program in front", seen.get("fg_during") == fg_before,
-          f"{seen.get('fg_during')} vs {fg_before}", hard=False)
-    check("Esc does not reach the program below", not ESC_SEEN, f"{len(ESC_SEEN)} Esc seen by the test window", hard=False)
+    esc_during = len(ESC_SEEN)
+    ESC_SEEN.clear()
+    tap_esc()
+    esc_after = bool(ESC_SEEN)
+    check("the box window does not take the focus from the program in front",
+          bool(fg_before) and seen.get("fg_during") == fg_before, f"{seen.get('fg_during')} vs {fg_before}", hard=False)
+    check("Esc does not reach the program below (and does again after the box)",
+          esc_reaches_test_window and esc_during == 0 and esc_after,
+          f"before {esc_reaches_test_window}, during {esc_during}, after {esc_after}", hard=False)
 
     # 5. hidden from screen sharing: the other side keeps seeing the real screen
     if app.capture_hide_supported():

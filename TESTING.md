@@ -37,7 +37,7 @@ Ways of checking:
 | Move / resize with mouse and keys | – | – | yes | yes (best effort) | different DPI, several monitors |
 | Global keys (Ctrl+Alt …) | – | – | yes | yes (best effort) | keyboard layouts with AltGr |
 | Microphone and computer sound (WASAPI) | – | – | yes | – | devices, sleep / wake, Bluetooth |
-| Screen reading | logic only | – | yes | – | real screenshots and services |
+| Screen reading | yes (6.36: every mode, cancel, kept area, closing, sizes, prompt) | yes (6.36: layout, directions, buttons, overlay) | yes | yes (6.36 area check: real pictures, darkened screen pixels, posted and real mouse, Esc, right click, time out, hidden from capture, GDI leaks, whole job) | real AI services reading real questions; 125 % / 150 % scaling and several monitors with different scaling |
 | Windows shortcut, single instance, paths with Persian letters | – | – | yes | – | Program Files, OneDrive |
 | Fast file mode (local model, batched, skips silence) | yes (fake model) | – | yes | – | real faster-whisper batched speed and text on CPU / NVIDIA |
 | Speakers in a recording (voice model, grouping) | yes (made-up voice prints, fbank) | – | yes | – | real voices: how well people are told apart |
