@@ -305,3 +305,66 @@ def test_page_has_the_new_controls():
         assert f'<option value="{v}">' in page
     assert "readScreen(ev.shiftKey)" in page and "New area" in page and '"cancelled"' in page
     assert "function lineDir(" in page and "mdLite(m.text, true)" in page
+
+
+# ---- after the review ----------------------------------------------------------------------------------------
+def test_tall_narrow_picture_is_made_smaller_too(app):
+    noisy = np.random.default_rng(2).integers(0, 255, (4000, 900, 4), dtype=np.uint8)
+    png = app.screen_png(900, 4000, noisy.tobytes())
+    assert len(png) * 4 // 3 <= 3_200_000 and _png_size(png)[1] < 4000
+
+
+def test_box_outside_the_picture_is_cut_to_it(job, app):
+    a, calls = job
+    a.cfg["screen_area_mode"] = "same"
+    calls["pick_result"] = (-2500, 100, 1000, 200)              # dragged past the left edge of the desktop
+    a._screen_job()
+    assert calls["read"][0][0] == (840, 400)                          # 420x200 left inside the desktop, sent 2x
+    assert a.cfg["screen_area"] == "-1920,100,420,200"
+
+
+def test_closing_during_the_countdown_ends_the_job(job, app, monkeypatch):
+    a, calls = job
+    a.cfg["screen_delay"] = "3"
+    monkeypatch.setattr(app.time, "sleep", lambda s: a.leaving.set())
+    a._screen_job()
+    assert calls["grab"] == [] and _states(calls)[-1] == "cancelled" and not a.screen_busy
+
+
+def test_area_picker_stops_when_the_program_leaves(job, app):
+    a, calls = job
+    a.cfg["screen_area_mode"] = "area"
+    seen = {}
+    real = app.pick_area
+
+    def pick(raw, full, hint_mon, **kw):
+        seen["stop"] = kw.get("stop")
+        return (0, 0, 100, 100)
+    app.pick_area = pick
+    try:
+        a._screen_job()
+    finally:
+        app.pick_area = real
+    assert seen["stop"] is a.leaving
+
+
+def test_api_screen_resets_busy_after_an_error(job, app, monkeypatch):
+    a, calls = job
+    monkeypatch.setattr(app, "grab_rect", lambda r: (_ for _ in ()).throw(app.APIError("The screen could not be captured.")))
+    assert a.api_screen()["ok"]
+    import time
+    for _ in range(100):
+        if not a.screen_busy:
+            break
+        time.sleep(0.02)
+    assert not a.screen_busy and _states(calls)[-1] == "error"
+    assert "could not be captured" in calls["events"][-1][1]["note"]
+
+
+def test_prompt_after_review(app):
+    c = app.sanitize({"my_language": "fa", "languages": ["en"], "answer_language": "fa", "answer_fa": True})
+    assert "What the answer means" not in app.screen_prompt(c)          # the answer is already in my language
+    c = app.sanitize({"my_language": "fa", "languages": ["en"], "meeting_mode": "lecture"})
+    assert "NO_REPLY" not in app.screen_prompt(c)
+    p = app.screen_prompt(app.sanitize({"my_language": "fa", "languages": ["en"]}))
+    assert "translated too" in p and "option texts" not in p

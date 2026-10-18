@@ -75,6 +75,8 @@ cv.create_rectangle(0, 0, TW // 2, TH, fill="#ff0000", outline="")
 cv.create_rectangle(TW // 2, 0, TW, TH, fill="#00ff00", outline="")
 cv.create_rectangle(320, 100, 520, 300, fill="#0000ff", outline="")
 BLUE = (TX + 320, TY + 100, 200, 200)
+ESC_SEEN = []
+root.bind_all("<Escape>", lambda e: ESC_SEEN.append(time.time()))
 
 
 def pump(sec):
@@ -227,8 +229,11 @@ try:
     # 3. ways to cancel
     res, secs, err, _ = run_picker(virt, before, steps=lambda h: (pump(0.3), u.PostMessageW(h, 0x0100, 0x1B, 0)))
     check("Esc cancels", res is None and err is None and secs < 5, f"{res} {secs and round(secs, 2)}s {err or ''}")
-    res, secs, err, _ = run_picker(virt, before, steps=lambda h: (pump(0.3), u.PostMessageW(h, 0x0204, 2, lp(10, 10))))
-    check("a right click cancels", res is None and err is None, f"{res} {err or ''}")
+    res, secs, err, _ = run_picker(virt, before, steps=lambda h: (pump(0.3), u.PostMessageW(h, 0x0204, 2, lp(10, 10)),
+                                                                  pump(0.3), seen.__setitem__("open_after_rdown", bool(u.IsWindow(h))),
+                                                                  u.PostMessageW(h, 0x0205, 0, lp(10, 10))))
+    check("a right click cancels when the button comes up", res is None and err is None and seen.get("open_after_rdown"),
+          f"{res} {err or ''}")
     res, secs, err, _ = run_picker(virt, before, timeout=1.5)
     check("nothing drawn: it ends by itself", res is None and err is None and 1.3 < secs < 4, f"{res} {secs and round(secs, 2)}s")
 
@@ -256,14 +261,25 @@ try:
     res, secs, err, _ = run_picker(virt, before, timeout=6, steps=real_mouse)
     check("real mouse drag", res == (TX + 100, TY + 100, 200, 100), f"{res}", hard=False)
 
+    u.GetForegroundWindow.restype = wt.HWND
+    root.focus_force()
+    pump(0.4)
+    fg_before = u.GetForegroundWindow()
+    ESC_SEEN.clear()
+
     def real_esc(h):
         pump(0.3)
+        seen["fg_during"] = u.GetForegroundWindow()
         u.keybd_event(0x1B, 0, 0, 0)
         pump(0.15)
         u.keybd_event(0x1B, 0, 2, 0)
     res, secs, err, _ = run_picker(virt, before, timeout=6, steps=real_esc)
+    pump(0.3)
     check("real Esc key (also without the keyboard focus)", res is None and secs is not None and secs < 4,
           f"{res} {secs and round(secs, 2)}s", hard=False)
+    check("the box window does not take the focus from the program in front", seen.get("fg_during") == fg_before,
+          f"{seen.get('fg_during')} vs {fg_before}", hard=False)
+    check("Esc does not reach the program below", not ESC_SEEN, f"{len(ESC_SEEN)} Esc seen by the test window", hard=False)
 
     # 5. hidden from screen sharing: the other side keeps seeing the real screen
     if app.capture_hide_supported():

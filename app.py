@@ -6168,7 +6168,9 @@ def screen_prompt(c):
     a = c["answer_language"]
     say_in = (f"in {lang_name(a)}" if a != "same" else
               "in the language of the question on the screen (" + " or ".join(lang_name(x) for x in meeting_langs(c)) + ")")
-    meaning = bool(c.get("answer_fa"))
+    meaning = bool(c.get("answer_fa")) and a != ml           # (an answer always in my language needs no meaning)
+    extra = mode_text(c, "answer")
+    extra = "" if "NO_REPLY" in extra else extra             # (lecture mode's "stay quiet" is for live answers)
     heads = (f"use these headings, written in {my}: \"The question\", \"The answer\""
              + (f", \"What the answer means\"" if meaning else ""))
     return (f"You help {c['me_label']} (a {lang_name(ml)} speaker) during a meeting, interview or lesson. The picture is a "
@@ -6178,8 +6180,9 @@ def screen_prompt(c):
             f"If the screen holds a question or task, answer in this layout ({heads}); each heading on its own line "
             "starting with ## :\n"
             f"## The question — the whole question translated into {my}, faithfully and completely, with every "
-            "answer option on its own line and with its letter or number exactly as on the screen. If it is already "
-            f"in {my}, copy it. For code, say the task in 1-3 sentences instead of translating the code.\n"
+            "answer option on its own line, translated too, with its letter or number as on the screen. If it is "
+            f"already in {my}, do not repeat it: one short line on what is asked. For code, say the task in 1-3 "
+            "sentences instead of translating the code.\n"
             "## The answer — by kind of question:\n"
             "- Multiple choice: the first line is only the letter or number of the right option and its text exactly "
             "as on the screen, in bold, e.g. **B) 42**. If the question allows several answers, one line for each "
@@ -6196,11 +6199,12 @@ def screen_prompt(c):
             + "If several questions are visible, do this for each, in order, and number them (1, 2, …).\n"
             "If nothing on the screen needs an answer: one short line on what the screen shows, then the important "
             "points as short bullets.\n"
-            f"Write your notes in {my}; keep code, commands, option texts and technical terms as they are. Never put "
+            f"Write your notes in {my}; keep code, commands and technical terms as they are (the option on the bold "
+            "answer line stays exactly as on the screen). Never put "
             f"{my} words and words of another language on the same line when you can avoid it. Use only what is "
             "visible; if something is cut off or unreadable, say so instead of guessing. Never invent personal facts: "
             "use a placeholder such as [your name]."
-            + (f"\n{mode_text(c, 'answer')}" if mode_text(c, "answer") else "") + glossary_note(c))
+            + (f"\n{extra}" if extra else "") + glossary_note(c))
 
 
 def meaning_rule(cfg, line_lang):
@@ -7414,10 +7418,11 @@ def screen_png(w, h, raw):
         a = np.frombuffer(raw, dtype=np.uint8, count=w * h * 4).reshape(h, w, 4)
         raw, w, h = a.repeat(2, axis=0).repeat(2, axis=1).tobytes(), w * 2, h * 2
     png = encode_png(w, h, raw)
-    for mw in (1440, 1152, 960):
+    base = min(w, 1920)
+    for f in (0.75, 0.6, 0.5, 0.4, 0.3, 0.2):              # (by scale: a tall, narrow picture gets smaller too)
         if len(png) * 4 // 3 <= 3_200_000:
             break
-        png = encode_png(w, h, raw, max_width=mw)
+        png = encode_png(w, h, raw, max_width=max(64, int(base * f)))
     return png
 
 
@@ -7485,9 +7490,12 @@ def win_rects():
             rc = wt.RECT()
             ok = False
             try:                                        # the window without its invisible resize border
-                ok = ctypes.windll.dwmapi.DwmGetWindowAttribute(front, 9, ctypes.byref(rc), ctypes.sizeof(rc)) == 0
-            except (AttributeError, OSError):
-                pass
+                dwm = ctypes.windll.dwmapi.DwmGetWindowAttribute
+                dwm.argtypes = [wt.HWND, wt.DWORD, ctypes.c_void_p, wt.DWORD]
+                dwm.restype = ctypes.c_long
+                ok = dwm(front, 9, ctypes.byref(rc), ctypes.sizeof(rc)) == 0
+            except Exception:
+                ok = False
             if ok or u.GetWindowRect(front, ctypes.byref(rc)):
                 win = clip_rect((rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top), virt)
     return {"virtual": virt, "front_monitor": mon_rect(u.MonitorFromWindow(front, 2)),
@@ -7526,6 +7534,8 @@ def grab_rect(r):
         old = g.SelectObject(mdc, bmp)
         if not g.BitBlt(mdc, 0, 0, w, h, hdc, x, y, 0x00CC0020 | 0x40000000):
             raise APIError("The screen could not be captured.")
+        g.SelectObject(mdc, old)                         # (GetDIBits wants the bitmap not selected)
+        old = None
         bi = _BMIH()
         bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(_BMIH), w, -h, 1, 32
         buf = ctypes.create_string_buffer(w * h * 4)
@@ -7555,19 +7565,33 @@ except Exception:                                       # (no ctypes: nothing on
     _BMIH = None
 
 PICK_HINT = "Draw a box around the question   ·   Esc = cancel"
-_PICK = {"proc": None, "now": None}                     # the window procedure lives as long as the program
+PICK_TITLE = "MeetingAssistant - choose the area to read"     # (the overlay does not climb above this window)
+_PICK = {"proc": None, "hook": None, "now": None, "key": None, "cls": None}   # callbacks live as long as the program
+_PICK_LOCK = threading.Lock()                              # one box at a time
 
 
 def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready=None):
-    """Snipping-tool style: the picture just taken (raw, of the rectangle full) is shown darker over all screens and
-    the user draws a box on it with the mouse; inside the box it is shown bright. Returns the box (screen pixels) or
-    None when cancelled: Esc, a right click, closing the program, or nothing drawn for `timeout` seconds.
-    Windows only; runs in the calling thread (it has its own message loop)."""
+    """Snipping-tool style: the picture just taken (raw, of the rectangle full) is shown darker over the screens and
+    the user draws a box on it with the mouse; inside the box it is shown bright. Returns the box (screen pixels,
+    always inside full) or None when cancelled: Esc, a right click, closing the program, or nothing done for
+    `timeout` seconds. The window never takes the keyboard focus (the meeting keeps it); Esc is caught by a keyboard
+    hook while the box is shown and does not reach the program below. Windows only; runs in the calling thread
+    (it has its own message loop)."""
+    if not _PICK_LOCK.acquire(blocking=False):
+        raise APIError("An area is already being drawn.")
+    try:
+        return _pick_area(raw, full, hint_mon, hide, timeout, stop, on_ready)
+    finally:
+        _PICK_LOCK.release()
+
+
+def _pick_area(raw, full, hint_mon, hide, timeout, stop, on_ready):
     import ctypes
     from ctypes import wintypes as wt
     u, g, k = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.kernel32
     LRESULT = ctypes.c_ssize_t
     WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+    HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wt.WPARAM, wt.LPARAM)
 
     class WNDCLASSEXW(ctypes.Structure):
         _fields_ = [("cbSize", wt.UINT), ("style", wt.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
@@ -7583,6 +7607,12 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
         _fields_ = [("bmiHeader", _BMIH), ("bmiColors", ctypes.c_uint32 * 3)]
     u.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
     u.DefWindowProcW.restype = LRESULT
+    u.CallNextHookEx.argtypes = [wt.HANDLE, ctypes.c_int, wt.WPARAM, wt.LPARAM]
+    u.CallNextHookEx.restype = LRESULT
+    u.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wt.HINSTANCE, wt.DWORD]
+    u.SetWindowsHookExW.restype = wt.HANDLE
+    u.UnhookWindowsHookEx.argtypes = [wt.HANDLE]
+    u.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
     u.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD, ctypes.c_int, ctypes.c_int,
                                   ctypes.c_int, ctypes.c_int, wt.HWND, wt.HMENU, wt.HINSTANCE, wt.LPVOID]
     u.CreateWindowExW.restype = wt.HWND
@@ -7596,11 +7626,12 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
     u.InvalidateRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT), wt.BOOL]
     u.FillRect.argtypes = [wt.HDC, ctypes.POINTER(wt.RECT), wt.HBRUSH]
     u.DrawTextW.argtypes = [wt.HDC, wt.LPCWSTR, ctypes.c_int, ctypes.POINTER(wt.RECT), wt.UINT]
-    for f in (u.ShowWindow, u.SetForegroundWindow, u.SetFocus, u.SetCapture, u.DestroyWindow, u.UpdateWindow):
-        f.argtypes = [wt.HWND] + ([ctypes.c_int] if f is u.ShowWindow else [])
+    for f in (u.SetCapture, u.DestroyWindow, u.UpdateWindow, u.IsWindow):
+        f.argtypes = [wt.HWND]
+    u.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+    u.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
     u.SetTimer.argtypes = [wt.HWND, ctypes.c_size_t, wt.UINT, ctypes.c_void_p]
     u.SetTimer.restype = ctypes.c_size_t
-    u.KillTimer.argtypes = [wt.HWND, ctypes.c_size_t]
     u.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
     u.TranslateMessage.argtypes = u.DispatchMessageW.argtypes = [ctypes.POINTER(wt.MSG)]
     u.GetDC.argtypes = [wt.HWND]
@@ -7631,35 +7662,12 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
     g.SetBkMode.argtypes = [wt.HDC, ctypes.c_int]
 
     fx, fy, fw, fh = full
-    st = {"down": None, "cur": None, "result": None, "done": False, "hwnd": None, "t0": time.time(), "error": None}
-    gdi = []                                            # everything made here is deleted at the end
-    dcs = []
-
-    def dib(arr):
-        bi = BITMAPINFO()
-        bi.bmiHeader.biSize, bi.bmiHeader.biWidth, bi.bmiHeader.biHeight = ctypes.sizeof(_BMIH), fw, -fh
-        bi.bmiHeader.biPlanes, bi.bmiHeader.biBitCount = 1, 32
-        bits = ctypes.c_void_p()
-        bmp = g.CreateDIBSection(None, ctypes.byref(bi), 0, ctypes.byref(bits), None, 0)
-        if not bmp or not bits.value:
-            raise APIError("Not enough memory to show the screen for drawing.")
-        gdi.append(bmp)
-        ctypes.memmove(bits, arr.ctypes.data, fw * fh * 4)
-        dc = g.CreateCompatibleDC(None)
-        dcs.append((dc, g.SelectObject(dc, bmp)))
-        return dc
-    a = np.frombuffer(raw, dtype=np.uint8, count=fw * fh * 4).reshape(fh, fw, 4)
-    dark = a >> 1
-    dark -= a >> 3                                      # 3/8 of the light: clearly darker, still readable
-    bright_dc, dark_dc = dib(np.ascontiguousarray(a)), dib(dark)
-    del dark
-    accent = g.CreateSolidBrush(0x00F0A030)             # (BGR) a clear blue for the box
-    panel = g.CreateSolidBrush(0x00302828)
-    fsize = max(16, min(40, hint_mon[3] // 45))
-    font = g.CreateFontW(-fsize, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
-    gdi += [x for x in (accent, panel, font) if x]
-    border = max(2, fsize // 9)
-    hint = [0, 0, 0, 0]                                 # (placed once the font can be measured)
+    WM_ESC = 0x8000 + 0x51                               # (WM_APP + …) Esc caught by the keyboard hook
+    st = {"down": None, "cur": None, "result": None, "done": False, "hwnd": None, "error": None,
+          "t0": time.monotonic(), "rdown": False}
+    gdi, dcs = [], []                                     # everything made here; deleted in the finally below
+    back = back_bmp = old_back = hook = None
+    hint = [0, 0, 0, 0]
 
     def sel():
         if not st["down"] or not st["cur"]:
@@ -7718,8 +7726,9 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
         st["done"], st["result"] = True, result
         u.DestroyWindow(st["hwnd"])
 
-    def xy(lp):
-        return ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
+    def xy(lp):                                           # always inside the picture (the mouse is captured)
+        x, y = ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
+        return min(max(x, 0), fw), min(max(y, 0), fh)
 
     def proc(hwnd, msg, wp, lp):
         try:
@@ -7728,14 +7737,18 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
                 return 0
             if msg == 0x0014:                            # WM_ERASEBKGND: everything is painted by us
                 return 1
+            if msg == 0x0021:                            # WM_MOUSEACTIVATE: never take the focus from the meeting
+                return 3                                 # MA_NOACTIVATE
             if msg == 0x0201:                            # left button down: the box starts here
                 st["down"] = st["cur"] = xy(lp)
+                st["t0"] = time.monotonic()
                 u.SetCapture(hwnd)
                 invalidate([hint])
                 return 0
             if msg == 0x0200 and st["down"]:             # mouse move while drawing
                 old = sel()
                 st["cur"] = xy(lp)
+                st["t0"] = time.monotonic()
                 invalidate([old, sel(), hint])
                 return 0
             if msg == 0x0202 and st["down"]:             # left button up: done, unless it was only a click
@@ -7753,14 +7766,22 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
                 st["down"] = st["cur"] = None
                 invalidate([old, hint])
                 return 0
-            if msg in (0x0204, 0x0010):                  # right click, or closed: cancelled
+            if msg == 0x0204:                            # right button down: cancel when it comes up (the up must
+                st["rdown"] = True                       # not reach the program below: it opens its menu there)
+                return 0
+            if msg == 0x0205:
+                if st["rdown"]:
+                    finish(None)
+                return 0
+            if msg in (0x0010, WM_ESC):                  # closed, or Esc from the keyboard hook
                 finish(None)
                 return 0
-            if msg == 0x0100 and wp == 0x1B:             # Esc
+            if msg == 0x0100 and wp == 0x1B:             # Esc (if the window has the focus after all)
                 finish(None)
                 return 0
-            if msg == 0x0113:                            # timer: Esc even without the keyboard focus, time out, closing
-                if (u.GetAsyncKeyState(0x1B) & 0x8000) or time.time() - st["t0"] > timeout or (stop and stop.is_set()):
+            if msg == 0x0113:                            # timer: Esc without the hook, time out, closing, on top
+                if ((u.GetAsyncKeyState(0x1B) & 0x8000) or time.monotonic() - st["t0"] > timeout
+                        or (stop and stop.is_set())):
                     finish(None)
                 return 0
             if msg == 0x02E0:                            # a DPI change: the window keeps its exact place
@@ -7776,23 +7797,70 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
             return 0
         return u.DefWindowProcW(hwnd, msg, wp, lp)
 
+    def key_hook(code, wp, lp):
+        try:
+            if code == 0 and st["hwnd"] and not st["done"]:
+                vk = ctypes.cast(lp, ctypes.POINTER(wt.DWORD))[0]
+                if vk == 0x1B:                           # Esc: ours while the box is shown (down and up)
+                    if wp in (0x0100, 0x0104):
+                        u.PostMessageW(st["hwnd"], WM_ESC, 0, 0)
+                    return 1
+        except Exception:
+            pass
+        return u.CallNextHookEx(None, code, wp, lp)
+
     hinst = k.GetModuleHandleW(None)
-    if _PICK["proc"] is None:                          # one window class for the life of the program
-        _PICK["proc"] = WNDPROC(lambda h, m, w, l: _PICK["now"](h, m, w, l) if _PICK["now"]
-                                else u.DefWindowProcW(h, m, w, l))
-        wc = WNDCLASSEXW()
-        wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
-        wc.lpfnWndProc = _PICK["proc"]
-        wc.hInstance = hinst
-        wc.hCursor = u.LoadCursorW(None, ctypes.c_void_p(32515))     # the cross
-        wc.lpszClassName = "MeetingAssistantAreaPicker"
-        if not u.RegisterClassExW(ctypes.byref(wc)) and k.GetLastError() != 1410:
-            _PICK["proc"] = None
-            raise APIError("The area to read could not be shown.")
-    _PICK["now"] = proc
-    back_bmp = None
-    back = None
     try:
+        def dib():
+            bi = BITMAPINFO()
+            bi.bmiHeader.biSize, bi.bmiHeader.biWidth, bi.bmiHeader.biHeight = ctypes.sizeof(_BMIH), fw, -fh
+            bi.bmiHeader.biPlanes, bi.bmiHeader.biBitCount = 1, 32
+            bits = ctypes.c_void_p()
+            bmp = g.CreateDIBSection(None, ctypes.byref(bi), 0, ctypes.byref(bits), None, 0)
+            if not bmp or not bits.value:
+                raise APIError("Not enough memory to show the screen for drawing.")
+            gdi.append(bmp)
+            dc = g.CreateCompatibleDC(None)
+            if not dc:
+                raise APIError("Not enough memory to show the screen for drawing.")
+            dcs.append((dc, g.SelectObject(dc, bmp)))
+            view = np.ctypeslib.as_array((ctypes.c_uint8 * (fw * fh * 4)).from_address(bits.value)).reshape(fh, fw, 4)
+            return dc, view
+        a = np.frombuffer(raw, dtype=np.uint8, count=fw * fh * 4).reshape(fh, fw, 4)
+        bright_dc, v = dib()
+        v[:] = a
+        dark_dc, v = dib()
+        step = max(1, 4_000_000 // max(1, fw))           # in strips: no full-size temporary copies
+        for y0 in range(0, fh, step):
+            part = a[y0:y0 + step]
+            np.right_shift(part, 1, out=v[y0:y0 + step])
+            v[y0:y0 + step] -= part >> 3                 # 3/8 of the light: clearly darker, still readable
+        del v
+        accent = g.CreateSolidBrush(0x00F0A030)           # (BGR) a clear blue for the box
+        panel = g.CreateSolidBrush(0x00302828)
+        fsize = max(16, min(40, hint_mon[3] // 45))
+        font = g.CreateFontW(-fsize, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+        gdi.extend(x for x in (accent, panel, font) if x)
+        border = max(2, fsize // 9)
+
+        if _PICK["proc"] is None:                         # one window class for the life of the program
+            _PICK["proc"] = WNDPROC(lambda h, m, w, l: _PICK["now"](h, m, w, l) if _PICK["now"]
+                                    else u.DefWindowProcW(h, m, w, l))
+            _PICK["hook"] = HOOKPROC(lambda c, w, l: _PICK["key"](c, w, l) if _PICK["key"]
+                                     else u.CallNextHookEx(None, c, w, l))
+            cls = f"MeetingAssistantAreaPicker-{os.getpid()}-{id(_PICK)}"   # (its own name: never another copy's)
+            wc = WNDCLASSEXW()
+            wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
+            wc.lpfnWndProc = _PICK["proc"]
+            wc.hInstance = hinst
+            wc.hCursor = u.LoadCursorW(None, ctypes.c_void_p(32515))     # the cross
+            wc.lpszClassName = cls
+            if not u.RegisterClassExW(ctypes.byref(wc)):
+                _PICK["proc"] = None
+                raise APIError("The area to read could not be shown.")
+            _PICK["cls"] = cls
+        _PICK["now"], _PICK["key"] = proc, key_hook
+
         sdc = u.GetDC(None)
         back = g.CreateCompatibleDC(sdc)
         back_bmp = g.CreateCompatibleBitmap(sdc, fw, fh)
@@ -7805,22 +7873,22 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
             old_f = g.SelectObject(back, font)
             rc = wt.RECT(0, 0, 0, 0)
             if u.DrawTextW(back, PICK_HINT, -1, ctypes.byref(rc), 0x400 | 0x20) and rc.right > 0:
-                tw = rc.right                               # DT_CALCRECT: the real width of the text
+                tw = rc.right                             # DT_CALCRECT: the real width of the text
             g.SelectObject(back, old_f)
         hw_ = tw + 2 * fsize
         hint[:] = [hint_mon[0] - fx + (hint_mon[2] - hw_) // 2, hint_mon[1] - fy + fsize, hw_, int(fsize * 2.2)]
-        hwnd = u.CreateWindowExW(0x00000008 | 0x00000080, "MeetingAssistantAreaPicker", "Choose the area to read",
-                                 0x80000000, fx, fy, fw, fh, None, None, hinst, None)   # topmost tool popup
+
+        # topmost, tool window (no taskbar button), never activated (the meeting keeps the keyboard)
+        hwnd = u.CreateWindowExW(0x00000008 | 0x00000080 | 0x08000000, _PICK["cls"], PICK_TITLE,
+                                 0x80000000, fx, fy, fw, fh, None, None, hinst, None)
         if not hwnd:
-            g.SelectObject(back, old_back)
             raise APIError("The area to read could not be shown.")
         st["hwnd"] = hwnd
         if hide:
             u.SetWindowDisplayAffinity(hwnd, 0x11)       # the other side of a screen share keeps seeing the real screen
-        u.ShowWindow(hwnd, 5)
+        hook = u.SetWindowsHookExW(13, _PICK["hook"], hinst, 0)   # WH_KEYBOARD_LL (if refused: the timer polls Esc)
+        u.ShowWindow(hwnd, 4)                            # SW_SHOWNOACTIVATE
         u.UpdateWindow(hwnd)
-        u.SetForegroundWindow(hwnd)
-        u.SetFocus(hwnd)
         u.SetTimer(hwnd, 1, 50, None)
         if on_ready:
             on_ready(hwnd)
@@ -7828,13 +7896,19 @@ def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready
         while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             u.TranslateMessage(ctypes.byref(msg))
             u.DispatchMessageW(ctypes.byref(msg))
-        g.SelectObject(back, old_back)
     finally:
-        _PICK["now"] = None
-        if back_bmp:
-            g.DeleteObject(back_bmp)
+        if hook:
+            u.UnhookWindowsHookEx(hook)
+        _PICK["now"] = _PICK["key"] = None
+        if st["hwnd"] and u.IsWindow(st["hwnd"]):        # (an error before or in the loop: never a dark screen left)
+            st["done"] = True
+            u.DestroyWindow(st["hwnd"])
+        if old_back:
+            g.SelectObject(back, old_back)
         if back:
             g.DeleteDC(back)
+        if back_bmp:
+            g.DeleteObject(back_bmp)
         for dc, old in dcs:
             g.SelectObject(dc, old)
             g.DeleteDC(dc)
@@ -11578,6 +11652,7 @@ class App:
         self.token = secrets.token_urlsafe(24)
         self.url = ""
         self.closing = threading.Event()
+        self.leaving = threading.Event()                   # set as soon as closing starts (closing waits for the stop)
         self.running = False
         self.stopping = False
         self.monitor_until = 0.0
@@ -12713,12 +12788,13 @@ class App:
                     return screen_png(r[2], r[3], grab_rect(r)), "the same area as last time"
                 draw = True                                       # that area is not on any screen now (a monitor less)
             if draw:
-                full = virt if virt[2] * virt[3] <= 40_000_000 else rects["cursor_monitor"]
+                full = virt if virt[2] * virt[3] <= 25_000_000 else rects["cursor_monitor"]   # (memory: ~5 copies)
                 raw = grab_rect(full)
                 pub(state="working", text="", note="Draw a box around the question with the mouse. Esc cancels.")
                 c = self.cfg
                 hide = bool(c.get("hide_from_share") or c.get("overlay_hide")) and capture_hide_supported()
-                r = pick_area(raw, full, rects["cursor_monitor"], hide=hide, timeout=60.0, stop=self.closing)
+                r = pick_area(raw, full, rects["cursor_monitor"], hide=hide, timeout=60.0, stop=self.leaving)
+                r = r and clip_rect(r, full)
                 if not r:
                     return None
                 w, h, data = crop_bgra(raw, full, r)
@@ -12750,8 +12826,8 @@ class App:
                 pub(state="working", text="", note=(f"In {i} s you draw a box around the question — switch to that screen now."
                                                     if draw else f"Picture in {i} s — switch to the screen you want read."))
                 time.sleep(1)
-                if self.closing.is_set():
-                    return
+                if self.leaving.is_set():
+                    return pub(state="cancelled", text="", note="The program is closing.")
             if not draw:
                 pub(state="working", text="", note="Taking the picture…")
             got = self._take_picture(draw, saved, mode)
@@ -15117,6 +15193,7 @@ class App:
     def shutdown(self):
         if self.closing.is_set():
             return
+        self.leaving.set()                                 # a box being drawn goes away at once
         log("shutting down")
         try:
             if self.running:
@@ -15900,6 +15977,8 @@ def run_overlay_helper(argv):
     u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
     u.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
     u.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    u.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+    u.FindWindowW.restype = wt.HWND
     vx, vy, sw, sh = u.GetSystemMetrics(76), u.GetSystemMetrics(77), u.GetSystemMetrics(78), u.GetSystemMetrics(79)   # all screens together
     try:                                                     # where it was left last time
         with open(OVERLAY_POS_PATH, "r", encoding="utf-8") as f:
@@ -15949,7 +16028,7 @@ def run_overlay_helper(argv):
         u.SetLayeredWindowAttributes(hwnd, 0, int(alpha * 255 / 100) if not st["move"] else 255, 2)
         if place:
             u.SetWindowPos(hwnd, -1, st["x"], st["y"], st["w"], st["h"], 0x10 | 0x40 | 0x20)
-        else:
+        elif not u.FindWindowW(None, PICK_TITLE):            # (while an area is drawn it stays under that screen)
             u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x2 | 0x1 | 0x10)
         want = (WDA_EXCLUDEFROMCAPTURE if hide else 0)
         if get_aff(hwnd) != want:
