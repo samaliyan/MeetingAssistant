@@ -7787,8 +7787,8 @@ def _pick_area(raw, full, hint_mon, hide, timeout, stop, on_ready):
                     finish(None)
                     return 0
                 st["ticks"] = st.get("ticks", 0) + 1
-                if st["ticks"] % 10 == 0:                # twice a second: above other always-on-top windows
-                    u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x2 | 0x1 | 0x10)
+                if st["ticks"] % 10 == 0 and not st["down"]:   # twice a second: above other always-on-top windows
+                    u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x2 | 0x1 | 0x10)   # (not while drawing: it sends a move)
                 return 0
             if msg == 0x02E0:                            # a DPI change: the window keeps its exact place
                 return 0
