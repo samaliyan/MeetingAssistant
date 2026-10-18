@@ -1144,7 +1144,6 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <button class="btn sm ghost" id="glossFill" style="margin-top:6px" title="Finds the technical words in your job advert and CV and adds the new ones here"><span data-icon="sparkles"></span>Fill from job advert and CV</button>
       </div>
       <label class="toggle"><input type="checkbox" data-key="debrief_scores"><span class="switch"></span><span class="tt"><b>Scores in the review</b><span>"How did I do?" also gives scores (clarity, structure, depth, examples, follow-up) and the three most useful fixes. One extra small request.</span></span></label>
-      <label class="toggle"><input type="checkbox" data-key="coach"><span class="switch"></span><span class="tt"><b>Interview situation card</b><span>Shows the stage of the interview, how hard the questions are, questions asked again, and one short tip. It uses about one small request every 45 seconds.</span></span></label>
       <div class="field">
         <span class="label">Languages spoken in the meeting</span>
         <div class="langs" id="langChips"></div>
@@ -1864,9 +1863,7 @@ function setFeatures(change){
   const f = Object.assign({}, S.cfg.features || {}, change);
   for(const k of Object.keys(f)) if(f[k] === true) delete f[k];            // on is the default: only "off" is kept
   S.cfg.features = f;
-  const extra = change.coach === true && S.cfg.coach === false ? {coach: true} : {};   // turning Coach on here means: use it
-  Object.assign(S.cfg, extra);
-  applyFeatures(); renderFeatures(); queueSave(Object.assign({features: f}, extra));
+  applyFeatures(); renderFeatures(); queueSave({features: f});
 }
 $$("[data-preset]").forEach(b => b.onclick = () => {
   const p = PRESETS[b.dataset.preset], change = {};
@@ -2755,7 +2752,7 @@ function coachLive(){
 function setH(el, html){ if(el._h !== html){ el._h = html; el.innerHTML = html; } }
 function renderCoach(){
   const box = $("#coach"); if(!box) return;
-  const on = S.cfg && S.cfg.coach !== false && featOn("coach") && S.running;   // (also the overlay's coach line)
+  const on = S.cfg && featOn("coach") && S.running;   // (also the overlay's coach line)
   box.hidden = !on; if(!on) return;
   const folded = coFolded();
   box.classList.toggle("fold", folded); $("#coFold").setAttribute("aria-expanded", folded ? "false" : "true");
@@ -2845,7 +2842,7 @@ function splitSay(t){                                               // "advice .
 }
 async function askCoach(text){
   if(!S.running){ toast("info", "Start the meeting first."); return; }
-  if(S.cfg && S.cfg.coach === false){ toast("info", "The coach is off (Settings)."); return; }
+  if(S.cfg && !featOn("coach")){ toast("info", "The coach is off (Setup › Features › Coach)."); return; }
   if(!featOn("coach")){ toast("info", "Coach is turned off. Turn it on in Setup › Features."); return; }
   if(S.coHelp && S.coHelp.busy){ toast("info", "The coach is still answering."); return; }
   const tok = S.coTok = (S.coTok || 0) + 1;
@@ -3160,7 +3157,7 @@ function checkSel(){
   S.sel = {id: +art.id.slice(1), text: txt.slice(0, 600)};
   const r = range.getBoundingClientRect();
   selPop.querySelector('[data-a="answer"]').hidden = !featOn("answers");
-  selPop.querySelector('[data-a="explain"]').hidden = !featOn("translate") && !featOn("answers");
+  selPop.querySelector('[data-a="explain"]').hidden = !featOn("translate");      // (the meaning belongs to Translation)
   if(!featOn("answers") && !featOn("translate")){ hideSel(); return; }       // nothing to offer
   selPop.hidden = false;
   const w = selPop.offsetWidth, h = selPop.offsetHeight;

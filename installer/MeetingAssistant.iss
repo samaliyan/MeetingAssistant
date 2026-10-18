@@ -108,5 +108,9 @@ begin
                           ExpandConstant('{app}\Data') + #13#10#13#10 +
                           'Choose No to keep them (they are used again if you install the program later).',
                           mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES then
-      DelTree(ExpandConstant('{app}'), True, True, True);
+    begin
+      { only the Data folder: the program folder may have been chosen as an existing folder with other files }
+      DelTree(ExpandConstant('{app}\Data'), True, True, True);
+      RemoveDir(ExpandConstant('{app}'));   { (removed only when it is empty now) }
+    end;
 end;
