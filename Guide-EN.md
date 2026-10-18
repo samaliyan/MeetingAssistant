@@ -1,4 +1,15 @@
-# Meeting Assistant — User Guide (version 6.34)
+# Meeting Assistant — User Guide (version 6.35)
+
+## Version 6.35: nothing moves while you read
+
+- **The answer you read stays.** A new question waits in a yellow bar while your mouse is on the answer, while you speak, and for 30 seconds while you read it silently. Press **Space** (or click the bar) to see it at once.
+- **The coach is one line** while an answer is shown, so the answer never jumps. **Details** opens the rest; **Ask F4** asks it.
+- **F9 during a meeting: press it twice** to stop (the Stop button stops at once).
+- The mode (Meeting / In person / Video) is chosen before Start; during a meeting the switch is hidden.
+- After Stop: **Summary · How did I do? · Export**. After a restart: **Open the last meeting** on the start screen.
+- A part turned off in Setup › Features takes no key and shows no settings; "Translation while they speak: Sentence end" sends nothing while they speak, with every service.
+- Stop keeps writing the last sentences when a service is slow; "Continue last" is always the newest meeting.
+- Long meetings stay quick (a 2000-line meeting: about 0.1 s per new line on a slow laptop, it was over 1 s).
 
 ## Version 6.34: safer and steadier
 
@@ -1261,10 +1272,10 @@ Off
 
 A lower number means the temporary text updates sooner, but more requests and tokens are used. With the off option, text appears only after the sentence is finished, and it uses the least. Suggestion: 2 seconds for free Groq, 3 or 5 seconds for a paid service.
 
-2. The second row is for LIVE services such as Deepgram:
+2. The second row is the translation of the words while they are still being said (every service):
 
 ```
-Live translation refresh
+Translation while they speak
 ```
 
 Options:
@@ -1534,7 +1545,7 @@ Options:
 The live text itself does not use tokens, because it is built on the computer. But its live translation does use tokens. How much the translation uses is set with this row:
 
 ```
-Live translation refresh
+Translation while they speak
 ```
 
 Choose the number the test suggests. If you choose a lower number and the computer is slow, the app skips the updates it cannot keep up with, so the final text does not have to wait.
@@ -1935,17 +1946,13 @@ Hands-Free
 ```
 
 
-1. **The window did not open:** Double-click this file once:
+1. **The window did not open:** Start it again from the Start menu (Meeting Assistant). If it still does not open, send me this file:
 
 ```
-run.bat
+%LOCALAPPDATA%\Programs\Meeting Assistant\Data\app.log
 ```
 
-If it still does not open, send me this file from the Data folder next to the app:
-
-```
-app.log
-```
+(With the zip copy the Data folder is next to MeetingAssistant.exe.)
 
 2. **The bottom of the window says Offline:** Your VPN is off (if you need one to reach these services) or the proxy is not correct. In the connection settings section, click this button so the exact reason is written:
 
