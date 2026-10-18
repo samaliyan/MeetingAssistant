@@ -104,7 +104,7 @@ def save(name, raw, full, crop=None):
     with open(os.path.join(OUT, name + ".png"), "wb") as f:
         f.write(app.encode_png(w, h, data, max_width=4000))
     with open(os.path.join(OUT, "small-" + name + ".png"), "wb") as f:
-        f.write(app.encode_png(w, h, data, max_width=560))
+        f.write(app.encode_png(w, h, data, max_width=280))
 
 
 def png_rgb(data):
@@ -340,7 +340,8 @@ try:
     root.focus_force()
     pump(0.5)
     job(now=True)
-    check("the window in front is read", len(got) == 3 and png_rgb(got[-1]).shape[:2] == (TH, TW), f"{got and png_rgb(got[-1]).shape}", hard=False)
+    check("the window in front is read (sent twice as big: it is small)", len(got) == 3 and png_rgb(got[-1]).shape[:2] == (2 * TH, 2 * TW),
+          f"{got and png_rgb(got[-1]).shape}", hard=False)
     a.closing.set()
 except Exception as e:
     import traceback
