@@ -7,7 +7,7 @@ import time
 # ---- settings -----------------------------------------------------------------------------
 def test_defaults_are_valid(app):
     c = app.sanitize({})
-    assert c["languages"] == ["en", "de"] and c["my_language"] == "fa" and c["answer_language"] == "same"
+    assert c["languages"] == ["en"] and c["my_language"] == "fa" and c["answer_language"] == "same"
     assert c["config_version"] == app.CONFIG_VERSION
 
 
@@ -249,17 +249,17 @@ def test_continue_copy_is_at_most_5_seconds_behind(app):
         s.save_if_dirty(final=False)                        # the clock does not move: the write took no time
         assert s.state_every == 5.0
         s.add("them", t[0] + 9, t[0] + 10, "Fourth line.", "en", [4])
-        orig = app.json.dump
+        orig = app.json.dumps
 
         def slow(*a, **k):
             t[0] += 1.5                                     # this write takes 1.5 s
             return orig(*a, **k)
-        app.json.dump = slow
+        app.json.dumps = slow
         try:
             s.state_t = t[0] - 6
             s.save_if_dirty(final=False)
         finally:
-            app.json.dump = orig
+            app.json.dumps = orig
         assert s.state_every == 20.0
     finally:
         app.time.time = real

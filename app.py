@@ -156,6 +156,8 @@ WINDOW_PROFILE = os.path.join(DATA_DIR, ".window")
 MODELS_DIR = os.path.join(DATA_DIR, "models")          # local speech-to-text models (downloaded or copied here)
 PORT_FILE = os.path.join(DATA_DIR, ".port")
 LAST_MEETING = os.path.join(DATA_DIR, ".last_meeting.json")   # lets "Continue" work after a restart too
+STREAM_EVERY = 0.15              # streamed text is sent to the window at most this often (s): it looks the same, costs
+STREAM_EVERY_ANSWER = 0.1        # far less work in a long meeting (the answer a little more often: it is read live)
 LAST_OWNER = [None]               # (start time, file) of the meeting kept there: an older meeting never replaces it
 BASE_URL = os.environ.get("MA_BASE_URL", "https://api.groq.com/openai/v1")
 try:
@@ -203,7 +205,7 @@ DEFAULTS = {
     "config_version": CONFIG_VERSION,
     "api_key": "",
     "proxy": "",
-    "languages": ["en", "de"],   # the meeting is in one of these (one = fixed, several = detected among them)
+    "languages": ["en"],         # the meeting is in one of these (one = fixed, several = detected among them)
     "my_language": "fa",         # translations, explanations, summary and the answer's meaning are in this language
     "answer_language": "same",   # "same" = the language of the question, or a language code
     "context": "",
@@ -212,7 +214,7 @@ DEFAULTS = {
     "me_label": "Me",
     "them_label": "Person 1",
     "transcribe_me": True,
-    "translate_me": True,        # a translation under my own lines too
+    "translate_me": False,       # a translation under my own lines too (off: fewer requests, less moving text)
     "answer_me": False,          # test mode: suggest answers to your own lines too
     "answer_mode": "fast",       # fast | smart
     "job_ad": "",                # the job advert (for prep and answers; optional)
@@ -469,7 +471,7 @@ def clean_langs(v):
         c = str(c).lower()
         if c in LANGS and c not in out:
             out.append(c)
-    return out[:6] or ["en", "de"]
+    return out[:6] or ["en"]
 
 
 _log_lock = threading.Lock()
@@ -6877,7 +6879,7 @@ class Session:
         try:
             tmp = LAST_MEETING + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.state(), f, ensure_ascii=False)
+                f.write(json.dumps(self.state(), ensure_ascii=False))   # (one write: several times faster than json.dump)
                 f.flush()
                 os.fsync(f.fileno())                            # on the disk before it replaces the last good copy
             os.replace(tmp, LAST_MEETING)
@@ -7788,6 +7790,7 @@ class Engine:
         self.me_voice_at = 0.0         # last time the microphone heard the user (voice, not text)
         self.plan = None               # the auto answer that waits a moment for the rest of a question
         self.plan_lock = threading.Lock()
+        self.mark_wait = None          # (time F7 was pressed while someone spoke, its fallback timer)
         self.live_retries = collections.Counter()   # how many times a broken live stream was reopened by itself
         self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
         self.live_lock = threading.RLock()   # one start of live streams at a time (never two streams for one source)
@@ -8458,7 +8461,7 @@ class Engine:
             if key in self.done_segs:
                 return False
             now = time.time()
-            if now - last[0] > 0.08:
+            if now - last[0] > STREAM_EVERY:            # (each update makes the window work: about 7 a second look the same)
                 last[0] = now
                 self.hub.publish("speaking", seg=key, source=source, phase="speaking", translation=t.strip())
             return None
@@ -8864,6 +8867,39 @@ class Engine:
             return self._drop(job)
         self.accept_text(source, text, detected or "", job["t0"], job["t_end"], job["segs"], job.get("timing", {}))
 
+    def mark_when_written(self, at):
+        """F7 while someone speaks: the sentence spoken at that moment is marked as soon as its text is written
+        (or, if none comes within 20 s, the newest line then)."""
+        with self.plan_lock:
+            old = self.mark_wait
+            if old:
+                old[1].cancel()
+            tm = threading.Timer(20, self._mark_fallback, (at,))
+            tm.daemon = True
+            self.mark_wait = (at, tm)
+            tm.start()
+
+    def _mark_fallback(self, at):
+        with self.plan_lock:
+            if not self.mark_wait or self.mark_wait[0] != at:
+                return
+            self.mark_wait = None
+        e = self.session.mark(None)
+        if e:
+            self.hub.publish("entry", entry=e)
+            self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
+
+    def _mark_if_waiting(self, e):
+        with self.plan_lock:
+            w = self.mark_wait
+            if not w or not (e["t0"] - 1.0 <= w[0] <= e["t_end"] + 1.5):
+                return e
+            self.mark_wait = None
+            w[1].cancel()
+        m = self.session.mark(e["id"], True)
+        self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
+        return m or e
+
     def accept_text(self, source, text, lang, t0, t_end, segs, timing, speaker=None):
         """A finished sentence (from any service): show it, translate it, maybe answer it."""
         voices = getattr(self.app, "voices", None)
@@ -8898,6 +8934,8 @@ class Engine:
         ans_on = (source == "them" or c["answer_me"]) and not self.file_mode and feat(c, "answers")
         e = self.session.update(e["id"], tr_state="pending" if tr_on else "off",
                                 ans_state="thinking" if ans_on else "off", timing=timing)
+        if self.mark_wait:
+            e = self._mark_if_waiting(e)                    # F7 was pressed while this sentence was spoken
         self.hub.publish("entry", entry=e)
         if not self.file_mode:
             self.stats.add("text", e["t_text"] - t_end)
@@ -9199,7 +9237,7 @@ class Engine:
                     self.stats.add("translation", now - e["t_text"])
             if not current():
                 return False
-            if now - state["last"] >= 0.06:
+            if now - state["last"] >= STREAM_EVERY:
                 state["last"] = now
                 self._publish(eid, translation=t.strip(), tr_state="streaming")
 
@@ -9293,7 +9331,7 @@ class Engine:
                 state["first"] = now
                 if not force:
                     self.stats.add("answer", now - e["t_text"])
-            if now - state["last"] >= 0.06:
+            if now - state["last"] >= STREAM_EVERY_ANSWER:
                 state["last"] = now
                 ans, fa = split_answer(t)
                 self._publish(eid, answer=ans, answer_fa=fa, ans_state="streaming")
@@ -9423,7 +9461,7 @@ class Engine:
 
         def on_text(t):
             now = time.time()
-            if now - last[0] > 0.06:
+            if now - last[0] > STREAM_EVERY:
                 last[0] = now
                 self._publish(eid, explain=t.strip(), ex_state="streaming")
         try:
@@ -11661,10 +11699,9 @@ class App:
             self.preflight_fail = time.time()
             msg = short(err, 140).rstrip(". ")
             if isinstance(err, AuthError):
-                return (f"{name} refused the key ({msg}). Open Setup › Connection and paste a valid key, then press Start. "
-                        "(If the key is right, pressing Start once more starts anyway.)")
-            return (f"{msg}. Check the internet / VPN, then press Start again "
-                    "(pressing Start once more starts anyway).")
+                return (f"{name} refused the key ({msg}). Open Setup › Services and paste a valid key. "
+                        "If the key is right, press Start anyway.")
+            return f"{msg}. Check the internet / VPN, then press Start again — or press Start anyway."
         self.preflight_fail = 0.0
         return ""
 
@@ -11673,7 +11710,7 @@ class App:
         if not self.running and not self.stopping and not self.missing_tasks(self.needed_tasks(at_start=True)):
             bad = self.preflight()
             if bad:
-                return {"ok": False, "error": bad}
+                return {"ok": False, "error": bad, "anyway": True}     # (a second Start within 90 s starts anyway)
         with self.lock:
             if self.running:
                 return {"ok": True}
@@ -11682,7 +11719,7 @@ class App:
             if missing:
                 return {"ok": False, "error": "setup", "missing": missing}
             if pyaudio is None:
-                return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
             if self.stopping:
                 return {"ok": False, "error": "Still finishing the previous meeting — try again in a moment."}
             if self.recording:
@@ -11936,7 +11973,7 @@ class App:
             self.monitor_until = 0.0
             if on:
                 if pyaudio is None:
-                    return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                    return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
                 try:
                     problems, mic, spk = self._start_captures(lambda *a, **k: None, True)
                 except Exception as e:
@@ -12326,7 +12363,7 @@ class App:
         if not live:
             return {"ok": False, "error": "Start the meeting first."}
         if not self.cfg.get("transcribe_me"):
-            return {"ok": False, "error": "Your microphone is not used (Setup › Audio: write what I say)."}
+            return {"ok": False, "error": "Your microphone is not used: turn on Setup › Audio › Transcribe my voice."}
         if not any(getattr(c, "source", "") == "me" for c in (self.captures or [])):
             return {"ok": False, "error": "No microphone is being heard. Choose it in Setup › Audio and start again."}
         ml = self.cfg["my_language"]
@@ -12371,6 +12408,23 @@ class App:
                         self.hub.publish("meeting_found", app=name)
             except Exception as e:
                 log("meeting watch:", short(e, 120), level="debug")
+
+    def api_open_last(self):
+        """Shows the last meeting (after the program was closed and opened again) to read it, summarize it, review it
+        or export it - nothing is listened to; Continue goes on with it."""
+        with self.lock:
+            if self.running or self.stopping or self.recording:
+                return {"ok": False, "error": "Stop first."}
+            s = self.resumable
+            if s is None or not os.path.isfile(s.path):
+                return {"ok": False, "error": "There is no earlier meeting to open."}
+            self.last_session = s
+            self._set_review(Engine(self, s, workers=False))
+        self.hub.publish("session", session_file=s.path, entries=s.ordered(), summary=s.summary, feedback=s.feedback,
+                         coach_notes=s.coach_notes, names=dict(s.names), my_notes=s.my_notes, notes_full=s.notes_full,
+                         has_audio=session_has_audio(s))
+        self.publish_running()
+        return {"ok": True}
 
     def _shown_session(self):
         eng = self.helper()
@@ -12453,7 +12507,7 @@ class App:
             if purpose == "test" and self.voices.me is None:
                 return {"ok": False, "error": "Learn your voice first."}
             if pyaudio is None and not os.environ.get("MA_TEST_MIC_WAV"):
-                return {"ok": False, "error": "The audio library is missing. Run install.bat again."}
+                return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
             try:
                 import onnxruntime  # noqa: F401
             except Exception:
@@ -12660,6 +12714,12 @@ class App:
             eid = int(entry_id.strip())
         else:
             return {"ok": False, "error": "That line is not in the transcript any more."}
+        eng = self.engine
+        if eid is None and self.running and eng is not None and s is eng.session and self._someone_speaking(eng):
+            # pressed while a sentence is being spoken: THAT sentence is the moment (marked when it is written)
+            eng.mark_when_written(time.time())
+            self.hub.toast("ok", "★ The sentence being spoken now will be marked.")
+            return {"ok": True, "pending": True}
         e = s.mark(eid, on if isinstance(on, bool) else None)
         if not e:
             return {"ok": False, "error": "Nothing has been said yet." if eid is None else "That line is not in the transcript any more."}
@@ -12668,6 +12728,11 @@ class App:
         if eid is None:
             self.hub.toast("ok", "★ Marked: " + short(e["text"], 70))
         return {"ok": True, "id": e["id"], "marked": e["marked"]}
+
+    def _someone_speaking(self, eng):
+        if any(getattr(getattr(c, "seg", None), "active", False) for c in list(self.captures)):
+            return True
+        return any(time.time() - t < 1.5 for t in list(eng.live_talk_at.values()))
 
     def api_rename_speaker(self, key="", name="", session_file=None):
         s = self._shown_session()
@@ -14442,14 +14507,20 @@ class App:
                 if c.error and c.error not in self.reported:
                     self.reported.add(c.error)
                     self.hub.toast("error", ("Microphone: " if c.source == "me" else "Computer sound: ") + c.error)
-            self.hub.publish("level", **lv)
+            # only when it changed (2 decimals are what a meter shows): silence sends nothing, the window stays idle
+            key = tuple((k, None if v is None else round(v, 2)) for k, v in sorted(lv.items()))
+            if key != state.get("lv") or now - state.get("lv_t", 0) > 2.0:
+                state["lv"], state["lv_t"] = key, now
+                self.hub.publish("level", **lv)
         if self.monitor_until and now > self.monitor_until:
             with self.lock:
                 if self.monitor_until and not self.running:
                     self._stop_captures()
                 self.monitor_until = 0.0
             self.publish_running()
-        if now - last_save > 3.0:                        # the meeting file: rewritten at most every 3 s
+        # the meeting file: rewritten at most every 3 s (every 10 s in a very long meeting: it is rewritten whole)
+        big = self.session is not None and len(self.session.entries) > 600
+        if now - last_save > (10.0 if big else 3.0):
             last_save = now
             for s in (self.session, self.last_session):
                 if s:
