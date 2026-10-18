@@ -199,7 +199,7 @@ TRANSLATE_HISTORY = 2
 
 # settings only the program's own actions change (they check them first) - never taken from "save settings"
 INTERNAL_KEYS = ("config_version", "providers", "local_model", "llm_model", "local_bench", "last_recording_dir",
-                 "about_file")
+                 "about_file", "screen_area")
 CONFIG_VERSION = 6                 # settings format; older files are converted when they are read
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
@@ -269,6 +269,8 @@ DEFAULTS = {
     "screen_provider": "",       # who reads a screenshot: "" = the service that writes answers
     "screen_model": "",          # "" = chosen automatically from the service's model list
     "screen_delay": "3",         # seconds between pressing 'Read my screen' and the picture being taken
+    "screen_area_mode": "screen",  # what is read: screen (monitor of the window in front) | window | area | same (6.36)
+    "screen_area": "",           # the area drawn last time, "x,y,w,h" in real pixels (for "same")
     "search_days": "90",         # past meetings searched: 7 / 30 / 90 / 180 / 365 days, or 0 = all
 }
 PREVIEW_EVERY = 2.0              # default seconds between previews for services without a live mode
@@ -403,7 +405,8 @@ CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
            "about_source": ("text", "file"), "overlay_pos": ("top", "bottom"), "meeting_mode": tuple(MODES),
            "work_mode": ("meeting", "inperson", "video"), "hotkeys": ("ctrl_alt", "ctrl_alt_shift", "off"),
-           "screen_delay": ("0", "2", "3", "5", "8"), "search_days": ("7", "30", "90", "180", "365", "0")}
+           "screen_delay": ("0", "2", "3", "5", "8"), "screen_area_mode": ("screen", "window", "area", "same"),
+           "search_days": ("7", "30", "90", "180", "365", "0")}
 RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100), "overlay_text": (30, 100),
           "preview_ms": (1000, 10000), "live_tr_words": (0, 20), "local_preview_ms": (500, 5000)}
 
@@ -822,6 +825,8 @@ def sanitize(cfg):
     sp = re.sub(r"[^a-z0-9_-]", "", out["screen_provider"].lower())[:40]
     out["screen_provider"] = sp if sp in ("", "groq", "llm") or sp in ids else ""
     out["screen_model"] = out["screen_model"].strip()[:120]
+    a = parse_area(out["screen_area"])
+    out["screen_area"] = area_text(a) if a else ""
     out["config_version"] = CONFIG_VERSION
     out["api_key"] = clean_key(out["api_key"])
     f = cfg.get("features") if isinstance(cfg.get("features"), dict) else {}
@@ -6154,6 +6159,50 @@ def answer_lang_rule(cfg):
     return f"in the same language as the NEW line ({names})"
 
 
+def screen_prompt(c):
+    """What the picture-reading model is told (6.36): a fixed layout — the question in my language, the answer
+    (for a multiple-choice question: the right option), then what the answer means. Each part on its own lines,
+    so right-to-left and left-to-right text never share a line."""
+    ml = c["my_language"]
+    my = lang_full(ml)
+    a = c["answer_language"]
+    say_in = (f"in {lang_name(a)}" if a != "same" else
+              "in the language of the question on the screen (" + " or ".join(lang_name(x) for x in meeting_langs(c)) + ")")
+    meaning = bool(c.get("answer_fa"))
+    heads = (f"use these headings, written in {my}: \"The question\", \"The answer\""
+             + (f", \"What the answer means\"" if meaning else ""))
+    return (f"You help {c['me_label']} (a {lang_name(ml)} speaker) during a meeting, interview or lesson. The picture is a "
+            "screenshot of their screen (or of a part of it): it may show a question, a coding task, a slide, a chart, "
+            "a document, a diagram or a chat.\n"
+            f"Meeting: {c['context'] or '(not given)'}\nAbout the user: {about_text(c) or '(not given)'}\n"
+            f"If the screen holds a question or task, answer in this layout ({heads}); each heading on its own line "
+            "starting with ## :\n"
+            f"## The question — the whole question translated into {my}, faithfully and completely, with every "
+            "answer option on its own line and with its letter or number exactly as on the screen. If it is already "
+            f"in {my}, copy it. For code, say the task in 1-3 sentences instead of translating the code.\n"
+            "## The answer — by kind of question:\n"
+            "- Multiple choice: the first line is only the letter or number of the right option and its text exactly "
+            "as on the screen, in bold, e.g. **B) 42**. If the question allows several answers, one line for each "
+            f"right option. Then one short line in {my}: why. If you are not sure, say which option is most likely "
+            "and that you are not sure.\n"
+            "- True / false, or fill in the gap: only the answer (True / False, or the missing words), then one short "
+            f"line in {my}: why.\n"
+            f"- A written or spoken question: the words to say or write, {say_in}, first person, natural style, "
+            "ready to use as they are.\n"
+            "- Code: correct, complete code in a fenced code block, then 2-3 short sentences on the idea and its "
+            "complexity.\n"
+            + (f"## What the answer means — the answer translated into {my} (leave this part out for code, and when "
+               f"the answer is already in {my}).\n" if meaning else "")
+            + "If several questions are visible, do this for each, in order, and number them (1, 2, …).\n"
+            "If nothing on the screen needs an answer: one short line on what the screen shows, then the important "
+            "points as short bullets.\n"
+            f"Write your notes in {my}; keep code, commands, option texts and technical terms as they are. Never put "
+            f"{my} words and words of another language on the same line when you can avoid it. Use only what is "
+            "visible; if something is cut off or unreadable, say so instead of guessing. Never invent personal facts: "
+            "use a placeholder such as [your name]."
+            + (f"\n{mode_text(c, 'answer')}" if mode_text(c, "answer") else "") + glossary_note(c))
+
+
 def meaning_rule(cfg, line_lang):
     """The answer's meaning in my language — not needed when the answer is already in it."""
     if not cfg["answer_fa"]:
@@ -7316,15 +7365,140 @@ def guess_vision_model(ids):
     return None
 
 
-def _grab_screen_windows():
-    """(width, height, BGRA bytes) of the monitor that holds the window in front. Windows only."""
+# ---- reading the screen: the whole screen, the window in front, or an area drawn with the mouse (6.36) ----------
+# Rectangles are (x, y, width, height) in real screen pixels (the desktop of all monitors; it can start below 0).
+def parse_area(s):
+    """'x,y,w,h' (as kept in the settings) -> (x, y, w, h), or None when it is not a usable area."""
+    m = re.fullmatch(r"\s*(-?\d{1,6})\s*,\s*(-?\d{1,6})\s*,\s*(\d{1,6})\s*,\s*(\d{1,6})\s*", str(s or ""))
+    if not m:
+        return None
+    x, y, w, h = (int(v) for v in m.groups())
+    return (x, y, w, h) if 8 <= w <= 30000 and 8 <= h <= 30000 else None
+
+
+def area_text(r):
+    return ",".join(str(int(v)) for v in r)
+
+
+def clip_rect(r, bounds):
+    """The part of r that lies inside bounds; None when (almost) nothing is left."""
+    x0, y0 = max(r[0], bounds[0]), max(r[1], bounds[1])
+    x1, y1 = min(r[0] + r[2], bounds[0] + bounds[2]), min(r[1] + r[3], bounds[1] + bounds[3])
+    return (x0, y0, x1 - x0, y1 - y0) if x1 - x0 >= 8 and y1 - y0 >= 8 else None
+
+
+def _overlap(a, b):
+    """The common part of two rectangles (any size above zero), or None."""
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[0] + a[2], b[0] + b[2]), min(a[1] + a[3], b[1] + b[3])
+    return (x0, y0, x1 - x0, y1 - y0) if x1 > x0 and y1 > y0 else None
+
+
+def drag_rect(x0, y0, x1, y1):
+    """The box between where the mouse went down and where it is now (dragged in any direction)."""
+    return (min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+
+
+def crop_bgra(raw, full, r):
+    """raw = BGRA pixels of the rectangle full; returns (w, h, BGRA bytes) of r, which lies inside it."""
+    a = np.frombuffer(raw, dtype=np.uint8, count=full[2] * full[3] * 4).reshape(full[3], full[2], 4)
+    x, y = r[0] - full[0], r[1] - full[1]
+    c = np.ascontiguousarray(a[y:y + r[3], x:x + r[2]])
+    return c.shape[1], c.shape[0], c.tobytes()
+
+
+def screen_png(w, h, raw):
+    """The picture that is sent: a small area is sent twice as big (models read small letters better),
+    a big one is made smaller until the service accepts it (about 4 MB)."""
+    if w < 800 and h < 800:
+        a = np.frombuffer(raw, dtype=np.uint8, count=w * h * 4).reshape(h, w, 4)
+        raw, w, h = a.repeat(2, axis=0).repeat(2, axis=1).tobytes(), w * 2, h * 2
+    png = encode_png(w, h, raw)
+    for mw in (1440, 1152, 960):
+        if len(png) * 4 // 3 <= 3_200_000:
+            break
+        png = encode_png(w, h, raw, max_width=mw)
+    return png
+
+
+class _DpiAwareThread:
+    """Real pixels on a scaled screen (per-monitor DPI) for this thread while inside the 'with'."""
+    def __enter__(self):
+        self.old = None
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+            u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            self.old = u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        except (AttributeError, OSError):
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.old:
+            try:
+                import ctypes
+                ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(self.old))
+            except OSError:
+                pass
+
+
+def win_rects():
+    """Where things are on the screen (Windows): the whole desktop, the monitor of the window in front, the monitor
+    under the mouse, and the window in front itself (None for the desktop, the taskbar or a minimised window)."""
     import ctypes
     from ctypes import wintypes as wt
-    u, g = ctypes.windll.user32, ctypes.windll.gdi32
+    u = ctypes.windll.user32
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
     u.GetForegroundWindow.restype = wt.HWND
     u.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
     u.MonitorFromWindow.restype = wt.HANDLE
+    u.MonitorFromPoint.argtypes = [wt.POINT, wt.DWORD]
+    u.MonitorFromPoint.restype = wt.HANDLE
     u.GetMonitorInfoW.argtypes = [wt.HANDLE, ctypes.c_void_p]
+    u.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    u.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    u.IsIconic.argtypes = u.IsWindowVisible.argtypes = [wt.HWND]
+    virt = (u.GetSystemMetrics(76), u.GetSystemMetrics(77), u.GetSystemMetrics(78), u.GetSystemMetrics(79))
+    if virt[2] <= 0 or virt[3] <= 0:
+        virt = (0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1))
+
+    def mon_rect(mon):
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if mon and u.GetMonitorInfoW(mon, ctypes.byref(mi)):
+            r = mi.rcMonitor
+            if r.right > r.left and r.bottom > r.top:
+                return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        return (0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1))
+    front = u.GetForegroundWindow()
+    pt = wt.POINT()
+    cursor_mon = mon_rect(u.MonitorFromPoint(pt, 2) if u.GetCursorPos(ctypes.byref(pt)) else None)
+    win = None
+    if front and u.IsWindowVisible(front) and not u.IsIconic(front):
+        buf = ctypes.create_unicode_buffer(64)
+        u.GetClassNameW(front, buf, 64)
+        if buf.value not in ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+            rc = wt.RECT()
+            ok = False
+            try:                                        # the window without its invisible resize border
+                ok = ctypes.windll.dwmapi.DwmGetWindowAttribute(front, 9, ctypes.byref(rc), ctypes.sizeof(rc)) == 0
+            except (AttributeError, OSError):
+                pass
+            if ok or u.GetWindowRect(front, ctypes.byref(rc)):
+                win = clip_rect((rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top), virt)
+    return {"virtual": virt, "front_monitor": mon_rect(u.MonitorFromWindow(front, 2)),
+            "cursor_monitor": cursor_mon, "front_window": win}
+
+
+def grab_rect(r):
+    """BGRA bytes of the rectangle r as it is on the screen now (Windows)."""
+    import ctypes
+    from ctypes import wintypes as wt
+    u, g = ctypes.windll.user32, ctypes.windll.gdi32
     u.GetDC.argtypes = [wt.HWND]
     u.GetDC.restype = wt.HDC
     u.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
@@ -7339,35 +7513,11 @@ def _grab_screen_windows():
     g.GetDIBits.argtypes = [wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
     g.DeleteObject.argtypes = [wt.HGDIOBJ]
     g.DeleteDC.argtypes = [wt.HDC]
-
-    class MONITORINFO(ctypes.Structure):
-        _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
-
-    class BMIH(ctypes.Structure):
-        _fields_ = [("biSize", wt.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
-                    ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
-                    ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", ctypes.c_long), ("biYPelsPerMeter", ctypes.c_long),
-                    ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
-    old_ctx = None
-    try:                                              # real pixels on a scaled screen (per-monitor DPI, this thread only)
-        u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
-        u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-        old_ctx = u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
-    except (AttributeError, OSError):
-        pass
+    x, y, w, h = r
+    if w <= 0 or h <= 0 or w * h > 40_000_000:
+        raise APIError("The screen size could not be read.")
     hdc = mdc = bmp = old = None
     try:
-        mon = u.MonitorFromWindow(u.GetForegroundWindow(), 2)
-        mi = MONITORINFO()
-        mi.cbSize = ctypes.sizeof(MONITORINFO)
-        if mon and u.GetMonitorInfoW(mon, ctypes.byref(mi)):
-            x, y = mi.rcMonitor.left, mi.rcMonitor.top
-            w, h = mi.rcMonitor.right - x, mi.rcMonitor.bottom - y
-        else:
-            x = y = 0
-            w, h = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
-        if w <= 0 or h <= 0 or w * h > 40_000_000:
-            raise APIError("The screen size could not be read.")
         hdc = u.GetDC(None)
         mdc = g.CreateCompatibleDC(hdc)
         bmp = g.CreateCompatibleBitmap(hdc, w, h)
@@ -7376,12 +7526,12 @@ def _grab_screen_windows():
         old = g.SelectObject(mdc, bmp)
         if not g.BitBlt(mdc, 0, 0, w, h, hdc, x, y, 0x00CC0020 | 0x40000000):
             raise APIError("The screen could not be captured.")
-        bi = BMIH()
-        bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(BMIH), w, -h, 1, 32
+        bi = _BMIH()
+        bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(_BMIH), w, -h, 1, 32
         buf = ctypes.create_string_buffer(w * h * 4)
         if not g.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0):
             raise APIError("The screen could not be captured.")
-        return w, h, buf.raw
+        return buf.raw
     finally:
         if old:
             g.SelectObject(mdc, old)
@@ -7391,11 +7541,308 @@ def _grab_screen_windows():
             g.DeleteDC(mdc)
         if hdc:
             u.ReleaseDC(None, hdc)
-        if old_ctx:
-            try:
-                u.SetThreadDpiAwarenessContext(ctypes.c_void_p(old_ctx))
-            except OSError:
-                pass
+
+
+try:
+    import ctypes as _ct
+
+    class _BMIH(_ct.Structure):
+        _fields_ = [("biSize", _ct.c_uint32), ("biWidth", _ct.c_long), ("biHeight", _ct.c_long),
+                    ("biPlanes", _ct.c_uint16), ("biBitCount", _ct.c_uint16), ("biCompression", _ct.c_uint32),
+                    ("biSizeImage", _ct.c_uint32), ("biXPelsPerMeter", _ct.c_long), ("biYPelsPerMeter", _ct.c_long),
+                    ("biClrUsed", _ct.c_uint32), ("biClrImportant", _ct.c_uint32)]
+except Exception:                                       # (no ctypes: nothing on the screen is read anyway)
+    _BMIH = None
+
+PICK_HINT = "Draw a box around the question   ·   Esc = cancel"
+_PICK = {"proc": None, "now": None}                     # the window procedure lives as long as the program
+
+
+def pick_area(raw, full, hint_mon, hide=False, timeout=60.0, stop=None, on_ready=None):
+    """Snipping-tool style: the picture just taken (raw, of the rectangle full) is shown darker over all screens and
+    the user draws a box on it with the mouse; inside the box it is shown bright. Returns the box (screen pixels) or
+    None when cancelled: Esc, a right click, closing the program, or nothing drawn for `timeout` seconds.
+    Windows only; runs in the calling thread (it has its own message loop)."""
+    import ctypes
+    from ctypes import wintypes as wt
+    u, g, k = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.kernel32
+    LRESULT = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+    class WNDCLASSEXW(ctypes.Structure):
+        _fields_ = [("cbSize", wt.UINT), ("style", wt.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                    ("cbWndExtra", ctypes.c_int), ("hInstance", wt.HINSTANCE), ("hIcon", wt.HICON),
+                    ("hCursor", wt.HANDLE), ("hbrBackground", wt.HBRUSH), ("lpszMenuName", wt.LPCWSTR),
+                    ("lpszClassName", wt.LPCWSTR), ("hIconSm", wt.HICON)]
+
+    class PAINTSTRUCT(ctypes.Structure):
+        _fields_ = [("hdc", wt.HDC), ("fErase", wt.BOOL), ("rcPaint", wt.RECT), ("fRestore", wt.BOOL),
+                    ("fIncUpdate", wt.BOOL), ("rgbReserved", ctypes.c_byte * 32)]
+
+    class BITMAPINFO(ctypes.Structure):
+        _fields_ = [("bmiHeader", _BMIH), ("bmiColors", ctypes.c_uint32 * 3)]
+    u.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    u.DefWindowProcW.restype = LRESULT
+    u.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD, ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_int, ctypes.c_int, wt.HWND, wt.HMENU, wt.HINSTANCE, wt.LPVOID]
+    u.CreateWindowExW.restype = wt.HWND
+    u.RegisterClassExW.argtypes = [ctypes.POINTER(WNDCLASSEXW)]
+    u.RegisterClassExW.restype = wt.ATOM
+    u.LoadCursorW.argtypes = [wt.HINSTANCE, ctypes.c_void_p]
+    u.LoadCursorW.restype = wt.HANDLE
+    u.BeginPaint.argtypes = [wt.HWND, ctypes.POINTER(PAINTSTRUCT)]
+    u.BeginPaint.restype = wt.HDC
+    u.EndPaint.argtypes = [wt.HWND, ctypes.POINTER(PAINTSTRUCT)]
+    u.InvalidateRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT), wt.BOOL]
+    u.FillRect.argtypes = [wt.HDC, ctypes.POINTER(wt.RECT), wt.HBRUSH]
+    u.DrawTextW.argtypes = [wt.HDC, wt.LPCWSTR, ctypes.c_int, ctypes.POINTER(wt.RECT), wt.UINT]
+    for f in (u.ShowWindow, u.SetForegroundWindow, u.SetFocus, u.SetCapture, u.DestroyWindow, u.UpdateWindow):
+        f.argtypes = [wt.HWND] + ([ctypes.c_int] if f is u.ShowWindow else [])
+    u.SetTimer.argtypes = [wt.HWND, ctypes.c_size_t, wt.UINT, ctypes.c_void_p]
+    u.SetTimer.restype = ctypes.c_size_t
+    u.KillTimer.argtypes = [wt.HWND, ctypes.c_size_t]
+    u.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
+    u.TranslateMessage.argtypes = u.DispatchMessageW.argtypes = [ctypes.POINTER(wt.MSG)]
+    u.GetDC.argtypes = [wt.HWND]
+    u.GetDC.restype = wt.HDC
+    u.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
+    u.SetWindowDisplayAffinity.argtypes = [wt.HWND, wt.DWORD]
+    u.GetAsyncKeyState.restype = ctypes.c_short
+    k.GetModuleHandleW.argtypes = [wt.LPCWSTR]
+    k.GetModuleHandleW.restype = wt.HMODULE
+    g.CreateCompatibleDC.argtypes = [wt.HDC]
+    g.CreateCompatibleDC.restype = wt.HDC
+    g.CreateCompatibleBitmap.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int]
+    g.CreateCompatibleBitmap.restype = wt.HBITMAP
+    g.CreateDIBSection.argtypes = [wt.HDC, ctypes.POINTER(BITMAPINFO), wt.UINT, ctypes.POINTER(ctypes.c_void_p),
+                                   wt.HANDLE, wt.DWORD]
+    g.CreateDIBSection.restype = wt.HBITMAP
+    g.SelectObject.argtypes = [wt.HDC, wt.HGDIOBJ]
+    g.SelectObject.restype = wt.HGDIOBJ
+    g.BitBlt.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.HDC,
+                         ctypes.c_int, ctypes.c_int, wt.DWORD]
+    g.DeleteObject.argtypes = [wt.HGDIOBJ]
+    g.DeleteDC.argtypes = [wt.HDC]
+    g.CreateSolidBrush.argtypes = [wt.COLORREF]
+    g.CreateSolidBrush.restype = wt.HBRUSH
+    g.CreateFontW.argtypes = [ctypes.c_int] * 5 + [wt.DWORD] * 8 + [wt.LPCWSTR]
+    g.CreateFontW.restype = wt.HFONT
+    g.SetTextColor.argtypes = [wt.HDC, wt.COLORREF]
+    g.SetBkMode.argtypes = [wt.HDC, ctypes.c_int]
+
+    fx, fy, fw, fh = full
+    st = {"down": None, "cur": None, "result": None, "done": False, "hwnd": None, "t0": time.time(), "error": None}
+    gdi = []                                            # everything made here is deleted at the end
+    dcs = []
+
+    def dib(arr):
+        bi = BITMAPINFO()
+        bi.bmiHeader.biSize, bi.bmiHeader.biWidth, bi.bmiHeader.biHeight = ctypes.sizeof(_BMIH), fw, -fh
+        bi.bmiHeader.biPlanes, bi.bmiHeader.biBitCount = 1, 32
+        bits = ctypes.c_void_p()
+        bmp = g.CreateDIBSection(None, ctypes.byref(bi), 0, ctypes.byref(bits), None, 0)
+        if not bmp or not bits.value:
+            raise APIError("Not enough memory to show the screen for drawing.")
+        gdi.append(bmp)
+        ctypes.memmove(bits, arr.ctypes.data, fw * fh * 4)
+        dc = g.CreateCompatibleDC(None)
+        dcs.append((dc, g.SelectObject(dc, bmp)))
+        return dc
+    a = np.frombuffer(raw, dtype=np.uint8, count=fw * fh * 4).reshape(fh, fw, 4)
+    dark = a >> 1
+    dark -= a >> 3                                      # 3/8 of the light: clearly darker, still readable
+    bright_dc, dark_dc = dib(np.ascontiguousarray(a)), dib(dark)
+    del dark
+    accent = g.CreateSolidBrush(0x00F0A030)             # (BGR) a clear blue for the box
+    panel = g.CreateSolidBrush(0x00302828)
+    fsize = max(16, min(40, hint_mon[3] // 45))
+    font = g.CreateFontW(-fsize, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+    gdi += [x for x in (accent, panel, font) if x]
+    border = max(2, fsize // 9)
+    hint = [0, 0, 0, 0]                                 # (placed once the font can be measured)
+
+    def sel():
+        if not st["down"] or not st["cur"]:
+            return None
+        return drag_rect(*st["down"], *st["cur"])
+
+    def show_hint():
+        s = sel()
+        return not (s and _overlap((s[0] - 8, s[1] - 8, s[2] + 16, s[3] + 16), hint))
+
+    def invalidate(rs):
+        for r in rs:
+            if r:
+                rc = wt.RECT(r[0] - border - 2, r[1] - border - 2, r[0] + r[2] + border + 2, r[1] + r[3] + border + 2)
+                u.InvalidateRect(st["hwnd"], ctypes.byref(rc), False)
+
+    def fill(dc, x, y, w, h, brush):
+        rc = wt.RECT(x, y, x + w, y + h)
+        u.FillRect(dc, ctypes.byref(rc), brush)
+
+    def paint(hwnd):
+        ps = PAINTSTRUCT()
+        hdc = u.BeginPaint(hwnd, ctypes.byref(ps))
+        try:
+            p = ps.rcPaint
+            px, py, pw, ph = p.left, p.top, p.right - p.left, p.bottom - p.top
+            if pw <= 0 or ph <= 0:
+                return
+            g.BitBlt(back, px, py, pw, ph, dark_dc, px, py, 0x00CC0020)
+            s = sel()
+            if s:
+                i = _overlap(s, (px, py, pw, ph))
+                if i:
+                    g.BitBlt(back, i[0], i[1], i[2], i[3], bright_dc, i[0], i[1], 0x00CC0020)
+                x, y, w, h = s
+                fill(back, x - border, y - border, w + 2 * border, border, accent)
+                fill(back, x - border, y + h, w + 2 * border, border, accent)
+                fill(back, x - border, y, border, h, accent)
+                fill(back, x + w, y, border, h, accent)
+            if show_hint():
+                fill(back, *hint, panel)
+                old_f = g.SelectObject(back, font) if font else None
+                g.SetTextColor(back, 0x00FFFFFF)
+                g.SetBkMode(back, 1)
+                rc = wt.RECT(hint[0], hint[1], hint[0] + hint[2], hint[1] + hint[3])
+                u.DrawTextW(back, PICK_HINT, -1, ctypes.byref(rc), 0x1 | 0x4 | 0x20)   # centred, one line
+                if old_f:
+                    g.SelectObject(back, old_f)
+            g.BitBlt(hdc, px, py, pw, ph, back, px, py, 0x00CC0020)
+        finally:
+            u.EndPaint(hwnd, ctypes.byref(ps))
+
+    def finish(result):
+        if st["done"]:
+            return
+        st["done"], st["result"] = True, result
+        u.DestroyWindow(st["hwnd"])
+
+    def xy(lp):
+        return ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
+
+    def proc(hwnd, msg, wp, lp):
+        try:
+            if msg == 0x000F:                            # WM_PAINT
+                paint(hwnd)
+                return 0
+            if msg == 0x0014:                            # WM_ERASEBKGND: everything is painted by us
+                return 1
+            if msg == 0x0201:                            # left button down: the box starts here
+                st["down"] = st["cur"] = xy(lp)
+                u.SetCapture(hwnd)
+                invalidate([hint])
+                return 0
+            if msg == 0x0200 and st["down"]:             # mouse move while drawing
+                old = sel()
+                st["cur"] = xy(lp)
+                invalidate([old, sel(), hint])
+                return 0
+            if msg == 0x0202 and st["down"]:             # left button up: done, unless it was only a click
+                st["cur"] = xy(lp)
+                s = sel()
+                u.ReleaseCapture()
+                if s and s[2] >= 8 and s[3] >= 8:
+                    finish((s[0] + fx, s[1] + fy, s[2], s[3]))
+                else:
+                    st["down"] = st["cur"] = None
+                    invalidate([s, hint])
+                return 0
+            if msg == 0x0215 and st["down"] and not st["done"]:   # the mouse was taken away (Alt+Tab …): start over
+                old = sel()
+                st["down"] = st["cur"] = None
+                invalidate([old, hint])
+                return 0
+            if msg in (0x0204, 0x0010):                  # right click, or closed: cancelled
+                finish(None)
+                return 0
+            if msg == 0x0100 and wp == 0x1B:             # Esc
+                finish(None)
+                return 0
+            if msg == 0x0113:                            # timer: Esc even without the keyboard focus, time out, closing
+                if (u.GetAsyncKeyState(0x1B) & 0x8000) or time.time() - st["t0"] > timeout or (stop and stop.is_set()):
+                    finish(None)
+                return 0
+            if msg == 0x02E0:                            # a DPI change: the window keeps its exact place
+                return 0
+            if msg == 0x0002:                            # WM_DESTROY
+                u.PostQuitMessage(0)
+                return 0
+        except Exception as e:                           # never a stuck dark screen
+            st["error"] = e
+            if not st["done"]:
+                st["done"] = True
+                u.DestroyWindow(hwnd)
+            return 0
+        return u.DefWindowProcW(hwnd, msg, wp, lp)
+
+    hinst = k.GetModuleHandleW(None)
+    if _PICK["proc"] is None:                          # one window class for the life of the program
+        _PICK["proc"] = WNDPROC(lambda h, m, w, l: _PICK["now"](h, m, w, l) if _PICK["now"]
+                                else u.DefWindowProcW(h, m, w, l))
+        wc = WNDCLASSEXW()
+        wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
+        wc.lpfnWndProc = _PICK["proc"]
+        wc.hInstance = hinst
+        wc.hCursor = u.LoadCursorW(None, ctypes.c_void_p(32515))     # the cross
+        wc.lpszClassName = "MeetingAssistantAreaPicker"
+        if not u.RegisterClassExW(ctypes.byref(wc)) and k.GetLastError() != 1410:
+            _PICK["proc"] = None
+            raise APIError("The area to read could not be shown.")
+    _PICK["now"] = proc
+    back_bmp = None
+    back = None
+    try:
+        sdc = u.GetDC(None)
+        back = g.CreateCompatibleDC(sdc)
+        back_bmp = g.CreateCompatibleBitmap(sdc, fw, fh)
+        u.ReleaseDC(None, sdc)
+        if not (back and back_bmp):
+            raise APIError("Not enough memory to show the screen for drawing.")
+        old_back = g.SelectObject(back, back_bmp)
+        tw = int(fsize * len(PICK_HINT) * 0.55)
+        if font:
+            old_f = g.SelectObject(back, font)
+            rc = wt.RECT(0, 0, 0, 0)
+            if u.DrawTextW(back, PICK_HINT, -1, ctypes.byref(rc), 0x400 | 0x20) and rc.right > 0:
+                tw = rc.right                               # DT_CALCRECT: the real width of the text
+            g.SelectObject(back, old_f)
+        hw_ = tw + 2 * fsize
+        hint[:] = [hint_mon[0] - fx + (hint_mon[2] - hw_) // 2, hint_mon[1] - fy + fsize, hw_, int(fsize * 2.2)]
+        hwnd = u.CreateWindowExW(0x00000008 | 0x00000080, "MeetingAssistantAreaPicker", "Choose the area to read",
+                                 0x80000000, fx, fy, fw, fh, None, None, hinst, None)   # topmost tool popup
+        if not hwnd:
+            g.SelectObject(back, old_back)
+            raise APIError("The area to read could not be shown.")
+        st["hwnd"] = hwnd
+        if hide:
+            u.SetWindowDisplayAffinity(hwnd, 0x11)       # the other side of a screen share keeps seeing the real screen
+        u.ShowWindow(hwnd, 5)
+        u.UpdateWindow(hwnd)
+        u.SetForegroundWindow(hwnd)
+        u.SetFocus(hwnd)
+        u.SetTimer(hwnd, 1, 50, None)
+        if on_ready:
+            on_ready(hwnd)
+        msg = wt.MSG()
+        while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            u.TranslateMessage(ctypes.byref(msg))
+            u.DispatchMessageW(ctypes.byref(msg))
+        g.SelectObject(back, old_back)
+    finally:
+        _PICK["now"] = None
+        if back_bmp:
+            g.DeleteObject(back_bmp)
+        if back:
+            g.DeleteDC(back)
+        for dc, old in dcs:
+            g.SelectObject(dc, old)
+            g.DeleteDC(dc)
+        for h in gdi:
+            g.DeleteObject(h)
+    if st["error"]:
+        raise APIError("Drawing the area failed: " + short(st["error"], 120))
+    return st["result"]
 
 
 def encode_png(w, h, bgra, max_width=1920):
@@ -7420,18 +7867,6 @@ def encode_png(w, h, bgra, max_width=1920):
 
 
 SCREEN_CAPTURE = sys.platform == "win32"        # (a switch the tests can turn on)
-
-
-def capture_screen_png():
-    if sys.platform != "win32":
-        raise APIError("Reading the screen works on Windows only.")
-    w, h, raw = _grab_screen_windows()
-    png = encode_png(w, h, raw)
-    for mw in (1440, 1152, 960):                       # services refuse big pictures (about 4 MB): make it smaller
-        if len(png) * 4 // 3 <= 3_200_000:
-            break
-        png = encode_png(w, h, raw, max_width=mw)
-    return png
 
 
 # ---- old meetings: search -------------------------------------------------------
@@ -9662,20 +10097,7 @@ class Engine:
         """A screenshot goes to a model that can read pictures; the answer streams to the window."""
         c = self.cfg
         pub = lambda **kw: self.hub.publish("screen", **kw)
-        ml = c["my_language"]
-        system = (f"You help {c['me_label']} (a {lang_name(ml)} speaker) during a meeting or interview. The picture is a "
-                  "screenshot of their screen: it may show a coding task, a question, a slide, a chart, a document, "
-                  "a diagram or a chat.\n"
-                  f"Meeting: {c['context'] or '(not given)'}\nAbout the user: {about_text(c) or '(not given)'}\n"
-                  "Do this:\n1. One short line: what the screen shows.\n"
-                  "2. If it holds a question, task or problem, give what the user can use. Code: correct, complete code "
-                  "in a fenced code block, then 2-3 short sentences on the idea and its complexity. A written question: "
-                  f"what to say, {answer_lang_rule(c)}, first person, spoken style.\n"
-                  "3. If nothing needs an answer, list the important points as short bullets.\n"
-                  f"Write your notes in {lang_full(ml)}; keep code, commands and technical terms as they are. Use only "
-                  "what is visible; if something is cut off or unreadable, say so instead of guessing. Never invent "
-                  "personal facts: use a placeholder such as [your name]."
-                  + (f"\n{mode_text(c, 'answer')}" if mode_text(c, "answer") else "") + glossary_note(c))
+        system = screen_prompt(c)
         import base64 as _b64
         url = "data:image/png;base64," + _b64.b64encode(png).decode("ascii")
         messages = [{"role": "system", "content": system},
@@ -9688,7 +10110,7 @@ class Engine:
             if now - last[0] > 0.1:
                 last[0] = now
                 pub(state="streaming", text=t.strip())
-        return self.run_chat([(pid, model, None)], messages, 2000, 0.3, on_text).strip()
+        return self.run_chat([(pid, model, None)], messages, 3000, 0.2, on_text).strip()
 
     SAY_TONES = {"natural": "natural and conversational", "formal": "polite and formal",
                  "short": "as short as possible (one or two sentences)", "friendly": "warm and friendly",
@@ -12235,8 +12657,9 @@ class App:
         log(f"Model check: {len(rows)} service(s), {bad} chosen model(s) missing")
         return {"ok": True, "report": self.model_report}
 
-    def vision_target(self):
-        """(service id, model) that reads the screenshot; raises APIError with a plain message."""
+    def vision_target(self, quick=False):
+        """(service id, model) that reads the screenshot; raises APIError with a plain message.
+        quick: only what can be known without asking the service (the model may still be "")."""
         c = self.cfg
         pid, model = c["screen_provider"], c["screen_model"]
         usable = lambda x: x not in ("", "llm", "local") and bool(self.provider(x)) and \
@@ -12250,7 +12673,7 @@ class App:
         if not pid:
             raise APIError("Reading the screen needs an online AI service with an API key (Groq, OpenAI, Gemini …). "
                            "Add one in Setup › Services.")
-        if not model:
+        if not model and not quick:
             try:
                 ids = self.model_ids(pid)
             except APIError as e:
@@ -12263,7 +12686,9 @@ class App:
                                "Type one in Setup › Services › Reading the screen.")
         return pid, model
 
-    def api_screen(self):
+    def api_screen(self, new_area=False, now=False):
+        """new_area: draw a new area this time (Shift+F3, 'New area'); now: no countdown (the global key is pressed
+        while the screen to read is already in front)."""
         off = feature_off(self.cfg, "screen")
         if off:
             return off
@@ -12273,19 +12698,70 @@ class App:
             if self.screen_busy:
                 return {"ok": False, "error": "The screen is already being read."}
             self.screen_busy = True
-        threading.Thread(target=self._screen_job, daemon=True, name="screen").start()
+        threading.Thread(target=self._screen_job, args=(bool(new_area), bool(now)), daemon=True, name="screen").start()
         return {"ok": True}
 
-    def _screen_job(self):
+    def _take_picture(self, draw, saved, mode):
+        """(png, what was read) or None when the drawing was cancelled. Runs in the screen thread (Windows)."""
         pub = lambda **kw: self.hub.publish("screen", **kw)
+        with _DpiAwareThread():
+            rects = win_rects()
+            virt = rects["virtual"]
+            if saved and not draw:
+                r = clip_rect(saved, virt)
+                if r:
+                    return screen_png(r[2], r[3], grab_rect(r)), "the same area as last time"
+                draw = True                                       # that area is not on any screen now (a monitor less)
+            if draw:
+                full = virt if virt[2] * virt[3] <= 40_000_000 else rects["cursor_monitor"]
+                raw = grab_rect(full)
+                pub(state="working", text="", note="Draw a box around the question with the mouse. Esc cancels.")
+                c = self.cfg
+                hide = bool(c.get("hide_from_share") or c.get("overlay_hide")) and capture_hide_supported()
+                r = pick_area(raw, full, rects["cursor_monitor"], hide=hide, timeout=60.0, stop=self.closing)
+                if not r:
+                    return None
+                w, h, data = crop_bgra(raw, full, r)
+                del raw
+                if mode == "same":                                # kept for the next time (also after a restart)
+                    with self.lock:
+                        self.cfg["screen_area"] = area_text(r)
+                        try:
+                            self._save_and_publish()
+                        except OSError as e:
+                            log("the area to read was not saved:", short(e, 100), level="warn")
+                return screen_png(w, h, data), "the area you drew"
+            if mode == "window" and rects["front_window"]:
+                r = rects["front_window"]
+                return screen_png(r[2], r[3], grab_rect(r)), "the window in front"
+            r = rects["front_monitor"]
+            return screen_png(r[2], r[3], grab_rect(r)), "the whole screen"
+
+    def _screen_job(self, new_area=False, now=False):
+        pub = lambda **kw: self.hub.publish("screen", **kw)
+        model = ""
         try:
-            for i in range(int(self.cfg["screen_delay"]), 0, -1):
-                pub(state="working", text="", note=f"Picture in {i} s — switch to the screen you want read.")
+            c = self.cfg
+            mode = c.get("screen_area_mode", "screen")
+            self.vision_target(quick=True)            # no service for pictures: said before the countdown and the box
+            saved = parse_area(c.get("screen_area")) if mode == "same" and not new_area else None
+            draw = new_area or mode == "area" or (mode == "same" and not saved)
+            for i in range(0 if now else int(c["screen_delay"]), 0, -1):
+                pub(state="working", text="", note=(f"In {i} s you draw a box around the question — switch to that screen now."
+                                                    if draw else f"Picture in {i} s — switch to the screen you want read."))
                 time.sleep(1)
-            pub(state="working", text="", note="Taking the picture…")
-            png = capture_screen_png()
+                if self.closing.is_set():
+                    return
+            if not draw:
+                pub(state="working", text="", note="Taking the picture…")
+            got = self._take_picture(draw, saved, mode)
+            if got is None:
+                pub(state="cancelled", text="", note="Cancelled — nothing was read.")
+                log("Screen reading cancelled (no area drawn)")
+                return
+            png, what = got
             pid, model = self.vision_target()
-            pub(state="working", text="", note=f"Reading it with {self.provider(pid)['name']} ({short(model, 40)})…")
+            pub(state="working", text="", note=f"Reading {what} with {self.provider(pid)['name']} ({short(model, 40)})…")
             eng = self.helper()
             own = eng is None
             eng = eng or self.tool_engine()
@@ -12296,7 +12772,7 @@ class App:
                 eng.session.add_screen(text)
                 eng.session.save_if_dirty()
             pub(state="done", text=text, saved=not own)
-            log(f"Screen read with {model} ({len(png) // 1024} KB picture)")
+            log(f"Screen read with {model} ({what}, {len(png) // 1024} KB picture)")
         except BadRequest as e:
             gone = re.search(r"does not exist|not found|no access|decommission|deprecated", str(e), re.I)
             pub(state="error", text="", note=(f"The model '{model}' is not available at this service: " if gone
@@ -16123,8 +16599,9 @@ class Overlay:
                 elif cmd in ("more", "less"):
                     a = int(self.app.cfg.get("overlay_alpha") or 65) + (5 if cmd == "more" else -5)
                     threading.Thread(target=self.app.api_save_config, kwargs={"overlay_alpha": max(30, min(100, a))}, daemon=True).start()
-                elif cmd == "screen":
-                    threading.Thread(target=self._hotkey_call, args=(self.app.api_screen,), daemon=True).start()
+                elif cmd == "screen":                                # already on the screen to read: no countdown
+                    threading.Thread(target=self._hotkey_call, args=(lambda: self.app.api_screen(now=True),),
+                                     daemon=True).start()
                 elif cmd == "answer":
                     threading.Thread(target=self._hotkey_call, args=(self.app.api_answer_now,), daemon=True).start()
                 elif cmd == "subs":                                  # subtitle mode on / off (both windows follow)

@@ -1,0 +1,53 @@
+name: Screen area check
+
+# A real check on a real Windows machine of 'Read my screen' areas (6.36): the picture of a rectangle, the darkened
+# screen where a box is drawn with the mouse, cancelling, hiding from screen sharing, and the whole job with a fake
+# AI service. Pictures of each step are kept. It does not decide whether a release may go out.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "tests/win_area_check.py"
+      - ".github/workflows/area-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  area:
+    name: Screen areas on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -r requirements.txt
+
+      - name: Draw areas and read them
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python tests/win_area_check.py area-shots | Tee-Object -FilePath area-report.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Keep the report and the pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: area-check
+          path: |
+            area-report.txt
+            area-shots/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1362,7 +1362,9 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         </div>
         <div class="arow" id="screenRow" data-part="screen" style="margin-top:12px"><span class="astat"></span><span class="alabel">Reading the screen</span><select class="input select" id="scrProv" data-key="screen_provider"></select><input class="input" data-key="screen_model" list="dl-scr" spellcheck="false" placeholder="Model that reads pictures — empty = pick automatically"><datalist id="dl-scr"><option value="gpt-4o-mini"><option value="gpt-4.1-mini"><option value="gemini-2.5-flash"><option value="qwen/qwen3.8-27b"><option value="meta-llama/llama-4-scout-17b-16e-instruct"></datalist></div>
         <div data-part="screen"><div class="help" style="margin:4px 0 6px">Used by Tools › Read my screen (F3). It needs an online service whose model can read pictures; the local models cannot.</div>
-          <div class="help" style="margin:0 0 6px">Picture delay: <select class="input select" data-key="screen_delay" style="width:auto;display:inline-block;padding:3px 8px" aria-label="Picture delay"><option value="0">at once</option><option value="2">2 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option></select></div>
+          <div class="help" style="margin:0 0 6px">What is read: <select class="input select" data-key="screen_area_mode" style="width:auto;display:inline-block;padding:3px 8px" aria-label="What is read"><option value="screen">The whole screen</option><option value="window">Only the window in front</option><option value="area">An area I draw each time</option><option value="same">An area I draw once, then the same area</option></select></div>
+          <div class="help" style="margin:0 0 6px">To draw an area, the screen turns darker: drag a box around the question with the mouse. <kbd>Esc</kbd> or a right click cancels. A small area is read more sharply. <kbd>Shift</kbd>+<kbd>F3</kbd> always lets you draw a new area.</div>
+          <div class="help" style="margin:0 0 6px">Picture delay: <select class="input select" data-key="screen_delay" style="width:auto;display:inline-block;padding:3px 8px" aria-label="Picture delay"><option value="0">at once</option><option value="2">2 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option></select> <span>(for F3 and the button, so you can switch to the right window first; <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>S</kbd> from any program reads at once)</span></div>
           <div class="help" style="margin:0 0 8px">When they say "look at this code" or "on my screen", a message offers <b>Read my screen</b>. The screen is read only when you press it (or F3) — never because of something said in the meeting.</div></div>
         <label class="toggle" id="backupRow"><input type="checkbox" data-key="use_backup"><span class="switch"></span><span class="tt"><b>Use Groq as a backup</b><span id="backupHelp">If a chosen service fails or runs out of credit, Groq continues so the meeting never stops.</span></span></label>
       </div>
@@ -1549,7 +1551,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
   <div class="hrow" data-part="answers"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
   <div class="hrow" data-part="answers"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
   <div class="hrow" data-part="answers"><kbd>F10</kbd><span>Focus page: only the question and its answer, big</span></div>
-  <div class="hrow" data-part="screen"><kbd>F3</kbd><span>Read the screen (a question or code shown there)</span></div>
+  <div class="hrow" data-part="screen"><kbd>F3</kbd><span>Read the screen (a question or code shown there) · <kbd>Shift</kbd>+<kbd>F3</kbd> draw a new area to read</span></div>
   <div class="hrow" data-part="coach"><kbd>F4</kbd><span>Ask the coach: what should I do or say now?</span></div>
   <div class="hrow" data-part="say"><kbd>F6</kbd><span>Say mode on / off: speak in <span class="myl">Persian</span>, get the sentence to say (also <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>J</kbd> from any program during a meeting)</span></div>
   <div class="hrow" data-part="marks"><kbd>F7</kbd><span>Mark this moment as important (also <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>K</kbd> from any program during a meeting)</span></div>
@@ -1685,6 +1687,7 @@ const ICONS = {
   layers:'<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/>',
   focus:'<path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/>',
   monitor:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  crop:'<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
   wave:'<path d="M3 12h2.5l2.5-6 4 13 3.5-9 2 3H21"/>',
   refresh:'<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>',
   flag:'<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
@@ -3396,8 +3399,17 @@ $("#copyAllBtn").onclick = async () => {
 };
 
 /* ---------- summary ---------- */
-function mdLite(t){
+// The direction of one line from its letters: most of them right-to-left (Persian, Arabic, Hebrew …) -> rtl.
+// (Not the first letter, as dir="auto" does: "OSPF یک پروتکل است" is a Persian line.)
+function lineDir(t){
+  const s = String(t || "").replace(/```[\s\S]*?```/g, "");
+  const r = (s.match(/[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+  const l = (s.match(/[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/g) || []).length;
+  return r === 0 && l === 0 ? "" : (r >= l ? "rtl" : "ltr");
+}
+function mdLite(t, perLine){
   const out = []; let ul = false, code = false;
+  const d = x => { if(!perLine) return ""; const v = lineDir(x); return v ? ` dir="${v}"` : ""; };
   const inline = x => esc(x).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
   String(t || "").split(/\n/).forEach(line => {
     const l = line.trim();
@@ -3409,9 +3421,9 @@ function mdLite(t){
     const li = /^[-*•]\s+/.test(l);
     if(!l) return;                                          // a blank line inside a list keeps the list
     if(!li && ul){ out.push("</ul>"); ul = false; }
-    if(/^#{1,4}\s/.test(l)) out.push(`<h3>${inline(l.replace(/^#+\s*/, ""))}</h3>`);
-    else if(li){ if(!ul){ out.push("<ul>"); ul = true; } out.push(`<li>${inline(l.replace(/^[-*•]\s+/, ""))}</li>`); }
-    else out.push(`<p>${inline(l)}</p>`);
+    if(/^#{1,4}\s/.test(l)) out.push(`<h3${d(l)}>${inline(l.replace(/^#+\s*/, ""))}</h3>`);
+    else if(li){ if(!ul){ out.push("<ul>"); ul = true; } out.push(`<li${d(l)}>${inline(l.replace(/^[-*•]\s+/, ""))}</li>`); }
+    else out.push(`<p${d(l)}>${inline(l)}</p>`);
   });
   if(ul) out.push("</ul>");
   if(code) out.push("</code></pre>");
@@ -4689,7 +4701,7 @@ document.addEventListener("keydown", ev => {
   }
   else if(ev.key === "F10" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); setFocus(!document.body.classList.contains("focus")); }
   else if(ev.key === "F2"){ ev.preventDefault(); answerNow(); }          // (also while typing a note: F2 types nothing)
-  else if(ev.key === "F3"){ ev.preventDefault(); readScreen(); }
+  else if(ev.key === "F3"){ ev.preventDefault(); if(!ev.repeat) readScreen(ev.shiftKey); }
   else if(ev.key === "F6" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); toggleSay(); }
   else if(ev.key === "F7" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); markLine(null); }
   else if(ev.key === "F4" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey){
@@ -4758,35 +4770,40 @@ function renderToolBtns(){
 }
 
 /* read my screen (F3) */
-async function readScreen(){
+async function readScreen(newArea){
   if(!featOn("screen")) return toast("info", FEATS.find(f => f[0] === "screen")[1] + " is turned off. Turn it on in Setup › Features.");
   if(S.scrBusy){ if(TM.kind !== "screen") showScreen({state: "working", note: "Reading the screen…", text: S.scrText || ""}); return; }
   S.scrBusy = true; S.scrText = "";
   showScreen({state: "working", note: "Starting…"});
-  const r = await api("screen");
+  const r = await api("screen", newArea === true ? {new_area: true} : {});
   if(!r.ok){ S.scrBusy = false; showScreen({state: "error", note: r.error || "Could not read the screen."}); }
 }
+const SCR_WHAT = {screen: "the whole screen", window: "the window in front", area: "an area you draw", same: "the area you drew (the same each time)"};
 function showScreen(m){
   if(TM.kind !== "screen"){ openTool("screen", "Read my screen", "eye"); }
   const busy = ["working", "streaming"].includes(m.state);
-  $("#toolBody").innerHTML = `<div ${rtlAttr()} class="rtl-text">${m.text ? mdLite(m.text) : `<p class="help" dir="ltr">Press <kbd>F3</kbd> (or Tools › Read my screen) while the question is on your screen. The picture is taken after a few seconds, so you can switch to the right window. The picture is sent to your AI service and is not saved.</p>`}</div>`;
+  const mode = (S.cfg && S.cfg.screen_area_mode) || "screen";
+  $("#toolBody").innerHTML = `<div ${rtlAttr()} class="rtl-text">${m.text ? mdLite(m.text, true) : `<p class="help" dir="ltr">Press <kbd>F3</kbd> (or Tools › Read my screen) while the question is on your screen. It reads ${esc(SCR_WHAT[mode] || SCR_WHAT.screen)} (Setup › Services › Reading the screen). The picture is taken after a few seconds, so you can switch to the right window. The picture is sent to your AI service and is not saved.</p>`}</div>`;
   const note = $("#toolNote");
   note.innerHTML = busy ? `<span class="spinner"></span>${esc(m.note || "Reading…")}`
     : m.state === "error" ? `${icon("alert")}${esc(m.note || "It failed.")}`
+    : m.state === "cancelled" ? esc(m.note || "Cancelled.")
     : m.state === "done" ? `${icon("check")}${m.saved ? "Saved in the meeting file." : "Not saved (no meeting is open)."}` : "";
-  toolActions([{id: "scrAgain", icon: "refresh", text: "Read again", disabled: busy, run: readScreen},
+  toolActions([{id: "scrAgain", icon: "refresh", text: "Read again", disabled: busy, run: () => readScreen()},
+               {id: "scrArea", icon: "crop", text: mode === "same" ? "New area" : "Draw an area", disabled: busy, run: () => readScreen(true)},
                {icon: "copy", text: "Copy", disabled: !S.scrText, run: () => copyText(S.scrText, "Copied.")}]);
 }
 function ovScreen(m){                                    // the see-through window shows the screen result in place of the answer
   const el = $("#ovScreen"), ab = $("#answerBody"); if(!el) return;
-  const txt = m.text ? mdLite(m.text) : `<p class="help">${esc(m.state === "done" ? "Nothing was read from the screen." : m.state === "error" ? (m.note || "The screen could not be read.") : (m.note || "Reading the screen…"))}</p>`;
+  if(m.state === "cancelled"){ if(S.ovScreenUntil) S.ovScreenUntil = 1; return; }   // nothing read: the answer comes back
+  const txt = m.text ? mdLite(m.text, true) : `<p class="help">${esc(m.state === "done" ? "Nothing was read from the screen." : m.state === "error" ? (m.note || "The screen could not be read.") : (m.note || "Reading the screen…"))}</p>`;
   el.hidden = false; ab.style.display = "none"; el.setAttribute("dir", "auto"); el.innerHTML = txt;
   S.ovScreenUntil = Date.now() + (["done"].includes(m.state) ? 120000 : m.state === "error" ? 15000 : 60000);
 }
 function onScreen(m){
   if(OVERLAY){ ovScreen(m); return; }
   if(m.text) S.scrText = m.text;
-  if(["done", "error"].includes(m.state)) S.scrBusy = false;
+  if(["done", "error", "cancelled"].includes(m.state)) S.scrBusy = false;
   if(TM.kind === "screen") showScreen(m);
   else if(m.state === "done") toast("ok", "The screen was read — open Tools › Read my screen to see the result.");
   else if(m.state === "error") toast("error", m.note || "The screen could not be read.");
