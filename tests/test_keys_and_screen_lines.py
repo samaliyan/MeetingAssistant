@@ -373,3 +373,12 @@ def test_a_key_that_types_a_letter_gets_another_one(app, monkeypatch):
     assert app.altgr_free_key("g_area", "Ctrl+Alt+D", keys) == "Alt+Shift+D"
     monkeypatch.setattr(app, "combo_types_text", lambda c: True)
     assert app.altgr_free_key("g_area", "Ctrl+Alt+D", keys) == ""
+
+
+def test_screen_reading_follows_the_answer_style(app):
+    c = app.sanitize({"my_language": "fa", "languages": ["en"], "context": "Final exam, Computer Networks",
+                      "about_me": "MSc student", "answer_style": "Answer at university level, with the reasoning."})
+    p = app.screen_prompt(c)
+    assert "Answer at university level, with the reasoning." in p and "Final exam, Computer Networks" in p
+    assert p.index("university level") < p.index("@@QUESTION")         # (before the format, which stays as it is)
+    assert "How the user wants answers" not in app.screen_prompt(dict(c, answer_style=""))

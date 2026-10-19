@@ -1,4 +1,8 @@
-# Meeting Assistant — User Guide (version 6.37)
+# Meeting Assistant — User Guide (version 6.38)
+
+## Version 6.38
+
+- Read my screen now also follows Setup › Answers › "How should suggested answers sound?" (for example "Answer at university level, with the reasoning"), together with the meeting topic and About you.
 
 ## Version 6.37: your own keys, and screen answers in the meeting
 
