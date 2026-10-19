@@ -1,4 +1,11 @@
-# Meeting Assistant — User Guide (version 6.36)
+# Meeting Assistant — User Guide (version 6.37)
+
+## Version 6.37: your own keys, and screen answers in the meeting
+
+- **Setup › Keys**: every key of the program. Click a key, press the new keys. Esc keeps the old one, Backspace leaves the action without a key. **Reset all keys** brings back the first ones.
+- **Tools › Read my screen** asks first: Whole screen, Window in front, Draw an area (or Same area again). The wait before the picture is chosen there. The program's window steps aside while the picture is taken.
+- **In a meeting** the question from the screen becomes a "Screen" line with its translation, and its answer comes in the Suggested answer panel (and the overlay), like any other question.
+- **From any program** (a test, Teams…): Ctrl+Alt+D draws an area and reads it, Ctrl+Alt+S reads the screen — the answer comes into the meeting. Change them in Setup › Keys (for example to Shift+F3).
 
 ## Version 6.36: read only the part of the screen you want
 

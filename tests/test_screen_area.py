@@ -97,14 +97,15 @@ def test_screen_prompt_layout(app):
     c = app.sanitize({"my_language": "fa", "languages": ["en"], "answer_language": "same", "answer_fa": True})
     p = app.screen_prompt(c)
     assert "Persian (Farsi)" in p
-    for part in ("## The question", "## The answer", "## What the answer means"):
+    for part in ("@@QUESTION", "@@TRANSLATION", "@@ANSWER", "@@MEANING", "@@NOTES"):
         assert part in p
+    assert p.index("@@QUESTION") < p.index("@@TRANSLATION") < p.index("@@ANSWER") < p.index("@@MEANING")
     assert "Multiple choice" in p and "letter or number of the right option" in p and "**B) 42**" in p
     assert "in the language of the question on the screen (English)" in p
-    assert "several questions" in p and "cut off or unreadable" in p and "[your name]" in p
+    assert "several questions" in p.lower() and "cut off or unreadable" in p and "[your name]" in p
     c2 = dict(c, answer_fa=False, answer_language="de")
     p2 = app.screen_prompt(c2)
-    assert "What the answer means" not in p2 and "in German" in p2
+    assert "@@MEANING" not in p2 and "in German" in p2
 
 
 def test_read_screen_sends_the_layout_and_the_picture(app):
@@ -115,14 +116,15 @@ def test_read_screen_sends_the_layout_and_the_picture(app):
 
         def fake_chat(targets, messages, max_tokens, temp, on_text):
             sent.update(targets=targets, messages=messages, max_tokens=max_tokens)
-            on_text("## The question\nx")
-            return "## The question\nx\n## The answer\n**B) 42**"
+            on_text("@@QUESTION\nx")
+            return "@@QUESTION\nx\n@@ANSWER\n**B) 42**"
         eng.run_chat = fake_chat
-        out = eng.read_screen(b"\x89PNG-fake", "groq", "some-vision-model")
+        seen = []
+        out = eng.read_screen(b"\x89PNG-fake", "groq", "some-vision-model", seen.append)
         assert out.endswith("**B) 42**")
         assert sent["targets"] == [("groq", "some-vision-model", None)] and sent["max_tokens"] >= 3000
         system, user = sent["messages"]
-        assert "## The answer" in system["content"]
+        assert "@@ANSWER" in system["content"]
         assert user["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     finally:
         a.closing.set()
@@ -150,9 +152,11 @@ def job(app, monkeypatch):
         return calls.get("pick_result", (-1500, 200, 400, 300))
 
     class Eng:
-        def read_screen(self, png, pid, model):
+        def read_screen(self, png, pid, model, on_text=None):
             calls["read"].append((_png_size(png), pid, model))
-            return "## The answer\n**B) 42**"
+            if on_text:
+                on_text("@@QUESTION\nWhat is 6x7?\n@@ANSWER\n**B")
+            return "@@QUESTION\nWhat is 6x7?\nA) 41\nB) 42\n@@TRANSLATION\nشش ضرب در هفت؟\n@@ANSWER\n**B) 42**\n@@MEANING\nگزینه‌ی ب"
     monkeypatch.setattr(app, "SCREEN_CAPTURE", True)
     monkeypatch.setattr(app, "win_rects", lambda: {"virtual": VIRT, "front_monitor": FRONT_MON,
                                                    "cursor_monitor": CURSOR_MON, "front_window": front["win"]})
@@ -286,24 +290,39 @@ def test_no_picture_service_is_said_before_the_countdown(job, app, monkeypatch):
 def test_api_screen_passes_the_choices(job, monkeypatch):
     a, calls = job
     got = []
-    monkeypatch.setattr(a, "_screen_job", lambda new_area=False, now=False: got.append((new_area, now)))
+    def fake(new_area=False, now=False, what="", from_key=False):
+        got.append((new_area, now, what, from_key))
+        a.screen_busy = False
+    monkeypatch.setattr(a, "_screen_job", fake)
     assert a.call("screen", {"new_area": True})["ok"]
     import time
     for _ in range(50):
         if got:
             break
         time.sleep(0.02)
-    assert got == [(True, False)]
+    assert got == [(True, False, "", False)]
+    got.clear()
+    assert a.call("screen", {"what": "window"})["ok"]
+    for _ in range(50):
+        if len(got) == 1:
+            break
+        time.sleep(0.02)
+    assert a.call("screen", {"what": "bogus", "now": True})["ok"]
+    for _ in range(50):
+        if len(got) == 2:
+            break
+        time.sleep(0.02)
+    assert sorted(got) == sorted([(False, False, "window", False), (False, True, "", False)])
 
 
 def test_page_has_the_new_controls():
     import os
     page = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "index.html"),
                 encoding="utf-8").read()
-    assert 'data-key="screen_area_mode"' in page
     for v in ("screen", "window", "area", "same"):
-        assert f'<option value="{v}">' in page
-    assert "readScreen(ev.shiftKey)" in page and "New area" in page and '"cancelled"' in page
+        assert f'["{v}", ' in page                                        # the four choices of Read my screen
+    assert 'id="scrDelay"' in page and 'id="scrMode"' in page and "screen: () => openScreen()" in page
+    assert 'case "area": readScreen(true)' in page and '"cancelled"' in page
     assert "function lineDir(" in page and "mdLite(m.text, true)" in page
 
 

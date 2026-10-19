@@ -315,7 +315,7 @@ body.ov .answer-empty span,body.ov .answer-empty .a-skel{display:none}
 #ovCoach.help{max-height:65%;font-size:.88rem;color:#dfe5ee}
 #ovCoach .say{display:block;margin-top:3px;color:#eef1f6;font-weight:500}
 body.ov.mv #ovBox{border:2px dashed #b4c2df;cursor:move}
-body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · Ctrl+Alt+M: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
+body.ov.mv #ovBox::after{content:"Left button: move · Right button: resize · the move key again: lock";position:absolute;right:10px;top:4px;font-size:.75rem;color:#dbe3f2}
 #ovBtn.on{color:var(--accent);border-color:var(--accent)}
 .modeseg{display:inline-flex;border:1px solid var(--border,#d0d5dd);border-radius:10px;padding:2px;gap:2px;background:var(--surface-2,transparent)}
 .modeseg button{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--text-2);font:inherit;font-size:.86rem;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer}
@@ -421,6 +421,19 @@ body.ov.subs #ovSub{flex:1 1 auto;min-height:0;display:flex;flex-direction:colum
 .pr-better{padding:8px 10px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);margin:6px 0;line-height:1.6;white-space:pre-wrap}
 #ovScreen{flex:1;min-height:0;overflow-y:auto;font-size:1rem;line-height:1.5}
 #ovScreen[hidden]{display:none}
+.entry.screen .avatar{background:var(--accent-soft);color:var(--accent)}
+.entry.screen .avatar svg{width:18px;height:18px}
+.entry.screen .orig,.entry.screen .fa,#answerBody.scr .q-orig,#answerBody.scr .q-fa{white-space:pre-line}
+#answerBody.scr .a-text p{margin:.2em 0}
+#answerBody.scr .a-text pre{white-space:pre-wrap}
+.scr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0 14px}
+.scr-opt{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);font:inherit;text-align:start;cursor:pointer}
+.scr-opt:hover,.scr-opt:focus-visible{border-color:var(--accent);background:var(--accent-soft)}
+.scr-opt svg{width:22px;height:22px;color:var(--accent)}
+.scr-opt small{color:var(--text-2);font-size:.82rem}
+.scr-set{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin-bottom:8px;font-size:.9rem}
+.scr-set label{display:flex;align-items:center;gap:8px}
+.scr-set select{width:auto;padding:3px 8px}
 ul.pl,.tool-body ul.pl{padding-inline-start:4px;list-style-position:inside}
 .notes-sec{margin:0 0 12px}
 .notes-sec h4{margin:0 0 4px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
@@ -491,8 +504,8 @@ body.drawer-open .toasts{right:calc(min(560px,100vw) + 16px)}   /* never on top 
 .drawer-head h2{margin:0;font-size:1.15rem;flex:1}
 .saved{font-size:.78rem;color:var(--muted);display:inline-flex;gap:5px;align-items:center}
 .saved.show{color:var(--ok)}
-.tabs{display:flex;gap:2px;padding:12px 14px 0;border-bottom:1px solid var(--border);overflow-x:auto}
-.tab{border:0;background:none;padding:9px 12px;font-weight:600;font-size:.88rem;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
+.tabs{display:flex;gap:0;padding:12px 10px 0;border-bottom:1px solid var(--border);overflow-x:auto}
+.tab{border:0;background:none;padding:9px 9px;font-weight:600;font-size:.86rem;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
 .tab:hover{color:var(--text)}
 .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 .tab .warn-dot{width:7px;height:7px;border-radius:50%;background:var(--danger)}
@@ -820,7 +833,18 @@ details.more .rate-box{border:0;padding:0}
 .helppop .hrow,.hkeys .hrow{display:flex;align-items:center;gap:8px}
 .helppop .hrow > span:last-child,.hkeys .hrow > span:last-child{margin-left:6px;color:var(--text-2)}
 .hkeys{display:flex;flex-direction:column;gap:6px}
-#setupKeys{margin-top:6px}
+.keylist{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.krow{display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 10px;padding:5px 0;border-bottom:1px solid var(--border)}
+.krow .ktext{font-size:.92rem}
+.kbtn{font:inherit;font-size:.86rem;font-family:var(--mono);min-width:118px;padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);cursor:pointer;direction:ltr}
+.kbtn:hover{border-color:var(--accent)}
+.kbtn.none{color:var(--text-2);font-style:italic}
+.kbtn.cap{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);color:var(--accent)}
+.krow.changed .ktext::after{content:" · changed";color:var(--text-2);font-size:.8rem}
+.krow .kerr{grid-column:1 / -1;color:var(--danger);font-size:.85rem}
+.krow .kerr:empty{display:none}
+#keysGlobBox.off .keylist{opacity:.45;pointer-events:none}
+.hkeys .hsub{margin-top:8px;font-weight:600;font-size:.85rem;color:var(--text-2)}
 .helppop .hic svg{width:16px;height:16px;color:var(--muted)}
 /* selection, edit, explanation */
 .selpop{position:fixed;z-index:70;display:flex;gap:4px;padding:4px;border-radius:12px;background:var(--surface);border:1px solid var(--border-strong);box-shadow:var(--shadow-lg)}
@@ -1013,19 +1037,19 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <div class="meter me off" id="mMe" title="Your microphone"><span data-icon="mic"></span><span class="meter-label">Me</span><span class="bar"><i></i></span></div>
       <div class="meter them off" id="mThem" title="Computer sound (the other side)"><span data-icon="volume"></span><span class="meter-label">Other side</span><span class="bar"><i></i></span></div>
     </div>
-    <button class="btn ghost" id="pauseBtn" hidden title="Pause listening: nothing is written or sent until you continue (F8)"><span data-icon="pause"></span><span id="pauseLabel">Pause</span><kbd class="hide-sm">F8</kbd></button>
-    <button class="btn ghost" id="sayBtn" hidden title="Say mode: speak in your language, get the sentence to say in the meeting language. Mute yourself in Teams or Zoom first. (F6, or Ctrl+Alt+J from any program during a meeting)"><span data-icon="speak"></span><span class="hide-sm" id="sayLabel">Say it</span><kbd class="hide-sm">F6</kbd></button>
-    <button class="btn ghost" id="markBtn" hidden title="Mark the latest moment as important — it goes into the summary and the export (F7, or Ctrl+Alt+K from any program during a meeting)"><span data-icon="flag"></span><span class="hide-sm">Mark</span><kbd class="hide-sm">F7</kbd></button>
-    <button class="btn ghost" id="ovBtn" title="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it (Ctrl+Alt+O, even from another program)"><span data-icon="layers"></span><span class="hide-sm">Overlay</span></button>
+    <button class="btn ghost" id="pauseBtn" hidden data-title-k="Pause listening: nothing is written or sent until you continue ({pause})"><span data-icon="pause"></span><span id="pauseLabel">Pause</span><kbd class="hide-sm" data-k="pause"></kbd></button>
+    <button class="btn ghost" id="sayBtn" hidden data-title-k="Say mode: speak in your language, get the sentence to say in the meeting language. Mute yourself in Teams or Zoom first. ({say} or {g_say})"><span data-icon="speak"></span><span class="hide-sm" id="sayLabel">Say it</span><kbd class="hide-sm" data-k="say"></kbd></button>
+    <button class="btn ghost" id="markBtn" hidden data-title-k="Mark the latest moment as important — it goes into the summary and the export ({mark} or {g_mark})"><span data-icon="flag"></span><span class="hide-sm">Mark</span><kbd class="hide-sm" data-k="mark"></kbd></button>
+    <button class="btn ghost" id="ovBtn" data-title-k="See-through window: only the question and the answer, over everything, the mouse and keyboard work on the program below it ({g_overlay})"><span data-icon="layers"></span><span class="hide-sm">Overlay</span></button>
     <div class="modeseg" id="modeSeg" role="radiogroup" aria-label="What are you doing?">
       <button data-mode="meeting" role="radio" title="Online meeting (Teams, Zoom, Meet): the computer's sound is the other side, your microphone is you"><span data-icon="headphones"></span><span class="hide-sm">Meeting</span></button>
       <button data-mode="inperson" role="radio" title="In person, or a phone on speaker: only the microphone is used and the program tells the voices apart"><span data-icon="mic"></span><span class="hide-sm">In person</span></button>
-      <button data-mode="video" role="radio" title="A film or video on this computer: only its sound, only its translation, like subtitles (Ctrl+Alt+T while the overlay is on)"><span data-icon="text"></span><span class="hide-sm">Video</span></button>
+      <button data-mode="video" role="radio" data-title-k="A film or video on this computer: only its sound, only its translation, like subtitles ({g_subs})"><span data-icon="text"></span><span class="hide-sm">Video</span></button>
     </div>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
-    <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm">Shift+F9</kbd></button>
-    <button class="btn primary" id="startBtn"><span data-icon="play"></span><span id="startLabel">Start</span><kbd class="hide-sm">F9</kbd></button>
+    <button class="btn ghost" id="resumeBtn" hidden><span data-icon="refresh"></span><span class="hide-sm">Continue last</span><kbd class="hide-sm" data-k="resume"></kbd></button>
+    <button class="btn primary" id="startBtn"><span data-icon="play"></span><span id="startLabel">Start</span><kbd class="hide-sm" data-k="start"></kbd></button>
   </header>
 
   <div class="modebar" id="modeBar" hidden role="status">
@@ -1051,7 +1075,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <button class="btn icon ghost" id="copyAllBtn" title="Copy the whole transcript" aria-label="Copy the whole transcript"><span data-icon="copy"></span></button>
       </div>
       <div class="toolpop" id="toolPop" hidden role="menu">
-        <button data-tool="screen" role="menuitem"><span data-icon="monitor"></span><span class="tp-text">Read my screen<small>Answers a question or code on your screen</small></span><kbd>F3</kbd></button>
+        <button data-tool="screen" role="menuitem"><span data-icon="monitor"></span><span class="tp-text">Read my screen<small>Answers a question or code on your screen</small></span><kbd data-k="screen"></kbd></button>
         <button data-tool="say" role="menuitem"><span data-icon="edit"></span><span class="tp-text">Help me say…<small>Your rough idea → what to say</small></span></button>
         <button data-tool="jobprep" role="menuitem"><span data-icon="list"></span><span class="tp-text">Prepare for the job<small>Paste the advert: likely questions and a checklist</small></span></button>
         <button data-tool="practice" role="menuitem"><span data-icon="play"></span><span class="tp-text">Practice interview<small>Questions one by one, your answer is graded</small></span></button>
@@ -1081,10 +1105,10 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <button id="aBigger" aria-label="Bigger answer text">A+</button>
         </div>
         <button class="btn icon ghost" id="copyBtn" title="Copy answer" aria-label="Copy answer"><span data-icon="copy"></span></button>
-        <button class="btn sm ghost keep-label" id="focusBtn" title="Focus: only the question, its answer and the coach, big — the full transcript is hidden (F10)"><span data-icon="focus"></span><span class="hide-sm" id="focusLabel">Focus</span><kbd class="hide-sm">F10</kbd></button>
+        <button class="btn sm ghost keep-label" id="focusBtn" data-title-k="Focus: only the question, its answer and the coach, big — the full transcript is hidden ({focus})"><span data-icon="focus"></span><span class="hide-sm" id="focusLabel">Focus</span><kbd class="hide-sm" data-k="focus"></kbd></button>
       </div>
       <div class="coach" id="coach" hidden>
-        <div class="co-top"><b class="co-name">Coach</b><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-more" id="coAskTop" title="Ask the coach what to do now (F4)">Ask <kbd>F4</kbd></button><button class="co-more" id="coMore" aria-expanded="false">Details</button></div>
+        <div class="co-top"><b class="co-name">Coach</b><div class="co-live" id="coLive" aria-live="polite"></div><button class="co-more" id="coAskTop" data-title-k="Ask the coach what to do now ({coach})">Ask <kbd data-k="coach"></kbd></button><button class="co-more" id="coMore" aria-expanded="false">Details</button></div>
         <div class="co-one" id="coOne" role="button" tabindex="0" title="Open the coach's details"></div>
         <div class="co-body" id="coBody">
           <div class="co-how" id="coHow" hidden></div>
@@ -1108,12 +1132,12 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="sc-note" id="sayNote"></div>
       </div>
       <div class="endbar" id="endBar" hidden role="status"><b>Meeting saved.</b><span class="eb-acts"><button class="btn sm soft" data-end="summary" data-part="after"><span data-icon="list"></span>Summary</button><button class="btn sm ghost" data-end="feedback" data-part="after"><span data-icon="sparkles"></span>How did I do?</button><button class="btn sm ghost" data-end="export"><span data-icon="file"></span>Export</button></span><button class="cx-x" id="endX" aria-label="Hide">×</button></div>
-      <div class="newq" id="newQ" hidden role="button" tabindex="0"><b>New question</b><span id="newQText"></span><u>Show now <kbd>Space</kbd></u></div>
+      <div class="newq" id="newQ" hidden role="button" tabindex="0"><b>New question</b><span id="newQText"></span><u>Show now <kbd data-k="waiting"></kbd></u></div>
       <div class="answer-body" id="answerBody"></div>
       <div class="nowstrip" id="nowStrip" aria-live="polite"></div>
       <div class="answer-foot">
         <span class="ans-nav" id="ansNav" hidden><button class="btn icon ghost" id="ansPrev" title="Earlier answer (Ctrl + Left)" aria-label="Earlier answer">‹</button><span id="ansPos"></span><button class="btn icon ghost" id="ansNext" title="Newer answer (Ctrl + Right)" aria-label="Newer answer">›</button></span>
-        <button class="btn soft sm" id="answerNowBtn" title="Suggest an answer to the latest question now"><span data-icon="zap"></span>Answer now<kbd>F2</kbd></button>
+        <button class="btn soft sm" id="answerNowBtn" title="Suggest an answer to the latest question now"><span data-icon="zap"></span>Answer now<kbd data-k="answer"></kbd></button>
         <span class="hint" id="answerHint"></span>
       </div>
       <details class="notes" id="notesBox" hidden>
@@ -1149,6 +1173,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
     <button class="tab" data-tab="audio">Audio</button>
     <button class="tab" data-tab="connection">Services<span class="warn-dot" id="keyDot" hidden></span></button>
     <button class="tab" data-tab="display">Display</button>
+    <button class="tab" data-tab="keys">Keys</button>
     <button class="tab" data-tab="log">Log<span class="warn-dot" id="logDot" hidden></span></button>
   </nav>
   <div class="drawer-body">
@@ -1362,11 +1387,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <div class="arow"><span class="astat" data-stat="ans"></span><span class="alabel">Answers</span><select class="input select" data-assign="ans"></select><input class="input" data-model="ans" list="dl-ans" spellcheck="false"><datalist id="dl-ans"></datalist></div>
         </div>
         <div class="arow" id="screenRow" data-part="screen" style="margin-top:12px"><span class="astat"></span><span class="alabel">Reading the screen</span><select class="input select" id="scrProv" data-key="screen_provider"></select><input class="input" data-key="screen_model" list="dl-scr" spellcheck="false" placeholder="Model that reads pictures — empty = pick automatically"><datalist id="dl-scr"><option value="gpt-4o-mini"><option value="gpt-4.1-mini"><option value="gemini-2.5-flash"><option value="qwen/qwen3.8-27b"><option value="meta-llama/llama-4-scout-17b-16e-instruct"></datalist></div>
-        <div data-part="screen"><div class="help" style="margin:4px 0 6px">Used by Tools › Read my screen (F3). It needs an online service whose model can read pictures; the local models cannot.</div>
-          <div class="help" style="margin:0 0 6px">What is read: <select class="input select" data-key="screen_area_mode" style="width:auto;display:inline-block;padding:3px 8px" aria-label="What is read"><option value="screen">The whole screen</option><option value="window">Only the window in front</option><option value="area">An area I draw each time</option><option value="same">An area I draw once, then the same area</option></select></div>
-          <div class="help" style="margin:0 0 6px">To draw an area, the screen turns darker: drag a box around the question with the mouse. <kbd>Esc</kbd> or a right click cancels. A small area is read more sharply. <kbd>Shift</kbd>+<kbd>F3</kbd> always lets you draw a new area.</div>
-          <div class="help" style="margin:0 0 6px">Picture delay: <select class="input select" data-key="screen_delay" style="width:auto;display:inline-block;padding:3px 8px" aria-label="Picture delay"><option value="0">at once</option><option value="2">2 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option></select> <span>(for F3 and the button, so you can switch to the right window first<span data-part="overlay" class="hk-only">; while the see-through window is on, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>S</kbd> reads at once</span>)</span></div>
-          <div class="help" style="margin:0 0 8px">When they say "look at this code" or "on my screen", a message offers <b>Read my screen</b>. The screen is read only when you press it (or F3) — never because of something said in the meeting.</div></div>
+        <div data-part="screen"><div class="help" style="margin:4px 0 8px">Used by Tools › Read my screen. It needs an online service whose model can read pictures; the local models cannot. What is read (the whole screen, the window in front or an area you draw) and the delay are chosen in Read my screen itself. The screen is read only when you ask for it — never because of something said in the meeting.</div></div>
         <label class="toggle" id="backupRow"><input type="checkbox" data-key="use_backup"><span class="switch"></span><span class="tt"><b>Use Groq as a backup</b><span id="backupHelp">If a chosen service fails or runs out of credit, Groq continues so the meeting never stops.</span></span></label>
       </div>
 
@@ -1502,12 +1523,9 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="60" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
         </div>
-        <div class="field" style="margin-top:12px"><span class="label">Keys that work from any program</span>
-          <div class="seg" data-key="hotkeys" style="margin-top:6px"><button data-val="ctrl_alt">Ctrl + Alt</button><button data-val="ctrl_alt_shift">Ctrl + Alt + Shift</button><button data-val="off">Off</button></div>
-          <div class="help">On some keyboards Ctrl + Alt is the AltGr key (Polish ó ą ś, German € @ …): then those letters cannot be typed while the program holds them. Choose Ctrl + Alt + Shift, or Off and use the buttons (with Off only <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>M</kbd> stays, to move the see-through window). F2–F10 in this window always work.</div></div>
         <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Video mode — subtitles (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. The same as the Video button at the top (before a meeting), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
         <label class="toggle" style="margin-top:8px" data-part="overlay"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
-        <div class="help">Turn it on with the Overlay button or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>PageUp</kbd> / <kbd>PageDown</kbd> = more / less solid; <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> = subtitles on / off. To move it: <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>M</kbd>, then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place.</div>
+        <div class="help">Turn it on with the Overlay button <kbd data-k="g_overlay"></kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd data-k="g_more"></kbd> / <kbd data-k="g_less"></kbd> = more / less solid; <kbd data-k="g_subs"></kbd> = subtitles on / off. To move it: <kbd data-k="g_move"></kbd> (with keys from any program off: <kbd>Ctrl+Alt+Shift+M</kbd>), then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place. All keys: Setup › Keys.</div>
       </div>
       <div class="field">
         <span class="label">Screen sharing</span>
@@ -1516,9 +1534,23 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="hide-test" id="hideTestRow" hidden><button class="btn sm ghost" id="hideTestBtn"><span data-icon="eye"></span>Test it now</button><span class="help" id="hideTestResult"></span></div>
         <div class="warn-box"><span data-icon="alert"></span><span><b>Please read.</b> Some companies and interviewers forbid the use of an assistant during interviews and may treat it as cheating. Hiding the window does not make its use allowed. Use it only where it is permitted, and follow the rules of the company or school.</span></div>
       </div>
+    </section>
+    <!-- KEYS (6.37) -->
+    <section class="pane" data-pane="keys">
+      <div class="callout"><span data-icon="info"></span><div>Click a key, then press the new keys. <b>Esc</b> keeps the old one, <b>Backspace</b> leaves the action without a key.</div></div>
       <div class="field">
-        <span class="label">Keyboard shortcuts</span>
-        <div class="hkeys help" id="setupKeys"></div>
+        <span class="label">In this window</span>
+        <div class="keylist" id="keysWin"></div>
+      </div>
+      <div class="field" id="keysGlobBox">
+        <span class="label">From any program</span>
+        <label class="toggle"><input type="checkbox" id="hkOn"><span class="switch"></span><span class="tt"><b>Keys that work from any program</b><span>Even while Teams, Zoom or a test is in front. Off: only the keys of this window and the buttons (the see-through window keeps Ctrl+Alt+Shift+M to move it).</span></span></label>
+        <div class="keylist" id="keysGlob"></div>
+        <div class="help">On some keyboards Ctrl + Alt is the AltGr key (Polish ó ą ś, German € @ …): then those letters cannot be typed while the program holds the key. Give such keys Shift too (for example Ctrl+Alt+Shift+S), or an F key.</div>
+      </div>
+      <div class="field">
+        <div class="help">These stay as they are: Ctrl+, opens Setup · Ctrl + and Ctrl − change the text size · Esc closes · in move mode of the see-through window the arrows move it and Home / End make it bigger / smaller (also Ctrl+Alt+Shift+arrows).</div>
+        <button class="btn sm ghost" id="keysReset" type="button"><span data-icon="refresh"></span>Reset all keys</button>
       </div>
     </section>
     <!-- LOG -->
@@ -1543,24 +1575,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <div class="helppop" id="helpPop" hidden role="dialog" aria-label="Keyboard shortcuts and tips">
   <b>Keyboard</b>
-  <div class="hkeys" id="helpKeys">
-  <div class="hrow"><kbd>F9</kbd><span>Start the meeting · during it press twice to stop</span></div>
-  <div class="hrow"><kbd>Shift+F9</kbd><span>Continue the last meeting (same transcript)</span></div>
-  <div class="hrow"><kbd>F8</kbd><span>Pause / continue listening</span></div>
-  <div class="hrow" data-part="answers"><kbd>F2</kbd><span>Answer the last thing they said</span></div>
-  <div class="hrow" data-part="answers"><kbd>Space</kbd><span>Show the new question that waits above the answer</span></div>
-  <div class="hrow" data-part="answers"><kbd>Ctrl</kbd><kbd>←</kbd> <kbd>Ctrl</kbd><kbd>→</kbd><span>Earlier / newer suggested answer</span></div>
-  <div class="hrow" data-part="answers"><kbd>Ctrl</kbd><kbd>↑</kbd> <kbd>Ctrl</kbd><kbd>↓</kbd><span>Scroll a long answer</span></div>
-  <div class="hrow" data-part="answers"><kbd>F10</kbd><span>Focus page: only the question and its answer, big</span></div>
-  <div class="hrow" data-part="screen"><kbd>F3</kbd><span>Read the screen (a question or code shown there) · <kbd>Shift</kbd>+<kbd>F3</kbd> draw a new area to read</span></div>
-  <div class="hrow" data-part="coach"><kbd>F4</kbd><span>Ask the coach: what should I do or say now?</span></div>
-  <div class="hrow" data-part="say"><kbd>F6</kbd><span>Say mode on / off: speak in <span class="myl">Persian</span>, get the sentence to say (also <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>J</kbd> from any program during a meeting)</span></div>
-  <div class="hrow" data-part="marks"><kbd>F7</kbd><span>Mark this moment as important (also <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>K</kbd> from any program during a meeting)</span></div>
-  <div class="hrow" data-part="overlay"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>O</kbd><span>See-through answer window on / off (from any program). While on: <span data-part="screen"><kbd>S</kbd> read the screen, </span><span data-part="answers"><kbd>A</kbd> answer now, </span><span data-part="coach"><kbd>H</kbd> coach help, </span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd> scroll, <kbd>←</kbd><kbd>→</kbd> earlier / newer answer, <kbd>PgUp</kbd><kbd>PgDn</kbd> see-through, <kbd>M</kbd> move.</span></div>
-  <div class="hrow"><kbd>Ctrl</kbd><kbd>,</kbd><span>Setup</span></div>
-  <div class="hrow"><kbd>Ctrl</kbd><kbd>+</kbd> <kbd>Ctrl</kbd><kbd>−</kbd><span>Text size</span></div>
-  <div class="hrow"><kbd>Esc</kbd><span>Close a window or the focus page</span></div>
-  </div>
+  <div class="hkeys" id="helpKeys"></div>
   <b>In the transcript</b>
   <div class="hrow" data-part="translate"><span class="hic" data-icon="text"></span><span>Select words → <i>Explain in <span class="myl">Persian</span></i><span data-part="answers"> or <i>Answer this</i></span></span></div>
   <div class="hrow"><span class="hic" data-icon="edit"></span><span>Pencil next to a line → correct what was heard</span></div>
@@ -1727,13 +1742,14 @@ const clock = t => new Date(t*1000).toLocaleTimeString([], {hour:"2-digit", minu
 const in_personUI = () => S.cfg?.work_mode === "inperson";
 const label = (src, spk) => {
   if(src === "me") return S.cfg?.me_label || "Me";
+  if(src === "screen") return "Screen";                 // (6.37: a question read from the screen during the meeting)
   if(S.cfg?.work_mode === "video" && !S.cfg?.them_label) return "Video";     // (a film is not "Person 1")
   const base = S.cfg?.them_label || "Person 1";
   if(!(spk > 0)) return base;
   return (base.replace(/\s*\d+$/, "").trim() || base) + " " + (spk + 1);
 };
 const spkKey = e => e.source === "me" ? "me" : (typeof e.who === "string" && e.who.trim()) ? "who:" + Array.from(e.who.trim()).slice(0, 40).join("") : "them:" + (e.speaker || 0);
-const whoOf = e => (e.source !== "me" && (S.names || {})[spkKey(e)]) || e.who || label(e.source, e.speaker);   // a name the user gave wins
+const whoOf = e => e.source === "screen" ? "Screen" : (e.source !== "me" && (S.names || {})[spkKey(e)]) || e.who || label(e.source, e.speaker);   // a name the user gave wins
 function initials(name){
   const w = String(name||"?").trim().split(/\s+/).filter(Boolean);
   if(w.length===1) return w[0].slice(0,2);
@@ -1887,15 +1903,15 @@ function langName(code){ const L = ((S.cfg||{}).langs || {})[code]; return L ? L
 /* ---------- features: turn parts of the program on and off ---------- */
 const FEATS = [
   ["translate", "Translation", "Each line in your language, and the meaning of words you select.", ["tr"]],
-  ["answers", "Suggested answers", "An answer to say when you are asked something; Answer now (F2); Help me say.", ["ans"]],
+  ["answers", "Suggested answers", "An answer to say when you are asked something; Answer now; Help me say.", ["ans"]],
   ["coach", "Coach", "Short tips during the meeting: how to start, when to stop, the words to say.", ["ans"]],
-  ["overlay", "Overlay", "The see-through window over the meeting (Ctrl+Alt+O), hidden from screen sharing.", []],
-  ["screen", "Screen reading", "Read my screen (F3): answers a question or code on your screen.", ["ans"]],
+  ["overlay", "Overlay", "The see-through window over the meeting, hidden from screen sharing.", []],
+  ["screen", "Screen reading", "Read my screen: answers a question or code on your screen.", ["ans"]],
   ["prep", "Interview prep", "Prepare for the job (from the advert) and Practice interview.", ["ans"]],
   ["after", "After the meeting", "Summary, and How did I do? (a review with tips).", ["ans"]],
   ["files", "Files and links", "Transcribe a recorded file or a YouTube link.", ["stt"]],
-  ["say", "Say it in my language", "Say mode (F6): speak in your language, get the sentence to say in the meeting language.", ["stt", "ans"]],
-  ["marks", "Mark moments", "Mark an important moment (F7); marks go into the summary and the export.", []],
+  ["say", "Say it in my language", "Say mode: speak in your language, get the sentence to say in the meeting language.", ["stt", "ans"]],
+  ["marks", "Mark moments", "Mark an important moment; marks go into the summary and the export.", []],
   ["notes", "My notes", "Type short notes during the meeting; afterwards they are completed from the transcript.", ["ans"]],
   ["detect", "Meeting reminder", "When a Zoom, Teams or Google Meet meeting opens, the program offers to start.", []],
 ];
@@ -1938,7 +1954,6 @@ $$("[data-preset]").forEach(b => b.onclick = () => {
   setFeatures(change);
   toast("ok", b.textContent.trim() + ": done. You can change single parts below.");
 });
-if($("#setupKeys")) $("#setupKeys").innerHTML = $("#helpKeys").innerHTML;     // one list of keys: Help and Setup show the same
 function applyFeatures(){
   for(const [k] of FEATS) document.body.classList.toggle("f-" + k + "-off", !featOn(k));
   fitSoon(true);
@@ -1947,48 +1962,104 @@ function applyFeatures(){
   const ct = document.querySelector(".coach-title"); if(ct) ct.textContent = coachShown ? "Coach" : featOn("say") ? "Say it" : "My notes";
   renderSayBtn(); renderNotes();
 }
-/* the global keys can be Ctrl+Alt+… or Ctrl+Alt+Shift+… (Setup › Display): every text that names them follows */
-const KEY_RX = /Ctrl\+Alt\+(?!Shift\+)/g;
-// what was said in the meeting, answers, tool results and the log are never changed ("Ctrl+Alt+Delete" stays)
-const KEY_SKIP = "#list, #answerBody, #toolBody, #logBox, #nowStrip, #ovSub, #sumBody, #ctxBar, #sayCard, #coach, #findBody";
-function inContent(n){
-  const el = n.nodeType === 1 ? n : n.parentElement;
-  return !!(el && el.closest(KEY_SKIP) && !el.closest(".ov-idle, .answer-empty, .help, .co-actions"));
+/* ---------- keys (6.37): every key comes from Setup › Keys; every text that names one is written from it ---------- */
+const KEY_SHOW = {Left: "←", Right: "→", Up: "↑", Down: "↓", PageUp: "PgUp", PageDown: "PgDn"};
+function keyCombo(id){                                // the key of an action as set ("" = none, or keys from any program off)
+  const c = S.cfg, a = (c && c.key_actions || []).find(x => x.id === id);
+  const v = c && c.keys ? c.keys[id] || "" : "";
+  return a && a.scope === "global" && c.hotkeys === "off" ? "" : v;
 }
-function relabelNode(n){
-  if(inContent(n)) return;
-  if(n.nodeType === 3){ const v = n.nodeValue; if(v.includes("Ctrl+Alt+")){ const t = v.replace(KEY_RX, "Ctrl+Alt+Shift+"); if(t !== v) n.nodeValue = t; } return; }
-  if(n.nodeType !== 1) return;
-  if(n.title && n.title.includes("Ctrl+Alt+")) n.title = n.title.replace(KEY_RX, "Ctrl+Alt+Shift+");
-  const w = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
-  for(let t = w.nextNode(); t; t = w.nextNode()) relabelNode(t);
-  n.querySelectorAll && n.querySelectorAll("[title*='Ctrl+Alt+']").forEach(e => { if(!inContent(e)) e.title = e.title.replace(KEY_RX, "Ctrl+Alt+Shift+"); });
-  const kbds = (n.tagName === "KBD" ? [n] : (n.querySelectorAll ? [...n.querySelectorAll("kbd")] : [])).filter(k => !inContent(k));
-  kbds.forEach(k => {                                       // keys written as separate boxes: Ctrl Alt T -> Ctrl Alt Shift T
-    const prev = k.previousElementSibling, next = k.nextElementSibling;
-    if(k.textContent.trim() === "Alt" && prev && prev.tagName === "KBD" && prev.textContent.trim() === "Ctrl"
-       && next && next.tagName === "KBD" && next.textContent.trim() !== "Shift"){
-      const sh = document.createElement("kbd"); sh.textContent = "Shift"; sh.dataset.added = "1"; k.after(sh);
-    }
-  });
+const keyText = id => keyCombo(id).split("+").map(p => KEY_SHOW[p] || p).join("+");
+const kbd = id => { const t = keyText(id); return t ? `<kbd>${esc(t)}</kbd>` : ""; };
+// "{start}" in a text becomes the key; a bracket left empty (no key) disappears: "Pause ({pause})" -> "Pause"
+function withKeys(t){
+  return String(t).replace(/\{([a-z_]+)\}/g, (_, id) => keyText(id)).replace(/\s*\(\s*(or\s*)?\)/g, "")
+    .replace(/\(\s*or\s+/g, "(").replace(/\s+or\s*\)/g, ")").replace(/\s*,\s*\)/g, ")");
 }
-let keyObs = null;
-function relabelKeys(){
-  const shift = !!(S.cfg && S.cfg.hotkeys === "ctrl_alt_shift");
-  if(shift === !!keyObs) return;
-  if(shift){
-    relabelNode(document.body);
-    keyObs = new MutationObserver(ms => ms.forEach(m => { if(m.type === "characterData") relabelNode(m.target); else m.addedNodes.forEach(relabelNode); }));
-    keyObs.observe(document.body, {subtree: true, childList: true, characterData: true});
-  } else {
-    keyObs.disconnect(); keyObs = null;
-    const back = n => { if(n.nodeType === 3 && n.nodeValue.includes("Ctrl+Alt+Shift+")) n.nodeValue = n.nodeValue.replaceAll("Ctrl+Alt+Shift+", "Ctrl+Alt+"); };
-    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for(let t = w.nextNode(); t; t = w.nextNode()) back(t);
-    document.querySelectorAll("[title*='Ctrl+Alt+Shift+']").forEach(e => { e.title = e.title.replaceAll("Ctrl+Alt+Shift+", "Ctrl+Alt+"); });
-    document.querySelectorAll("kbd[data-added]").forEach(k => k.remove());
+function paintKeys(root=document){                  // <kbd data-k="start"> and data-title-k="… ({start})"
+  root.querySelectorAll("kbd[data-k]").forEach(k => { const t = keyText(k.dataset.k); k.textContent = t; k.hidden = !t; });
+  root.querySelectorAll("[data-title-k]").forEach(e => { e.title = withKeys(e.dataset.titleK); });
+  root.querySelectorAll("[data-text-k]").forEach(e => { e.textContent = withKeys(e.dataset.textK); });
+}
+const CODE_KEY = c => /^Key[A-Z]$/.test(c) ? c.slice(3) : /^Digit\d$/.test(c) ? c.slice(5) : /^F\d{1,2}$/.test(c) ? c
+  : ({ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down", PageUp: "PageUp", PageDown: "PageDown",
+      Home: "Home", End: "End", Insert: "Insert", Delete: "Delete", Space: "Space"})[c] || "";
+// the pressed key by its place on the keyboard (a Persian or German layout gives the same key as English)
+function comboOf(ev){
+  const k = CODE_KEY(ev.code || ""); if(!k) return "";
+  return [ev.ctrlKey && "Ctrl", ev.altKey && "Alt", ev.shiftKey && "Shift", k].filter(Boolean).join("+");
+}
+function winAction(ev){
+  const c = S.cfg; if(!c || !c.keys) return "";
+  const combo = comboOf(ev); if(!combo) return "";
+  const a = (c.key_actions || []).find(x => x.scope === "window" && c.keys[x.id] === combo);
+  return a ? a.id : "";
+}
+function keyRows(scope){
+  return (S.cfg && S.cfg.key_actions || []).filter(a => a.scope === scope);
+}
+function renderKeyHelp(){                           // Help (?) lists the keys that are set, for the parts that are on
+  const box = $("#helpKeys"); if(!box || !S.cfg) return;
+  const row = a => { const t = keyText(a.id); return t ? `<div class="hrow"${a.part ? ` data-part="${a.part}"` : ""}><kbd>${esc(t)}</kbd><span>${esc(a.text)}</span></div>` : ""; };
+  const glob = keyRows("global").map(row).join("");
+  box.innerHTML = keyRows("window").map(row).join("")
+    + (glob ? `<div class="hsub">From any program</div>${glob}` : "")
+    + `<div class="hrow"><kbd>Ctrl+,</kbd><span>Setup</span></div><div class="hrow"><kbd>Ctrl++</kbd> <kbd>Ctrl+−</kbd><span>Text size</span></div>`
+    + `<div class="hrow"><kbd>Esc</kbd><span>Close a window or the focus page</span></div>`
+    + `<div class="hrow"><span class="hic" data-icon="sliders"></span><span>Change any key in Setup › Keys</span></div>`;
+  paintIcons(box);
+}
+function renderKeysPane(){
+  const c = S.cfg; if(!c || !$("#keysWin")) return;
+  $("#hkOn").checked = c.hotkeys !== "off";
+  $("#keysGlobBox").classList.toggle("off", c.hotkeys === "off");
+  for(const [scope, box] of [["window", $("#keysWin")], ["global", $("#keysGlob")]]){
+    const html = keyRows(scope).map(a => `<div class="krow" data-id="${a.id}"${a.part ? ` data-part="${a.part}"` : ""}><span class="ktext">${esc(a.text)}</span>`
+      + `<button class="kbtn" type="button" title="Click, then press the new keys (Esc: keep it · Backspace: no key)"></button><span class="kerr" role="alert"></span></div>`).join("");
+    if(box.dataset.filled !== html){ box.innerHTML = html; box.dataset.filled = html; box.querySelectorAll(".kbtn").forEach(b => b.onclick = () => startKeyCap(b.closest(".krow").dataset.id)); }
+    box.querySelectorAll(".krow").forEach(r => {
+      const b = r.querySelector(".kbtn"), v = c.keys[r.dataset.id] || "";
+      if(S.keyCap !== r.dataset.id){ b.textContent = v ? v.split("+").map(p => KEY_SHOW[p] || p).join("+") : "no key"; b.classList.toggle("none", !v); b.classList.remove("cap"); }
+      r.classList.toggle("changed", v !== (keyRows(scope).find(a => a.id === r.dataset.id) || {}).default);
+    });
   }
 }
+function startKeyCap(id){
+  if(S.keyCap) endKeyCap();
+  S.keyCap = id;
+  const r = document.querySelector(`.krow[data-id="${id}"]`); if(!r) return;
+  r.querySelector(".kerr").textContent = "";
+  const b = r.querySelector(".kbtn"); b.textContent = "Press the keys…"; b.classList.add("cap"); b.focus();
+  api("keys_pause", {on: true});                  // the program lets go of its keys, so they can be pressed here
+}
+function endKeyCap(){
+  if(!S.keyCap) return;
+  S.keyCap = null; api("keys_pause", {on: false}); renderKeysPane();
+}
+document.addEventListener("keydown", async ev => {    // (first: a key being chosen in Setup › Keys takes every key)
+  if(!S.keyCap) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  if(["Control", "Alt", "Shift", "Meta", "AltGraph"].includes(ev.key)) return;     // (wait for the key itself)
+  const id = S.keyCap, row = document.querySelector(`.krow[data-id="${id}"]`), err = row && row.querySelector(".kerr");
+  if(ev.key === "Escape"){ endKeyCap(); return; }
+  let combo = comboOf(ev);
+  if((ev.key === "Backspace" || ev.key === "Delete") && !ev.ctrlKey && !ev.altKey && !ev.shiftKey) combo = "";
+  else if(!combo){ if(err) err.textContent = "This key cannot be used. Try a letter, a number, an F key or an arrow, with Ctrl, Alt or Shift."; return; }
+  const r = await api("set_key", {action: id, key: combo});
+  if(r.ok && r.config){ S.cfg = r.config; endKeyCap(); applyConfig(); }
+  else if(err) err.textContent = r.error || "It could not be saved.";
+}, true);
+document.addEventListener("mousedown", ev => { if(S.keyCap && !ev.target.closest(".kbtn")) endKeyCap(); }, true);
+$("#hkOn").onchange = async ev => {
+  const r = await api("save_config", {hotkeys: ev.target.checked ? "ctrl_alt" : "off"});
+  if(r.ok && r.config){ S.cfg = r.config; applyConfig(); } else { toast("error", r.error || "Could not save."); renderKeysPane(); }
+};
+$("#keysReset").onclick = async () => {
+  if(!confirm("Give every action its first key again (F9 Start, F3 Read the screen, Ctrl+Alt+O overlay …)?")) return;
+  const r = await api("reset_keys");
+  if(r.ok && r.config){ S.cfg = r.config; applyConfig(); toast("ok", "All keys are as at the start again."); } else toast("error", r.error || "Could not reset.");
+};
+window.addEventListener("blur", () => { if(S.keyCap) endKeyCap(); });
 function lineKeyOf(c){
   return JSON.stringify([c.me_label, c.them_label, c.my_language, c.languages, c.work_mode, c.subtitles, c.answer_me,
                          c.translate_me, c.diarize, c.features, c.answer_language]);
@@ -1996,7 +2067,9 @@ function lineKeyOf(c){
 function applyConfig(){
   const c = S.cfg; if(!c) return;
   applyFeatures();
-  relabelKeys();
+  paintKeys(); renderKeyHelp(); renderKeysPane();
+  const kk = JSON.stringify([c.keys, c.hotkeys]);
+  if(S.keysSeen !== kk){ S.keysSeen = kk; const ab = $("#answerBody"); if(ab) ab._eh = null; if(typeof renderAnswerIfIdle === "function" && S.entries) renderAnswerIfIdle(); }
   const ml = myLang();
   $$(".myl").forEach(x => { x.textContent = ml.name; });
   document.documentElement.style.setProperty("--font-tr", ml.rtl ? "var(--font-fa)" : "var(--font)");
@@ -2067,7 +2140,7 @@ function renderRunning(){
   $("#pauseBtn").querySelector("[data-icon]").innerHTML = icon(S.paused ? "play" : "pause");
   $("#pauseBtn").classList.toggle("soft", !!S.paused);
   $("#recBtn").hidden = S.running || S.stopping || recOn;
-  if(S.running && S.paused) showBanner("warn", "Listening is paused — nothing is written or sent. Press Continue (F8) to go on.", "pause");
+  if(S.running && S.paused) showBanner("warn", withKeys("Listening is paused — nothing is written or sent. Press Continue ({pause}) to go on."), "pause");
   else if($("#banner").dataset.kind === "pause") hideBanner();
   $("#monitorBtn").querySelector("span:last-child").textContent = S.monitoring ? "Stop test" : "Test for 30 seconds";
   $("#monitorBtn").querySelector("[data-icon]").innerHTML = icon(S.monitoring ? "stop" : "play");
@@ -2343,7 +2416,7 @@ function entryShell(e){
       <button class="btn sm ghost whofix" hidden></button>
       <button class="btn sm ghost act" title="Suggest an answer to this line">${icon("zap")}Answer this</button>
       <button class="btn icon ghost play" title="Play this line" aria-label="Play this line" hidden>${icon("play")}</button>
-      <button class="btn icon ghost mark" title="Mark as an important moment (F7)" aria-label="Mark as an important moment" aria-pressed="false">${icon("flag")}</button>
+      <button class="btn icon ghost mark" title="${esc(withKeys("Mark as an important moment ({mark})"))}" aria-label="Mark as an important moment" aria-pressed="false">${icon("flag")}</button>
       <button class="btn icon ghost edit" title="Correct this line (if a word was heard wrong) — it is translated again" aria-label="Correct this line">${icon("edit")}</button></div>
     <p class="orig" dir="auto"></p><div class="fa" hidden></div>
     <div class="explain" hidden><div class="q" dir="auto"></div><div class="x" ${trAttr()}></div></div><div class="ans-row"></div></div>`;
@@ -2384,17 +2457,19 @@ async function playLine(id, btn){
   a.onloadedmetadata = () => { a.onloadedmetadata = null; go(); };
 }
 function fillEntry(el, e){
+  const scr = e.source === "screen";
   el.className = "entry " + e.source + (el.classList.contains("latest") ? " latest" : "") + (el.classList.contains("cont") ? " cont" : "") + (el.classList.contains("turn-start") ? " turn-start" : "");
-  el.querySelector(".avatar").textContent = initials(whoOf(e));
+  if(scr) el.querySelector(".avatar").innerHTML = icon("monitor"); else el.querySelector(".avatar").textContent = initials(whoOf(e));
   el.querySelector(".who").textContent = whoOf(e);
   el.querySelector(".time").textContent = clock(e.t0);
-  const wb = el.querySelector(".who"); wb.classList.toggle("rename", e.source !== "me"); wb.title = e.source !== "me" ? "Click to give this speaker a name (for example Interviewer or John)" : "";
-  if(e.source !== "me"){ wb.tabIndex = 0; wb.setAttribute("role", "button"); } else { wb.removeAttribute("tabindex"); wb.removeAttribute("role"); }
+  const wb = el.querySelector(".who"), named = e.source === "them"; wb.classList.toggle("rename", named); wb.title = named ? "Click to give this speaker a name (for example Interviewer or John)" : scr ? "Read from your screen (Read my screen)" : "";
+  if(named){ wb.tabIndex = 0; wb.setAttribute("role", "button"); } else { wb.removeAttribute("tabindex"); wb.removeAttribute("role"); }
   const mk = el.querySelector(".mark"); mk.classList.toggle("on", !!e.marked); mk.setAttribute("aria-pressed", e.marked ? "true" : "false");
-  mk.title = e.marked ? "Marked as important · click to remove the mark" : "Mark as an important moment (F7)";
+  mk.title = e.marked ? "Marked as important · click to remove the mark" : withKeys("Mark as an important moment ({mark})");
   el.classList.toggle("marked", !!e.marked);
   const tag = el.querySelector(".tag"); tag.hidden = !e.lang || (S.cfg?.languages || []).length < 2; tag.textContent = (e.lang||"").toUpperCase();
-  el.querySelector(".act").hidden = e.source === "me" && !S.cfg?.answer_me;
+  el.querySelector(".act").hidden = scr || (e.source === "me" && !S.cfg?.answer_me);
+  el.querySelector(".edit").hidden = scr;
   el.dataset.who = e.who || (e.speaker > 0 ? "s" + e.speaker : "");     // the same key as a line still being written
   el.querySelector(".play").hidden = !canPlay(e);
   el.classList.toggle("has-play", !el.querySelector(".play").hidden);
@@ -2403,7 +2478,7 @@ function fillEntry(el, e){
   if(!el.dataset.editing) el.querySelector(".orig").textContent = e.text;
   el.querySelector(".edited").hidden = !e.edited;
   const wf = el.querySelector(".whofix");                   // in person: one click fixes who said it (and teaches the voices)
-  wf.hidden = curMode() !== "inperson";
+  wf.hidden = curMode() !== "inperson" || scr;
   wf.textContent = e.source === "me" ? "Not me" : "This is me";
   wf.title = e.source === "me" ? "This line was said by the other person — move it to them (it is translated)" : "I said this line — move it to me";
   wf.onclick = async () => { wf.disabled = true; const r = await api("line_who", {entry_id: e.id, who: e.source === "me" ? "them" : "me"}); wf.disabled = false; if(!r.ok) toast("warn", r.error || "Could not change it."); };
@@ -2440,10 +2515,10 @@ function fillEntry(el, e){
     row.innerHTML = `<button class="chip${S.panelId===e.id?" active":""}">${icon("sparkles")}${qn ? `Q${qn} · ` : ""}${S.panelId===e.id ? "Answer shown on the right" : "Show this answer"}</button>`;
     row.firstChild.onclick = () => showAnswerOf(e.id, true);
   } else if(e.ans_state === "thinking" && e.forced){
-    row.innerHTML = `<span class="chip muted"><span class="spinner"></span>Writing an answer…</span>`;
+    row.innerHTML = `<span class="chip muted"><span class="spinner"></span>${scr ? "Reading the screen…" : "Writing an answer…"}</span>`;
   } else if(e.ans_state === "error"){
-    row.innerHTML = `<button class="chip err">${icon("alert")}Answer failed · retry</button>`;
-    row.firstChild.onclick = () => answerNow(e.id);
+    row.innerHTML = `<button class="chip err">${icon("alert")}${scr ? "Not read · read again" : "Answer failed · retry"}</button>`;
+    row.firstChild.onclick = () => scr ? readScreen(S.scrLast && S.scrLast.newArea, S.scrLast && S.scrLast.what) : answerNow(e.id);
   } else row.innerHTML = "";
   if(e.repeat) row.insertAdjacentHTML("afterbegin", `<span class="chip err" title="The other side asked this again after your answer">${icon("alert")}Asked again · ${e.repeat + 1}×</span> `);
 }
@@ -2480,13 +2555,16 @@ function upsertEntry(e, silent, batch){
      && Date.now() - (S.scrTip || 0) > 60000 && S.running && !silent){
     S.scrTip = Date.now();
     // never by itself: what the meeting says ("look at my screen") cannot take a picture of this screen - you press
-    if(featOn("screen") && !OVERLAY) toast("info", "They mention the screen. Read it and get the answer? (or press F3)", {text: "Read my screen", run: readScreen});
-    else if(featOn("screen") && OVERLAY && !(S.cfg && S.cfg.hotkeys === "off")) toast("info", "They mention the screen. Ctrl+Alt+S reads it.");
+    if(featOn("screen") && !OVERLAY) toast("info", withKeys("They mention the screen. Read it and get the answer? (or press {screen})"), {text: "Read my screen", run: () => readScreen()});
+    else if(featOn("screen") && OVERLAY && keyText("g_screen")) toast("info", `They mention the screen. ${keyText("g_screen")} reads it${keyText("g_area") ? ", " + keyText("g_area") + " an area you draw" : ""}.`);
   }
   // the newest answer goes to the answer panel automatically
   const has = !!e.answer && (e.ans_state === "streaming" || e.ans_state === "done");
   const cur = S.panelId != null ? S.entries.get(S.panelId) : null;
-  const wanted = e.forced && S.forceId === e.id;
+  if(!S.scrShown) S.scrShown = new Set();
+  const scrNew = e.source === "screen" && !silent && !S.scrShown.has(e.id) && !!e.answer;   // (you asked for it: shown at once)
+  if(scrNew) S.scrShown.add(e.id);
+  const wanted = (e.forced && S.forceId === e.id) || scrNew;
   if(has){
     // Follows the conversation by itself: the panel always shows the answer to the newest question, with no click.
     // Only a line the user picked on purpose (click, arrow keys, F2 on an old line) stays until a NEWER question is answered.
@@ -2529,7 +2607,7 @@ function showQueued(){
   const e = S.queued != null ? S.entries.get(S.queued) : null, box = $("#newQ");
   if(!e || !e.answer){ box.hidden = true; box.parentElement.classList.remove("q-wait"); return; }
   const n = qNumOf(e);
-  const how = OVERLAY && !(S.cfg && S.cfg.hotkeys === "off") ? " — Ctrl+Alt+→ shows it" : "";   // (the see-through window cannot be clicked)
+  const how = OVERLAY && keyText("g_next") ? ` — ${keyText("g_next")} shows it` : "";   // (the see-through window cannot be clicked)
   box.querySelector("b").textContent = (n ? `New question Q${n}` : "New question") + how;
   $("#newQText").textContent = "“" + (e.question || e.text).slice(0, 140) + "”";
   box.hidden = false; box.parentElement.classList.add("q-wait");
@@ -2772,7 +2850,7 @@ function setFocus(on){
   document.body.classList.toggle("focus", on);
   $("#focusBtn").classList.toggle("on", on);
   $("#focusLabel").textContent = on ? "Full transcript" : "Focus";
-  $("#focusBtn").title = on ? "Back to the full transcript (F10 or Esc)" : "Focus: only the question, its answer and the coach, big — the full transcript is hidden (F10)";
+  $("#focusBtn").title = withKeys(on ? "Back to the full transcript ({focus} or Esc)" : "Focus: only the question, its answer and the coach, big — the full transcript is hidden ({focus})");
   try{ localStorage.setItem("ma.focus", on ? "1" : "0"); }catch{}
   if(on){ S.readRight = false; $("#feedHold").hidden = true; renderNow(); }
   else requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; S.newBelow = 0; setJump(); });
@@ -2793,8 +2871,8 @@ function renderNow(){
   const key = item ? [item.who, item.o, item.f, item.live].join("|") : (S.running ? "wait" : "idle");
   if(box.dataset.k === key) return;
   box.dataset.k = key;
-  if(!item){ box.innerHTML = `<div class="ns-h">${S.running ? "Listening…" : "The meeting has not started."} <span class="spacer"></span>F10: full transcript</div>`; return; }
-  box.innerHTML = `<div class="ns-h"><b class="ns-who"></b>${item.live ? `<span class="live-tag">live</span>` : `<span>said last</span>`}<span class="spacer" style="flex:1"></span><span>F10: full transcript</span></div><p class="ns-o" dir="auto"></p>${item.f ? `<p class="ns-f" ${trAttr()}></p>` : ""}`;
+  if(!item){ box.innerHTML = `<div class="ns-h">${S.running ? "Listening…" : "The meeting has not started."} <span class="spacer"></span>${keyText("focus") ? esc(keyText("focus")) + ": full transcript" : ""}</div>`; return; }
+  box.innerHTML = `<div class="ns-h"><b class="ns-who"></b>${item.live ? `<span class="live-tag">live</span>` : `<span>said last</span>`}<span class="spacer" style="flex:1"></span><span>${keyText("focus") ? esc(keyText("focus")) + ": full transcript" : ""}</span></div><p class="ns-o" dir="auto"></p>${item.f ? `<p class="ns-f" ${trAttr()}></p>` : ""}`;
   box.querySelector(".ns-who").textContent = item.who;
   box.querySelector(".ns-o").textContent = item.o;
   if(item.f) box.querySelector(".ns-f").textContent = item.f;
@@ -2802,7 +2880,7 @@ function renderNow(){
 try{ if(!OVERLAY && localStorage.getItem("ma.focus") === "1") setTimeout(() => setFocus(true), 0); }catch{}
 function subItems(){
   // finished lines: the other side always; my own lines only when they were translated
-  const fin = [...S.entries.values()].filter(e => (e.source !== "me" || hasTr(e)) && String(e.text || e.translation || "").trim())
+  const fin = [...S.entries.values()].filter(e => e.source !== "screen" && (e.source !== "me" || hasTr(e)) && String(e.text || e.translation || "").trim())
     .sort((a, b) => a.t0 - b.t0).slice(-2)
     .map(e => hasTr(e) ? {t: String(e.translation).trim(), tr: true, at: e.t0} : {t: String(e.text || "").trim(), tr: false, at: e.t0});
   // the sentence still being spoken: its live translation, or what was heard until the translation comes
@@ -2825,7 +2903,7 @@ function renderSubs(){
   box.textContent = "";
   if(!items.length){
     const d = document.createElement("div"); d.className = "sub-empty";
-    d.textContent = S.running ? "Subtitles · waiting for the video's sound…" : "Subtitles · press Start subtitles, then play the video (Ctrl+Alt+T: back to meeting mode)";
+    d.textContent = S.running ? "Subtitles · waiting for the video's sound…" : withKeys("Subtitles · press Start subtitles, then play the video ({g_subs})") ;
     box.append(d); return;
   }
   items.forEach((x, i) => {
@@ -2842,7 +2920,7 @@ $("#jobPrepBtn").onclick = () => { closeDrawer(); openJobPrep(); };
 $("#ovBtn").onclick = async () => {
   const r = await api("overlay", {});
   if(!r.ok) toast("warn", r.error || "The see-through window could not open.");
-  else if(r.on) toast("info", "Overlay is on. Press Ctrl+Alt+O to come back.");
+  else if(r.on) toast("info", keyText("g_overlay") ? `Overlay is on. Press ${keyText("g_overlay")} to come back.` : "Overlay is on. Click Meeting Assistant in the taskbar to come back.");
 };
 if(OVERLAY){                    // this page is the see-through window: only the question and the answer
   document.body.classList.add("ov");
@@ -3076,7 +3154,7 @@ function markLatest(){
   if(best && best.translation && !S.tipShown){
     let seen = false; try{ seen = localStorage.getItem("ma.tip.select") === "1"; }catch{}
     S.tipShown = true;
-    if(!seen && (featOn("translate") || featOn("answers"))) setTimeout(() => toast("info", "Tip: select words in a line to get " + (featOn("translate") || featOn("answers") ? "their meaning in " + myLang().name + (featOn("answers") ? " or an answer about them." : ".") : "") + (S.running ? " Press F8 to pause." : "")), 800);
+    if(!seen && (featOn("translate") || featOn("answers"))) setTimeout(() => toast("info", "Tip: select words in a line to get " + (featOn("translate") || featOn("answers") ? "their meaning in " + myLang().name + (featOn("answers") ? " or an answer about them." : ".") : "") + (S.running && keyText("pause") ? ` Press ${keyText("pause")} to pause.` : "")), 800);
     try{ localStorage.setItem("ma.tip.select", "1"); }catch{}
   }
 }
@@ -3106,7 +3184,7 @@ function renderEmpty(){
       : `<div class="empty-card"><div class="empty-icon">${icon("text")}</div><h3>Subtitle mode</h3>
          <p>1. Press <b>Start subtitles</b>.<br>2. Play the film, video or audio on this computer.<br>3. The ${esc(myLang().name)} translation appears here — or over the video with <b>Show over the video</b>.</p>
          <p class="help">Your microphone is not used. To go back to meetings, press <b>Meeting</b> at the top.</p>
-         <div class="empty-actions"><button class="btn primary lg" id="bigStart">${icon("play")}Start subtitles<kbd>F9</kbd></button></div></div>`;
+         <div class="empty-actions"><button class="btn primary lg" id="bigStart">${icon("play")}Start subtitles${kbd("start")}</button></div></div>`;
     const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
     return;
   }
@@ -3118,7 +3196,7 @@ function renderEmpty(){
          <p>For someone in front of you, or a phone on speaker. Only the microphone is used.</p>
          <p>1. ${learned ? "Your voice is learned ✓" : "Press <b>Learn my voice</b> once (10 seconds) — or hold <b>Right Ctrl</b> while you speak."}<br>2. Press <b>Start listening</b>.<br>3. Talk. Each line shows who said it (Me, Person 1, Person 2…) — if one is wrong, press <b>Not me</b> / <b>This is me</b> on it.</p>
          <p class="help">To go back to online meetings, choose <b>Meeting</b> at the top.</p>
-         <div class="empty-actions">${learned ? "" : `<button class="btn soft lg" id="bigLearn">${icon("mic")}Learn my voice</button>`}<button class="btn primary lg" id="bigStart">${icon("play")}Start listening<kbd>F9</kbd></button></div></div>`;
+         <div class="empty-actions">${learned ? "" : `<button class="btn soft lg" id="bigLearn">${icon("mic")}Learn my voice</button>`}<button class="btn primary lg" id="bigStart">${icon("play")}Start listening${kbd("start")}</button></div></div>`;
     const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
     const bl = $("#bigLearn"); if(bl) bl.onclick = () => learnVoice("learn");
     return;
@@ -3142,7 +3220,7 @@ function renderEmpty(){
       <li><span class="ck-icon ${aboutOk?"done":"todo"}">${icon(aboutOk?"check":"text")}</span><span class="ck-body"><div class="ck-title">About you</div><div class="ck-sub">${aboutOk ? esc(aboutFile ? "File: " + aboutFile : c.about_me) : "Recommended — otherwise answers contain [placeholders]"}</div></span><button class="btn sm ${aboutOk?"ghost":"soft"}" data-go="answers">${aboutOk?"Edit":"Add"}</button></li>
       <li class="tip"><span class="ck-icon">${icon("headphones")}</span><span class="ck-body"><div class="ck-title">Tip: use headphones</div><div class="ck-sub">Then your microphone does not hear the other side</div></span><button class="btn sm ghost" data-go="audio">Test audio</button></li>
     </ul>
-    <div class="empty-actions"><button class="btn primary lg" id="bigStart">${icon("play")}Start meeting<kbd>F9</kbd></button>${S.resume ? `<button class="btn ghost lg" id="bigResume">${icon("refresh")}Continue last meeting (${S.resume.lines} lines)</button>` : ""}</div>
+    <div class="empty-actions"><button class="btn primary lg" id="bigStart">${icon("play")}Start meeting${kbd("start")}</button>${S.resume ? `<button class="btn ghost lg" id="bigResume">${icon("refresh")}Continue last meeting (${S.resume.lines} lines)</button>` : ""}</div>
     ${S.resume ? `<p class="help" style="margin-top:12px"><button class="linkbtn" id="bigOpenLast">Open the last meeting</button> to read it, get its summary, review or export it — nothing is listened to.</p>` : ""}
   </div>`;
   box.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
@@ -3160,6 +3238,12 @@ function svcLine(c){
   const T = c.tasks || {}, used = ["stt", "tr", "ans"].filter(t => T[t] && T[t].used !== false);   // only what the parts turned on use
   const n = [...new Set(used.map(t => T[t].service).filter(Boolean))];
   return n.length === 1 && used.length > 1 ? n[0] + " does everything" : used.map(t => `${T[t].label}: ${T[t].service}`).join(" · ");
+}
+function setScreenAnswer(el, t){        // an answer read from the screen: the right option in bold, code as code, each line its direction
+  t = String(t || "");
+  if(el.dataset.t === t) return;
+  el.dataset.t = t; el.removeAttribute("dir");
+  el.innerHTML = mdLite(t, true);
 }
 function setAnswerText(el, t){          // first sentence bold: the user can start speaking after one glance
   t = String(t || "");
@@ -3180,32 +3264,34 @@ function renderAnswer(){
   const body = $("#answerBody");
   const e = S.panelId != null ? S.entries.get(S.panelId) : null;
   if(S.panelId !== S.shownId){ S.shownId = S.panelId; S.shownAt = Date.now(); }   // (the reading time starts now)
-  if(!e || !e.answer || (OVERLAY && !featOn("answers"))){      // (answers off: the overlay shows what is said, never an old answer)
+  if(!e || !e.answer || (OVERLAY && !featOn("answers") && e.source !== "screen")){      // (answers off: the overlay shows what is said, never an old answer)
     body.dataset.key = "";
     const hearing = S.running && [...S.pend.values()].some(p => p.dataset.src === "them");
     const thinking = [...S.entries.values()].some(x => x.ans_state === "thinking");
     const tried = [...S.entries.values()].filter(x => x.ans_state && !["off", "none"].includes(x.ans_state)).sort((a, b) => a.t0 - b.t0).pop();
     const failed = !thinking && tried && tried.ans_state === "error";
-    const html = failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source, tried.speaker))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>Press <kbd>F2</kbd> to try again. The log (bottom right) says why.</span></div>`
+    const html = failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source, tried.speaker))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>${keyText("answer") ? `Press ${kbd("answer")} to try again.` : "Press Answer now to try again."} The log (bottom right) says why.</span></div>`
       : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>Writing an answer…</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
       : OVERLAY ? ovIdle()
       : hearing ? `<div class="answer-empty listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><b>Listening to the question…</b><span>The answer appears here as soon as they finish.</span></div>`
-      : `<div class="answer-empty">${icon("sparkles")}<b>No question yet</b><span>When the other side asks something, the answer to say appears here.<br>Press <kbd>F2</kbd> to answer the last thing they said.</span></div>`;
+      : `<div class="answer-empty">${icon("sparkles")}<b>No question yet</b><span>When the other side asks something, the answer to say appears here.${keyText("answer") ? `<br>Press ${kbd("answer")} to answer the last thing they said.` : ""}</span></div>`;
     if(body._eh !== html){ body._eh = html; body.innerHTML = html; }     // (unchanged: nothing is rebuilt)
     return;
   }
   body._eh = null;
-  const streaming = e.ans_state === "streaming";
-  const showFa = S.cfg?.answer_fa && e.answer_fa;
+  const streaming = e.ans_state === "streaming", scr = e.source === "screen";
+  const showFa = (S.cfg?.answer_fa || scr) && e.answer_fa;
   const key = [e.id, !!showFa, !!e.translation, e.question || e.text, e.forced, S.running, e.repeat || 0, qNumOf(e), (newestAnswered() || {}).id].join("|");
   if(body.dataset.key === key && body.querySelector(".a-text")){
     const at = body.querySelector(".a-text");
-    setAnswerText(at, e.answer);
+    if(scr) setScreenAnswer(at, e.answer); else setAnswerText(at, e.answer);
     at.classList.toggle("caret", streaming && !e.answer_fa);
     const fp = body.querySelector(".a-fa p");
     if(fp){ if(fp.textContent !== e.answer_fa) fp.textContent = e.answer_fa; fp.classList.toggle("caret", streaming); }
     const qf = body.querySelector(".q-fa");
     if(qf && qf.textContent !== e.translation) qf.textContent = e.translation;
+    const qo = body.querySelector(".q-orig");
+    if(qo && qo.textContent !== (e.question || e.text)) qo.textContent = e.question || e.text;
     body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8);
     return;
   }
@@ -3213,19 +3299,19 @@ function renderAnswer(){
   if(body.dataset.eid !== String(e.id)){ body.scrollTop = 0; body.dataset.eid = String(e.id); }     // a new answer starts at its top
   body.innerHTML = `
     <div class="q-block">
-      <div class="q-head"><span class="qtag" title="The same number is on its line in the transcript">Q${qNumOf(e)}</span><span>${e.forced ? "You asked for an answer to · " : ""}${esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}${newestAnswered() && newestAnswered().id !== e.id ? " · an earlier question" : ""}</span><span class="spacer"></span><button class="q-find" title="Scroll the transcript to this question and light it up">Show it in the transcript</button></div>
+      <div class="q-head"><span class="qtag" title="The same number is on its line in the transcript">Q${qNumOf(e)}</span><span>${scr ? "Read from your screen" : (e.forced ? "You asked for an answer to · " : "") + esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}${newestAnswered() && newestAnswered().id !== e.id ? " · an earlier question" : ""}</span><span class="spacer"></span><button class="q-find" title="Scroll the transcript to this question and light it up">Show it in the transcript</button></div>
       <p class="q-orig" dir="auto"></p>
       ${e.translation ? `<p class="q-fa" ${trAttr()}></p>` : ""}
     </div>
     ${e.repeat ? `<div class="rep-note">${icon("alert")} They asked this again (asked ${e.repeat + 1} times). This answer is written to be more direct than the last one: say the point in the first sentence, then one example.</div>` : ""}
-    <p class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></p>
+    <${scr ? "div" : "p"} class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></${scr ? "div" : "p"}>
     ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
   body.querySelector(".q-orig").textContent = e.question || e.text;
   body.querySelectorAll(".q-orig, .q-fa").forEach(x => x.onclick = ev => { ev.currentTarget.closest(".q-block").classList.toggle("open"); fitQ(); });
   if(e.translation) body.querySelector(".q-fa").textContent = e.translation;
   fitQ();
   body.querySelector(".q-find").onclick = () => findOnLeft(e.id);
-  setAnswerText(body.querySelector(".a-text"), e.answer);
+  if(scr){ body.classList.add("scr"); setScreenAnswer(body.querySelector(".a-text"), e.answer); } else { body.classList.remove("scr"); setAnswerText(body.querySelector(".a-text"), e.answer); }
   if(showFa) body.querySelector(".a-fa p").textContent = e.answer_fa;
   requestAnimationFrame(() => body.classList.toggle("more", body.scrollHeight - body.scrollTop - body.clientHeight > 8));
   if(S.flashId !== e.id){ S.flashId = e.id; const a = body.querySelector(".a-text"); a.classList.add("fresh"); setTimeout(() => a.classList.remove("fresh"), 900); }
@@ -3246,7 +3332,8 @@ function updMore(){                                   // more text below: a fade
   b.classList.toggle("more", more);
   if(OVERLAY){
     let t = $("#ovMore");
-    if(!t){ t = document.createElement("div"); t.id = "ovMore"; t.textContent = "▼ more · Ctrl+Alt+↓"; b.after(t); }
+    if(!t){ t = document.createElement("div"); t.id = "ovMore"; b.after(t); }
+    t.textContent = "▼ more" + (keyText("g_down") ? " · " + keyText("g_down") : "");
     t.hidden = !more;
   }
 }
@@ -3256,13 +3343,15 @@ window.addEventListener("resize", updMore);
 /* The overlay while no answer is shown: never an empty box. Before the meeting it says it is on and what to do; during
    the meeting it shows the sentence being said now (or the last one from the other side) with its translation. */
 function ovKeys(){                                 // the keys of the see-through window, only for the parts that are on
-  if(S.cfg && S.cfg.hotkeys === "off") return "Keys from any program are off (Setup › Display) · Ctrl+Alt+Shift+M move";
-  return "Ctrl+Alt+…: " + [featOn("answers") && "A answer now", featOn("screen") && "S read the screen", featOn("coach") && "H coach",
-    "← → earlier / newer", "M move", "O close"].filter(Boolean).join(" · ");
+  if(S.cfg && S.cfg.hotkeys === "off") return "Keys from any program are off (Setup › Keys) · Ctrl+Alt+Shift+M move";
+  const k = (id, what) => keyText(id) ? keyText(id) + " " + what : "";
+  return [featOn("answers") && k("g_answer", "answer now"), featOn("screen") && k("g_screen", "read the screen"),
+    featOn("screen") && k("g_area", "read an area"), featOn("coach") && k("g_coach", "coach"),
+    k("g_prev", "earlier"), k("g_next", "newer"), k("g_move", "move"), k("g_overlay", "close")].filter(Boolean).join(" · ");
 }
 function ovIdle(){
   if(!S.running && !recActive())
-    return `<div class="ov-idle"><b>Overlay is on</b><span>Start the meeting: open Meeting Assistant from the taskbar and press Start (F9) — or Ctrl+Alt+O closes this and brings the window back. Then what they say${featOn("translate") ? " and its translation" : ""}${featOn("answers") ? ", and the answer to say," : ""} appear here.</span><span class="ov-keys">${ovKeys()}</span></div>`;
+    return `<div class="ov-idle"><b>Overlay is on</b><span>Start the meeting: open Meeting Assistant from the taskbar and press Start${keyText("start") ? " (" + esc(keyText("start")) + ")" : ""}${keyText("g_overlay") ? " — or " + esc(keyText("g_overlay")) + " closes this and brings the window back" : ""}. Then what they say${featOn("translate") ? " and its translation" : ""}${featOn("answers") ? ", and the answer to say," : ""} appear here.</span><span class="ov-keys">${ovKeys()}</span></div>`;
   let live = null;
   S.pend.forEach(p => {
     if(p.dataset.src === "me") return;
@@ -3286,7 +3375,7 @@ function renderThinking(){
   S.entries.forEach(e => { if((e.ans_state === "thinking" || e.ans_state === "streaming") && (!cur || e.t0 >= cur.t0 || e.id === S.forceId) && e.id !== S.panelId) show = e; });
   const th = $("#thinking"); th.hidden = !show;
   if(show){                                         // which question it is for: never mistaken for the answer on screen
-    const n = qNumOf(show), t = n ? `Writing the answer to Q${n}…` : "Writing the next answer…";
+    const n = qNumOf(show), t = show.source === "screen" ? "Reading the screen…" : n ? `Writing the answer to Q${n}…` : "Writing the next answer…";
     if(th.lastChild.textContent !== t) th.lastChild.textContent = t;
   }
 }
@@ -3308,7 +3397,7 @@ function renderTitle(){
   $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : ({video: "Subtitles", inperson: "Conversation"}[curMode()] || "Live transcript");
 }
 async function togglePause(){
-  if(!S.running){ toast("info", "Pause works during a meeting — start it first (F9)."); return; }
+  if(!S.running){ toast("info", withKeys("Pause works during a meeting — start it first ({start}).")); return; }
   if(S.pausing) return;
   S.pausing = true;                                           // a quick second press waits for the first
   let r;
@@ -4686,49 +4775,62 @@ $$("#logFilter [data-val]").forEach(b => b.onclick = () => {
 });
 
 /* ---------- keyboard ---------- */
-document.addEventListener("keydown", ev => {
-  if(["F2", "F3", "F6", "F7", "F8", "F9", "F10"].includes(ev.key) && ev.repeat){ ev.preventDefault(); return; }   // a held key acts once
-  if(ev.key === "F9"){
-    ev.preventDefault();
-    if(ev.shiftKey && !S.running && !S.resume){ toast("info", "There is no earlier meeting to continue."); return; }
-    if(S.running && !ev.shiftKey){                        // one slip of the finger never ends the meeting
-      if(Date.now() - (S.stopArm || 0) > 3000){ S.stopArm = Date.now(); recentToasts.delete("Press F9 again to stop the meeting."); toast("warn", "Press F9 again to stop the meeting.", null, 3000); return; }
-      S.stopArm = 0;
-    }
-    toggleRun(ev.shiftKey);
-  }
-  else if(ev.key === " " && S.running && $("#newQ").hidden && document.activeElement?.tagName === "BUTTON"
-          && !document.activeElement.closest(".modal, .drawer, .toolpop, .helppop, .toast")){
-    ev.preventDefault(); document.activeElement.blur();   // (Space now means "show the new question", never Pause or Stop)
-  }
-  else if(ev.key === " " && !$("#newQ").hidden && !ev.ctrlKey && !ev.altKey && !ev.metaKey
-          && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && !document.activeElement?.isContentEditable
-          && !document.activeElement?.closest?.(".modal, .drawer, .toolpop, .helppop")
-          && $("#drawer").getAttribute("aria-hidden") === "true"){
-    ev.preventDefault(); document.activeElement?.blur?.(); takeQueued();   // (not the header button that kept the focus)
-  }
-  else if(ev.key === "F10" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); setFocus(!document.body.classList.contains("focus")); }
-  else if(ev.key === "F2"){ ev.preventDefault(); answerNow(); }          // (also while typing a note: F2 types nothing)
-  else if(ev.key === "F3"){ ev.preventDefault(); if(!ev.repeat) readScreen(ev.shiftKey); }
-  else if(ev.key === "F6" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); toggleSay(); }
-  else if(ev.key === "F7" && !ev.altKey && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); markLine(null); }
-  else if(ev.key === "F4" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey){
-    ev.preventDefault();
-    if(!ev.repeat){
+const KEY_REPEATS = ["prev", "next", "scroll_up", "scroll_down"];     // held down, these go on; the others act once
+function textBoxFocused(){
+  const a = document.activeElement;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(a?.tagName) || !!a?.isContentEditable;
+}
+function panelFree(){ return $("#drawer").getAttribute("aria-hidden") === "true" && $("#toolModal").hidden; }
+// What a key of this window does (Setup › Keys). false: it does nothing now, so the key keeps its normal meaning.
+function runKey(act, ev){
+  switch(act){
+    case "start":
+      if(S.running){                                     // one slip of the finger never ends the meeting
+        if(Date.now() - (S.stopArm || 0) > 3000){
+          const m = `Press ${keyText("start")} again to stop the meeting.`;
+          S.stopArm = Date.now(); recentToasts.delete(m); toast("warn", m, null, 3000); return;
+        }
+        S.stopArm = 0;
+      }
+      toggleRun(false); return;
+    case "resume":
+      if(!S.running && !S.resume){ toast("info", "There is no earlier meeting to continue."); return; }
+      toggleRun(true); return;
+    case "pause": togglePause(); return;
+    case "answer": answerNow(); return;
+    case "screen": readScreen(); return;
+    case "area": readScreen(true); return;
+    case "say": toggleSay(); return;
+    case "mark": markLine(null); return;
+    case "focus": setFocus(!document.body.classList.contains("focus")); return;
+    case "coach": {
       const t = $("#coAskText"), typed = !$("#coAskRow").hidden ? t.value.trim() : "";
       if(typed){ t.value = ""; $("#coAskRow").hidden = true; }
-      askCoach(typed);
+      askCoach(typed); return;
     }
+    case "waiting":                                      // (not the header button that kept the focus)
+      if($("#newQ").hidden || document.activeElement?.closest?.(".modal, .drawer, .toolpop, .helppop") || !panelFree()) return false;
+      document.activeElement?.blur?.(); takeQueued(); return;
+    case "prev": case "next": case "scroll_up": case "scroll_down":
+      if(!panelFree()) return false;
+      if(act === "prev") stepAnswer(-1);
+      else if(act === "next") stepAnswer(1);
+      else { const b = $("#answerBody"); b.scrollBy({top: (act === "scroll_down" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"}); }
+      return;
   }
-  else if((ev.ctrlKey || ev.metaKey) && !ev.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(ev.key)
-          && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && !document.activeElement?.isContentEditable
-          && $("#drawer").getAttribute("aria-hidden") === "true" && $("#toolModal").hidden){
-    ev.preventDefault();
-    if(ev.key === "ArrowLeft") stepAnswer(-1);
-    else if(ev.key === "ArrowRight") stepAnswer(1);
-    else { const b = $("#answerBody"); b.scrollBy({top: (ev.key === "ArrowDown" ? 1 : -1) * Math.max(60, b.clientHeight * .7), behavior: "smooth"}); }
+  return false;
+}
+document.addEventListener("keydown", ev => {
+  const act = winAction(ev);
+  // in a text box only F keys and keys with Alt act (Space, Ctrl+arrows … are for the text there)
+  if(act && !(textBoxFocused() && !/^F\d/.test(ev.code || "") && !ev.altKey)){
+    if(ev.repeat && !KEY_REPEATS.includes(act)){ ev.preventDefault(); return; }
+    if(runKey(act, ev) !== false){ ev.preventDefault(); return; }
   }
-  else if(ev.key === "F8"){ ev.preventDefault(); togglePause(); }
+  if(ev.key === " " && S.running && $("#newQ").hidden && document.activeElement?.tagName === "BUTTON"
+     && !document.activeElement.closest(".modal, .drawer, .toolpop, .helppop, .toast")){
+    ev.preventDefault(); document.activeElement.blur();   // (during a meeting Space never presses Pause or Stop)
+  }
   else if(ev.key === "Escape"){ if(!$("#hideModal").hidden) closeHideAsk(false); else if(!$("#toolPop").hidden) $("#toolPop").hidden = true; else if(!$("#toolModal").hidden) closeTool(); else if(!$("#helpPop").hidden) $("#helpPop").hidden = true; else if(!$("#brModal").hidden) closeBrowser(); else if(!$("#sumModal").hidden) $("#sumModal").hidden = true; else if(!$("#voiceModal").hidden) vmClose(); else if($("#drawer").getAttribute("aria-hidden") === "true" && document.body.classList.contains("focus")) setFocus(false); else closeDrawer(); hideSel(); }
   else if((ev.ctrlKey || ev.metaKey) && ev.key === ","){ ev.preventDefault(); openDrawer(); }
   else if((ev.ctrlKey || ev.metaKey) && (ev.key === "=" || ev.key === "+" || ev.key === "-")){
@@ -4767,7 +4869,7 @@ $("#toolModal").onclick = ev => { if(ev.target.id === "toolModal" && toolDown ==
 /* the tools menu */
 $("#toolsBtn").onclick = ev => { ev.stopPropagation(); renderToolBtns(); $("#toolPop").hidden = !$("#toolPop").hidden; };
 document.addEventListener("click", ev => { if(!$("#toolPop").hidden && !ev.target.closest("#toolPop")) $("#toolPop").hidden = true; });
-const TOOL_RUN = {notes: () => openFullNotes(false), jobprep: () => openJobPrep(), practice: () => openPractice(), coach: () => openNotes(), screen: () => readScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
+const TOOL_RUN = {notes: () => openFullNotes(false), jobprep: () => openJobPrep(), practice: () => openPractice(), coach: () => openNotes(), screen: () => openScreen(), say: () => openSay(), feedback: () => openFeedback(false), search: () => openSearch(), export: () => openExport()};
 $$("#toolPop [data-tool]").forEach(b => b.onclick = () => { $("#toolPop").hidden = true; TOOL_RUN[b.dataset.tool](); });
 $$("#endBar [data-end]").forEach(b => b.onclick = () => { const k = b.dataset.end; if(k === "summary") $("#summaryBtn").click(); else TOOL_RUN[k](); });
 $("#endX").onclick = () => { S.endShow = false; $("#endBar").hidden = true; };
@@ -4777,47 +4879,84 @@ function renderToolBtns(){
   if(x) x.disabled = S.entries.size < 1;
 }
 
-/* read my screen (F3) */
-async function readScreen(newArea){
+/* read my screen: Tools › Read my screen shows the choice first; the keys read at once with what was chosen there */
+const SCR_CHOICES = [["screen", "monitor", "Whole screen", "The screen of the window in front"],
+                     ["window", "layers", "Window in front", "Only that window"],
+                     ["area", "crop", "Draw an area", "Drag a box around the question"],
+                     ["same", "refresh", "Same area again", "The area you drew last time"]];
+const scrMode = () => (S.cfg && S.cfg.screen_area_mode) || "screen";
+function openScreen(){
   if(!featOn("screen")) return toast("info", FEATS.find(f => f[0] === "screen")[1] + " is turned off. Turn it on in Setup › Features.");
-  if(S.scrBusy){ if(TM.kind !== "screen") showScreen({state: "working", note: "Reading the screen…", text: S.scrText || ""}); return; }
-  S.scrBusy = true; S.scrText = "";
-  showScreen({state: "working", note: "Starting…"});
-  const r = await api("screen", newArea === true ? {new_area: true} : {});
-  if(!r.ok){ S.scrBusy = false; showScreen({state: "error", note: r.error || "Could not read the screen."}); }
+  if(S.scrBusy){ showScreen({state: "working", note: "Reading the screen…", text: S.scrText || ""}); return; }
+  S.scrView = "choose"; showScreen({state: "choose"});
 }
-const SCR_WHAT = {screen: "the whole screen", window: "the window in front", area: "an area you draw each time", same: "an area you draw once, then the same area"};
+async function readScreen(newArea, what){
+  if(!featOn("screen")) return toast("info", FEATS.find(f => f[0] === "screen")[1] + " is turned off. Turn it on in Setup › Features.");
+  if(S.scrBusy){ if(!S.running && TM.kind !== "screen") showScreen({state: "working", note: "Reading the screen…", text: S.scrText || ""}); return; }
+  S.scrBusy = true; S.scrText = ""; S.scrLast = {newArea: newArea === true, what: what || ""};
+  if(!S.running) showScreen({state: "working", note: "Starting…"});   // (in a meeting the answer comes in the answer panel)
+  else if(TM.kind === "screen") closeTool();
+  const body = {}; if(newArea === true) body.new_area = true; if(what) body.what = what;
+  const r = await api("screen", body);
+  if(!r.ok){ S.scrBusy = false; if(S.running) toast("error", r.error || "Could not read the screen."); else showScreen({state: "error", note: r.error || "Could not read the screen."}); }
+}
+function scrChoiceHtml(){
+  const c = S.cfg || {}, mode = scrMode(), saved = !!c.screen_area;
+  const delay = String(c.screen_delay || "0");
+  return `<div class="scr-choose">
+    <p class="help">What should be read? The window of this program steps aside while the picture is taken${S.running ? "; the question and its answer come into the meeting, in the answer panel" : ""}.</p>
+    <div class="scr-grid">${SCR_CHOICES.filter(([v]) => v !== "same" || saved).map(([v, ic, t, sub]) =>
+      `<button class="scr-opt" data-what="${v}">${icon(ic)}<b>${t}</b><small>${sub}</small></button>`).join("")}</div>
+    <div class="scr-set">
+      <label>Wait before the picture <select class="input select" id="scrDelay" aria-label="Wait before the picture">${[["0", "no wait"], ["2", "2 s"], ["3", "3 s"], ["5", "5 s"], ["8", "8 s"]].map(([v, t]) => `<option value="${v}"${v === delay ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>${esc(withKeys("The key {screen} reads"))} <select class="input select" id="scrMode" aria-label="What the key reads">${[["screen", "the whole screen"], ["window", "the window in front"], ["area", "an area I draw each time"], ["same", "an area I draw once, then the same"]].map(([v, t]) => `<option value="${v}"${v === mode ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+    </div>
+    <p class="help">Drawing an area: the screen turns darker; drag a box around the question. Esc or a right click cancels. A small area is read more sharply.${keyText("area") ? " " + esc(keyText("area")) + " draws a new area." : ""}${keyText("g_area") ? " From any program: " + esc(keyText("g_area")) + (keyText("g_screen") ? " (an area) or " + esc(keyText("g_screen")) : "") + " — no wait, the answer comes into the meeting." : ""}</p>
+  </div>`;
+}
 function showScreen(m){
   if(TM.kind !== "screen"){ openTool("screen", "Read my screen", "eye"); }
   const busy = ["working", "streaming"].includes(m.state);
-  const mode = (S.cfg && S.cfg.screen_area_mode) || "screen";
-  const delay = +((S.cfg && S.cfg.screen_delay) || 0), draw = mode === "area" || mode === "same";
-  const when = delay ? (draw ? ` After ${delay} s the screen turns darker and you draw a box around the question, so you can switch to the right window first.`
-                             : ` The picture is taken after ${delay} s, so you can switch to the right window first.`)
-                     : (draw ? " The screen turns darker at once and you draw a box around the question." : "");
-  $("#toolBody").innerHTML = `<div ${rtlAttr()} class="rtl-text">${m.text ? mdLite(m.text, true) : `<p class="help" dir="ltr">Press <kbd>F3</kbd> (or Tools › Read my screen) while the question is on your screen. It reads ${esc(SCR_WHAT[mode] || SCR_WHAT.screen)} — change it in Setup › Services › Reading the screen.${when} The picture is sent to your AI service and is not saved.</p>`}</div>`;
+  if(m.state === "choose" || (!m.text && !busy && S.scrView === "choose" && m.state !== "error" && m.state !== "cancelled")){
+    S.scrView = "choose";
+    $("#toolBody").innerHTML = scrChoiceHtml();
+    $("#toolBody").querySelectorAll(".scr-opt").forEach(b => b.onclick = () => readScreen(false, b.dataset.what));
+    $("#scrDelay").onchange = ev => queueSave({screen_delay: ev.target.value});
+    $("#scrMode").onchange = ev => queueSave({screen_area_mode: ev.target.value});
+    $("#toolNote").innerHTML = "";
+    toolActions([]);
+    return;
+  }
+  S.scrView = "result";
+  $("#toolBody").innerHTML = `<div ${rtlAttr()} class="rtl-text">${m.text ? mdLite(m.text, true) : ""}</div>`;
   const note = $("#toolNote");
   note.innerHTML = busy ? `<span class="spinner"></span>${esc(m.note || "Reading…")}`
     : m.state === "error" ? `${icon("alert")}${esc(m.note || "It failed.")}`
     : m.state === "cancelled" ? esc(m.note || "Cancelled.")
     : m.state === "done" ? `${icon("check")}${m.saved ? "Saved in the meeting file." : "Not saved (no meeting is open)."}` : "";
-  toolActions([{id: "scrAgain", icon: "refresh", text: "Read again", disabled: busy, run: () => readScreen()},
-               ...(mode === "area" ? [] : [{id: "scrArea", icon: "crop", text: mode === "same" ? "New area" : "Draw an area", disabled: busy, run: () => readScreen(true)}]),
+  const last = S.scrLast || {};
+  toolActions([{id: "scrAgain", icon: "refresh", text: "Read again", disabled: busy, run: () => readScreen(last.newArea, last.what)},
+               {id: "scrChoose", icon: "monitor", text: "Choose what to read", disabled: busy, run: () => { S.scrView = "choose"; showScreen({state: "choose"}); }},
                {icon: "copy", text: "Copy", disabled: !S.scrText, run: () => copyText(S.scrText, "Copied.")}]);
 }
-function ovScreen(m){                                    // the see-through window shows the screen result in place of the answer
+function ovScreen(m){                                    // no meeting: the see-through window shows the result in place of the answer
   const el = $("#ovScreen"), ab = $("#answerBody"); if(!el) return;
-  if(m.state === "cancelled"){ if(S.ovScreenUntil) S.ovScreenUntil = 1; return; }   // nothing read: the answer comes back
+  if(m.state === "cancelled" || m.meeting || m.state === "meeting"){ if(S.ovScreenUntil) S.ovScreenUntil = 1; return; }   // (in a meeting it is an answer)
   const txt = m.text ? mdLite(m.text, true) : `<p class="help">${esc(m.state === "done" ? "Nothing was read from the screen." : m.state === "error" ? (m.note || "The screen could not be read.") : (m.note || "Reading the screen…"))}</p>`;
   el.hidden = false; ab.style.display = "none"; el.setAttribute("dir", (m.text && lineDir(m.text)) || "auto"); el.innerHTML = txt;
   S.ovScreenUntil = Date.now() + (["done"].includes(m.state) ? 120000 : m.state === "error" ? 15000 : 60000);
 }
 function onScreen(m){
-  if(OVERLAY){ if(["done", "error", "cancelled"].includes(m.state)) S.scrBusy = false; ovScreen(m); return; }
-  if(m.text) S.scrText = m.text;
   if(["done", "error", "cancelled"].includes(m.state)) S.scrBusy = false;
+  if(OVERLAY){ ovScreen(m); return; }
+  if(m.state === "meeting" || m.meeting){            // in the meeting: the line and its answer show it (nothing to open)
+    if(TM.kind === "screen") closeTool();
+    if(m.state === "error") toast("error", m.note || "The screen could not be read.");
+    return;
+  }
+  if(m.text) S.scrText = m.text;
   if(TM.kind === "screen") showScreen(m);
-  else if(m.state === "done") toast("ok", "The screen was read — open Tools › Read my screen to see the result.");
+  else if(m.state === "done") showScreen(m);           // (asked by a key: the result opens by itself)
   else if(m.state === "error") toast("error", m.note || "The screen could not be read.");
 }
 
@@ -4827,12 +4966,12 @@ function renderSayBtn(){
   b.hidden = !S.running || !featOn("say");
   b.classList.toggle("on", !!S.sayMode);
   b.setAttribute("aria-pressed", S.sayMode ? "true" : "false");
-  $("#sayLabel").textContent = S.sayMode ? "Say mode ON · F6 ends" : "Say in " + myLang().name;
+  $("#sayLabel").textContent = S.sayMode ? "Say mode ON" + (keyText("say") ? " · " + keyText("say") + " ends" : "") : "Say in " + myLang().name;
   $("#sayLabel").classList.toggle("hide-sm", !S.sayMode);         // while it is on, its name is always shown
 }
 async function toggleSay(){
   if(!featOn("say")) return toast("info", FEATS.find(f => f[0] === "say")[1] + " is turned off. Turn it on in Setup › Features.");
-  if(!S.running && !S.sayMode) return toast("info", "Start the meeting first, then press F6 and speak in " + myLang().name + ".");
+  if(!S.running && !S.sayMode) return toast("info", "Start the meeting first, then turn say mode on and speak in " + myLang().name + ".");
   if(S.sayBusy) return;                                      // a second quick press waits for the first
   S.sayBusy = true;
   let r; try{ r = await api("say_mode", {on: !S.sayMode}); } finally { S.sayBusy = false; }
@@ -4853,7 +4992,7 @@ function showSayCard(m){
   const mm = $("#sayMeaning"); mm.textContent = keep ? (keep.meaning || "") : ""; mm.dir = myLang().rtl ? "rtl" : "ltr"; mm.lang = myLang().code;
   $("#sayNote").innerHTML = busy ? `<span class="spinner"></span>${esc(m.note || "Working…")}`
     : m.state === "error" ? `${icon("alert")}${esc(m.note || "It failed.")}`
-    : m.state === "on" ? `${icon("info")}${esc("Mute yourself in Teams or Zoom, then speak. Your words are not added to the transcript. F6 turns it off.")}` : "";
+    : m.state === "on" ? `${icon("info")}${esc("Mute yourself in Teams or Zoom, then speak. Your words are not added to the transcript." + (keyText("say") ? " " + keyText("say") + " turns it off." : ""))}` : "";
   $("#sayCopy").hidden = !keep || !keep.text;
   if(OVERLAY && S.ovScreenUntil) S.ovScreenUntil = 1;               // a screen result gives way (the timer shows the answer again)
 }
@@ -5149,7 +5288,7 @@ async function prSetup(){
     <div class="field"><label for="prN">Number of questions</label>
       <select class="input select" id="prN" style="width:auto"><option>3</option><option selected>5</option><option>7</option><option>10</option></select></div>
     <label class="toggle"><input type="checkbox" id="prSpeak"><span class="switch"></span><span class="tt"><b>Read each question aloud</b><span>With the computer's voice.</span></span></label>
-    <div class="help" style="margin:8px 0">Answer by speaking (press F9 first) or by typing.</div>
+    <div class="help" style="margin:8px 0">${esc(withKeys("Answer by speaking (press Start first, {start}) or by typing."))}</div>
     <div class="help" style="margin:0 0 8px">Suggested answers are off while you practise. Questions use your background and the job advert.</div>
     ${last && last.avg ? `<div class="help">Last practice: ${esc(String(last.avg))} / 5 (${esc(kinds[last.kind] || last.kind || "")})</div>` : ""}
     <div class="input-row" style="margin-top:8px"><button class="btn primary" id="prGo">${icon("play")}Start practice</button></div>`;
@@ -5179,8 +5318,8 @@ function prAsk(resume){
   }, 60000);
   $("#toolBody").innerHTML = `<div class="pr-meta"><span>Question ${p.i + 1} / ${p.qs.length}</span><span>${esc(Object.prototype.hasOwnProperty.call(QLABEL, q.type) ? QLABEL[q.type] : "")}</span><span id="prTime" dir="ltr">0:00</span></div>
     <div class="pr-q" dir="auto">${esc(q.q)}</div>
-    <textarea class="input" id="prText" rows="4" dir="auto" maxlength="3000" placeholder="${S.running ? "Speak your answer, or type it here…" : "Type your answer here (or press Start, F9, to speak it)…"}"></textarea>
-    <div class="help">${S.running ? "Speak now. Press “Done answering” when you finish. Suggested answers are muted while you practise." : "The meeting is not running, so your voice is not heard. Type the answer, or press Start (F9) and speak."}</div>`;
+    <textarea class="input" id="prText" rows="4" dir="auto" maxlength="3000" placeholder="${S.running ? "Speak your answer, or type it here…" : withKeys("Type your answer here (or press Start ({start}) to speak it)…")}"></textarea>
+    <div class="help">${S.running ? "Speak now. Press “Done answering” when you finish. Suggested answers are muted while you practise." : withKeys("The meeting is not running, so your voice is not heard. Type the answer, or press Start ({start}) and speak.")}</div>`;
   prNote("");
   toolActions([{icon: "check", text: "Done answering", run: prDone}, {icon: "play", text: "Skip", run: () => prSkip()},
                {icon: "x", text: "Stop", run: () => prStop()}]);
@@ -5247,7 +5386,7 @@ function prResult(){
   prNote("");
   let h = `<div class="pr-meta"><span>Question ${p.i + 1} / ${p.qs.length}</span></div><div class="pr-q" dir="auto">${esc(r.q)}</div>`;
   if(r.empty){
-    h += `<p class="help">${r.skipped ? "You skipped this question." : "No answer was heard. Speak with the meeting running (F9), or type the answer."}</p>`;
+    h += `<p class="help">${r.skipped ? "You skipped this question." : withKeys("No answer was heard. Speak with the meeting running ({start}), or type the answer.")}</p>`;
   } else {
     const keys = ["clarity", "structure", "depth", "signals", "language"];
     h += `<div class="score-box"><div dir="ltr" style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px"><span class="score-big">${esc(String(Number(r.avg) || 0))}</span><span class="help">/ 5 · ${Number(r.secs) ? mmss(Number(r.secs)) + " · " : ""}${Number(r.words) || 0} words${Number(r.wpm) ? " · " + Number(r.wpm) + " words/min" : ""}</span></div>${scoreRows(r.scores || {}, keys)}</div>`;

@@ -343,9 +343,9 @@ try:
     got, events = [], []
 
     class Eng:
-        def read_screen(self, png, pid, model):
+        def read_screen(self, png, pid, model, on_text=None):
             got.append(png)
-            return "## The answer\n**B) 42**"
+            return "@@QUESTION\nWhat is 6x7?\n@@ANSWER\n**B) 42**"
     a.vision_target = lambda quick=False: ("groq", "fake-vision")
     a.helper = lambda: None
     a.tool_engine = lambda: Eng()
@@ -370,7 +370,7 @@ try:
         th.start()
         while th.is_alive():
             pump(0.05)
-    job(now=True)
+    job(now=True, from_key=True)
     ok = bool(got)
     if ok:
         rgb = png_rgb(got[-1])
@@ -381,15 +381,52 @@ try:
           f"{got and png_rgb(got[-1]).shape} last={events and events[-1].get('state')} {events and events[-1].get('note', '')}")
     check("the area is kept for next time", a.cfg["screen_area"] == f"{BLUE[0] + 20},{BLUE[1] + 20},160,100", a.cfg["screen_area"])
     app.pick_area = lambda *x, **y: (_ for _ in ()).throw(AssertionError("must not draw again"))
-    job(now=True)
+    job(now=True, from_key=True)
     check("the same area is read again without drawing", len(got) == 2 and (np.abs(png_rgb(got[-1]).astype(int) - (0, 0, 255)) <= 12).all(),
           f"{len(got)} {events and events[-1].get('state')}")
     a.cfg["screen_area_mode"] = "window"
     root.focus_force()
     pump(0.5)
-    job(now=True)
+    job(now=True, from_key=True)
     check("the window in front is read (sent twice as big: it is small)", len(got) == 3 and png_rgb(got[-1]).shape[:2] == (2 * TH, 2 * TW),
           f"{got and png_rgb(got[-1]).shape}", hard=False)
+    check("the result is in parts", events and events[-1].get("state") == "done"
+          and events[-1].get("text") == "## Question\nWhat is 6x7?\n## Answer\n**B) 42**", str(events and events[-1]))
+
+    # 8. asked from this program's window: its window steps aside for the picture and comes back
+    notes = tk.Toplevel(root)
+    notes.title("Notes")
+    notes.geometry("300x200+850+150")
+    pump(0.8)
+    u.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+    u.FindWindowW.restype = wt.HWND
+    u.IsIconic.argtypes = [wt.HWND]
+    nh = u.FindWindowW(None, "Notes")
+    seen_iconic = []
+    real_grab = app.grab_rect
+    app.grab_rect = lambda r: (seen_iconic.append(bool(u.IsIconic(nh))), real_grab(r))[1]
+    a.cfg["screen_area_mode"] = "screen"
+    a.overlay.show_main = lambda: None
+    job()
+    pump(0.8)
+    check("its own window is minimized while the picture is taken", bool(nh) and seen_iconic == [True], f"{nh} {seen_iconic}")
+    check("and comes back afterwards", bool(nh) and not u.IsIconic(nh), str(bool(nh and u.IsIconic(nh))))
+    seen_iconic.clear()
+    job(now=True, from_key=True)
+    check("from another program it stays where it is", seen_iconic == [False], str(seen_iconic))
+    app.grab_rect = real_grab
+    notes.destroy()
+
+    # 9. keys from any program: the keys of Setup › Keys can be held (and given back)
+    u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+    u.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
+    held = []
+    for i, combo in enumerate(("Ctrl+Alt+D", "Shift+F3", "Ctrl+Alt+Shift+S", "Alt+F11"), 7700):
+        mods, vk = app.combo_vk(combo)
+        if u.RegisterHotKey(None, i, mods | 0x4000, vk):
+            held.append(combo)
+            u.UnregisterHotKey(None, i)
+    check("keys of Setup › Keys can be held from any program", len(held) == 4, ", ".join(held))
     a.closing.set()
 except Exception as e:
     import traceback
