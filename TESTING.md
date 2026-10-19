@@ -102,3 +102,5 @@ Still open:
 - Keys encrypted with DPAPI cannot be read by another Windows user or on another PC (by design): they must be entered
   again there; an older version of the program cannot read them.
 - The meeting reminder still reads only window titles (nothing inside the meeting programs).
+| 6.37 keys (Setup › Keys): every key changeable, refused keys, migration, keys from any program, AltGr | yes (rules, cleaning fuzz-checked by a reviewer, migration stable, held keys per meeting / overlay, set / reset / pause) | yes (capture, refusal, Esc, Backspace, new key works and old does not, help, labels) | yes (4 rounds) | yes (keys can be held; AltGr letters found on a Polish layout; Persian Standard checked) | real keyboards with AltGr in daily use |
+| 6.37 Read my screen: choice first, own window steps aside, answers in the meeting | yes (parts of odd model replies, meeting line, failures, prompts, file) | yes (choice, meeting answer panel, overlay, dark, narrow) | yes (4 rounds) | yes (window minimized and back, only its own windows, whole job) | real AI services reading real questions |

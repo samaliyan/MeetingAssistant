@@ -343,9 +343,9 @@ try:
     got, events = [], []
 
     class Eng:
-        def read_screen(self, png, pid, model):
+        def read_screen(self, png, pid, model, on_text=None):
             got.append(png)
-            return "## The answer\n**B) 42**"
+            return "@@QUESTION\nWhat is 6x7?\n@@ANSWER\n**B) 42**"
     a.vision_target = lambda quick=False: ("groq", "fake-vision")
     a.helper = lambda: None
     a.tool_engine = lambda: Eng()
@@ -370,7 +370,7 @@ try:
         th.start()
         while th.is_alive():
             pump(0.05)
-    job(now=True)
+    job(now=True, from_key=True)
     ok = bool(got)
     if ok:
         rgb = png_rgb(got[-1])
@@ -381,15 +381,86 @@ try:
           f"{got and png_rgb(got[-1]).shape} last={events and events[-1].get('state')} {events and events[-1].get('note', '')}")
     check("the area is kept for next time", a.cfg["screen_area"] == f"{BLUE[0] + 20},{BLUE[1] + 20},160,100", a.cfg["screen_area"])
     app.pick_area = lambda *x, **y: (_ for _ in ()).throw(AssertionError("must not draw again"))
-    job(now=True)
+    job(now=True, from_key=True)
     check("the same area is read again without drawing", len(got) == 2 and (np.abs(png_rgb(got[-1]).astype(int) - (0, 0, 255)) <= 12).all(),
           f"{len(got)} {events and events[-1].get('state')}")
     a.cfg["screen_area_mode"] = "window"
     root.focus_force()
     pump(0.5)
-    job(now=True)
+    job(now=True, from_key=True)
     check("the window in front is read (sent twice as big: it is small)", len(got) == 3 and png_rgb(got[-1]).shape[:2] == (2 * TH, 2 * TW),
           f"{got and png_rgb(got[-1]).shape}", hard=False)
+    check("the result is in parts", events and events[-1].get("state") == "done"
+          and events[-1].get("text") == "## Question\nWhat is 6x7?\n## Answer\n**B) 42**", str(events and events[-1]))
+
+    # 8. asked from this program's window: its window steps aside for the picture and comes back
+    notes = tk.Toplevel(root)
+    notes.title("Notes")
+    notes.geometry("300x200+850+150")
+    appwin = tk.Toplevel(root)
+    appwin.title("Meeting Assistant 6.37")
+    appwin.geometry("300x200+850+400")
+    folder = tk.Toplevel(root)
+    folder.title("Meeting Assistant")                      # (like a folder with that name: not ours to move)
+    folder.geometry("300x200+500+400")
+    pump(0.8)
+    u.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+    u.FindWindowW.restype = wt.HWND
+    u.IsIconic.argtypes = [wt.HWND]
+    nh = u.FindWindowW(None, "Notes")
+    ah = u.FindWindowW(None, "Meeting Assistant 6.37")
+    fh = u.FindWindowW(None, "Meeting Assistant")
+    seen_iconic, others = [], []
+    real_grab = app.grab_rect
+    app.grab_rect = lambda r: (seen_iconic.append(bool(u.IsIconic(nh))), others.append((bool(u.IsIconic(ah)), bool(u.IsIconic(fh)))), real_grab(r))[2]
+    a.cfg["screen_area_mode"] = "screen"
+    a.overlay.show_main = lambda since=None: None
+    job()
+    pump(0.8)
+    check("its own window is minimized while the picture is taken", bool(nh) and seen_iconic == [True], f"{nh} {seen_iconic}")
+    check("and comes back afterwards", bool(nh) and not u.IsIconic(nh), str(bool(nh and u.IsIconic(nh))))
+    check("its app window steps aside too, a folder with the same name does not", others[:1] == [(True, False)], str(others))
+    seen_iconic.clear()
+    job(now=True, from_key=True)
+    check("from another program it stays where it is", seen_iconic == [False], str(seen_iconic))
+    app.grab_rect = real_grab
+    notes.destroy()
+    appwin.destroy()
+    folder.destroy()
+
+    # 9. keys from any program: the keys of Setup › Keys can be held (and given back)
+    u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+    u.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
+    held = []
+    for i, combo in enumerate(("Ctrl+Alt+D", "Shift+F3", "Ctrl+Alt+Shift+S", "Alt+F11"), 7700):
+        mods, vk = app.combo_vk(combo)
+        if u.RegisterHotKey(None, i, mods | 0x4000, vk):
+            held.append(combo)
+            u.UnregisterHotKey(None, i)
+    check("keys of Setup › Keys can be held from any program", len(held) == 4, ", ".join(held))
+
+    # 10. a key that types a letter with AltGr (Polish Ctrl+Alt+S = ś) is not held
+    u.LoadKeyboardLayoutW.argtypes = [wt.LPCWSTR, wt.UINT]
+    u.LoadKeyboardLayoutW.restype = ctypes.c_void_p
+    u.UnloadKeyboardLayout.argtypes = [ctypes.c_void_p]
+    before = app.combo_types_text("Ctrl+Alt+S")
+    pl = u.LoadKeyboardLayoutW("00000415", 0x80)                # Polish (programmers), without telling the shell
+    app._ALTGR_SEEN.clear()
+    with_pl = (app.combo_types_text("Ctrl+Alt+S"), app.combo_types_text("Ctrl+Alt+D"), app.combo_types_text("Ctrl+Alt+F11"))
+    if pl:
+        u.UnloadKeyboardLayout(pl)
+    app._ALTGR_SEEN.clear()
+    fa = u.LoadKeyboardLayoutW("00050429", 0x80)              # Persian (Standard)
+    app._ALTGR_SEEN.clear()
+    fa_keys = {c: app.combo_types_text(c) for c in ("Ctrl+Alt+O", "Ctrl+Alt+S", "Ctrl+Alt+D", "Ctrl+Alt+A", "Ctrl+Alt+H", "Ctrl+Alt+K", "Ctrl+Alt+J", "Ctrl+Alt+T", "Ctrl+Alt+M")}
+    fa_new = app.altgr_free_key("g_area", "Ctrl+Alt+D", app.clean_keys({}))
+    if fa:
+        u.UnloadKeyboardLayout(fa)
+    app._ALTGR_SEEN.clear()
+    check("Persian (Standard): which default keys type a letter, and the new key", bool(fa), f"{fa_keys} -> g_area {fa_new}", hard=False)
+    check("Ctrl+Alt+S is held on an English keyboard", before is False, str(before))
+    check("with a Polish keyboard Ctrl+Alt+S (ś) is a letter, Ctrl+Alt+D and F keys are not", bool(pl) and with_pl == (True, False, False),
+          f"{bool(pl)} {with_pl}", hard=False)
     a.closing.set()
 except Exception as e:
     import traceback

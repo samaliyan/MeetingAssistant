@@ -1249,8 +1249,8 @@ def test_practice_mutes_answers_and_coach(app):
 
 
 def test_overlay_keys_and_new_defaults(app):
-    for k in ("toggle", "more", "less", "screen", "answer", "coach", "up", "down", "prev", "next"):
-        assert k in app.OV_KEYS
+    for k in ("g_overlay", "g_more", "g_less", "g_screen", "g_area", "g_answer", "g_coach", "g_up", "g_down", "g_prev", "g_next"):
+        assert app.KEY_INFO[k]["scope"] == "global"            # (6.37: every key is in Setup › Keys)
     assert app.DEFAULTS["auto_screen"] is False and app.DEFAULTS["debrief_scores"] is True and app.DEFAULTS["job_ad"] == ""
 
 
@@ -1259,12 +1259,9 @@ def test_subtitle_mode_setting_key_and_page(app):
     assert app.DEFAULTS["subtitles"] is False
     assert app.sanitize({"subtitles": "true"})["subtitles"] is True
     assert app.sanitize({"subtitles": "nonsense"})["subtitles"] is False
-    keys = list(app.OV_KEYS)
-    # the new key is last, so the ids of the older keys (their place in the list) do not change
-    assert keys == ["toggle", "more", "less", "screen", "answer", "coach", "up", "down", "prev", "next", "mark", "say", "subs"]
-    assert app.OV_KEYS["subs"] == (0x54, "T") and "subs" not in app.OV_MEETING_KEYS
-    vks = [vk for vk, _ in app.OV_KEYS.values()]
-    assert len(vks) == len(set(vks))                                   # no key used twice
+    assert app.KEY_INFO["g_subs"]["default"] == "Ctrl+Alt+T" and app.KEY_INFO["g_subs"]["when"] == "overlay"
+    defaults = [a[2] for a in app.KEY_ACTIONS]
+    assert len(defaults) == len(set(defaults))                         # no key used twice
     a = app.App()
     try:
         assert a.api_save_config(subtitles=True)["ok"] and a.cfg["subtitles"] is True
@@ -3042,7 +3039,7 @@ def test_page_numbers_questions_and_has_a_focus_page(app):
     has a focus page (F10). (The behaviour itself is checked in a browser before each release.)"""
     page = open(os.path.join(app.WEB_DIR, "index.html"), encoding="utf-8").read()
     for bit in ('class="qtag"', "function qNumOf", "function findOnLeft", 'id="focusBtn"', 'id="nowStrip"',
-                "function setFocus", '"F10"', 'id="feedHold"', "Show it in the transcript"):
+                "function setFocus", 'data-k="focus"', 'id="feedHold"', "Show it in the transcript"):
         assert bit in page, bit
 
 
@@ -3259,13 +3256,17 @@ def test_pac_answer_is_turned_into_one_proxy(app):
 
 
 def test_global_keys_can_avoid_altgr(app):
-    """Ctrl+Alt is AltGr on many keyboards: the keys can be Ctrl+Alt+Shift, or off (buttons only)."""
-    assert app.hotkey_mods(app.sanitize({})) == (0x3, "Ctrl+Alt")
-    assert app.hotkey_mods(app.sanitize({"hotkeys": "ctrl_alt_shift"})) == (0x7, "Ctrl+Alt+Shift")
-    assert app.hotkey_mods(app.sanitize({"hotkeys": "off"})) == (None, "")
+    """Ctrl+Alt is AltGr on many keyboards: each key can get Shift (Setup › Keys), or they can be off (buttons only).
+    Settings from before 6.37 with Ctrl+Alt+Shift chosen keep it: their keys from any program get Shift."""
+    c = app.sanitize({})
+    assert c["hotkeys"] == "ctrl_alt" and c["keys"]["g_screen"] == "Ctrl+Alt+S" and c["keys"]["screen"] == "F3"
+    c = app.sanitize({"hotkeys": "ctrl_alt_shift"})
+    assert c["hotkeys"] == "ctrl_alt" and c["keys"]["g_screen"] == "Ctrl+Alt+Shift+S" and c["keys"]["screen"] == "F3"
+    assert c["keys"]["g_more"] == "Ctrl+Alt+Shift+PageUp"
+    assert app.sanitize({"hotkeys": "off"})["hotkeys"] == "off"
     assert app.sanitize({"hotkeys": "alt_only"})["hotkeys"] == "ctrl_alt"      # an unknown choice: the default
     page = open(os.path.join(app.WEB_DIR, "index.html"), encoding="utf-8").read()
-    assert 'data-key="hotkeys"' in page and "function relabelKeys" in page and 'id="fMeetWords"' in page
+    assert 'id="hkOn"' in page and 'id="keysGlob"' in page and 'id="fMeetWords"' in page
     assert "readScreen(); }" not in page.split("They mention the screen")[0][-400:]      # never read by itself
 
 

@@ -2,6 +2,32 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.37]
+
+**Every key can be changed**
+- New **Setup › Keys**: every action of the window (Start F9, Answer now F2, Read the screen F3, …) and every key that
+  works from any program (overlay Ctrl+Alt+O, read the screen Ctrl+Alt+S, …) is listed. Click it and press the new
+  keys; Esc keeps the old one, Backspace leaves the action without a key. A key that is already used, that Windows
+  keeps (Alt+F4, Ctrl+C …) or that would stop typing (a plain letter) is refused with the reason. **Reset all keys**.
+- Keys are read by their place on the keyboard, so a Persian or German layout does not change them. Every text and
+  button in the program shows the keys as they are set.
+- While a new key is being chosen, the program lets go of its keys from any program, so they can be pressed there.
+- "Keys that work from any program" is one switch now; settings with Ctrl+Alt+Shift chosen keep it (their keys get
+  Shift).
+
+**Read my screen**
+- Tools › Read my screen first asks what to read: **Whole screen**, **Window in front**, **Draw an area**, or **Same
+  area again**. Nothing is read before you choose. The wait before the picture and what the key reads are chosen
+  there too.
+- When it is started from this program's window, the window steps aside (minimized) while the picture is taken, and
+  comes back.
+- **During a meeting, the question read from the screen goes into the meeting**: a "Screen" line in the transcript
+  (the question as on the screen and its translation) and its answer in the Suggested answer panel and the overlay,
+  numbered like the other questions (Q5…), shown at once, kept in the meeting file. Without a meeting the result
+  is shown in Read my screen as before.
+- New key from any program: **Ctrl+Alt+D** draws an area and reads it; **Ctrl+Alt+S** reads the screen. Both work
+  without the overlay too (no wait: you are already on that screen).
+
 ## [6.36]
 
 **Read only the part of the screen you want**
