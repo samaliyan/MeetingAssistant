@@ -115,7 +115,7 @@ python -m pytest tests
 ```
 
 The tests need no audio device and run on any system. Every push to main and every pull request runs them on GitHub Actions and builds the exe;
-a commit with `[release]` in its message publishes a release (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+a new `VERSION` reaching main publishes a release by itself (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ```
 app.py              the program (audio, services, local web server)

@@ -27,5 +27,6 @@ python -m pytest tests
 ## Releases (maintainer)
 
 1. Raise `VERSION` in `app.py` and add its section to `CHANGELOG.md`.
-2. Commit to `main` with `[release]` in the commit message.
+2. Get it onto `main` (merge the pull request, or commit). A `VERSION` that has no release yet is published by
+   itself; `[release]` in the commit message, or **Run workflow** on the Release page of Actions, starts it too.
 3. GitHub Actions runs the tests, builds the program and its installer `MeetingAssistant-Setup.exe` and publishes the release `vX.Y`.

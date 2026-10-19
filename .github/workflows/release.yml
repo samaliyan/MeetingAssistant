@@ -1,11 +1,14 @@
 name: Release
 
-# A commit on main whose message contains [release] builds the exe and publishes a GitHub Release
-# named after VERSION in app.py (for example v5.9).
+# Builds the exe and publishes a GitHub Release named after VERSION in app.py (for example v6.36) when main gets
+# a VERSION that has no release yet - so merging a pull request that raises VERSION publishes it, whatever its
+# title. "[release]" in the commit message, or "Run workflow" on the Actions page, also starts it (an existing
+# release of the same source is then left as it is).
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,8 +18,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Is this VERSION released yet?
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c "import re;print(re.search(r'^VERSION = \"([^\"]+)\"', open('app.py', encoding='utf-8').read(), re.M).group(1))")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" >/dev/null 2>&1; then
+            released=yes
+          else
+            released=no
+          fi
+          go=false
+          if [ "$released" = no ]; then go=true; fi
+          if [ "$EVENT" = workflow_dispatch ]; then go=true; fi
+          case "$MESSAGE" in *"[release]"*) go=true ;; esac
+          echo "VERSION $VERSION, already released: $released, event: $EVENT -> release: $go"
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+
   release:
-    if: contains(github.event.head_commit.message, '[release]')
+    needs: decide
+    if: needs.decide.outputs.go == 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     env:
