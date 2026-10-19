@@ -1,4 +1,15 @@
-# Meeting Assistant — User Guide (version 6.35)
+# Meeting Assistant — User Guide (version 6.36)
+
+## Version 6.36: read only the part of the screen you want
+
+- **What is read** (Setup › Services › Reading the screen): the whole screen, only the window in front, an area you draw each time, or an area you draw once and then the same area every time.
+- **Drawing an area**: the screen turns darker; drag a box around the question with the mouse. Inside the box it stays bright. **Esc** or a right click cancels, and nothing is read. If you do nothing for 60 seconds it closes by itself.
+- **Shift+F3** (or **New area** in the Read my screen window) always lets you draw a new area.
+- A small area is sent twice as big, so small letters are read better.
+- The dark screen is hidden from screen sharing when the overlay or the window is hidden; the other side keeps seeing your normal screen. It never takes the keyboard from the meeting, and Esc does not reach the program below.
+- **Ctrl+Alt+S** (while the see-through window is on) reads at once, without the countdown: you are already on that screen.
+- **The answer has a fixed layout**: the whole question translated into your language (every option too), then the answer — for a multiple-choice question the right option's letter and text, and one line why — then what the answer means. Each part is on its own lines, so Persian and English never share a line.
+- Use it only where it is allowed (some interviews and tests forbid any help).
 
 ## Version 6.35: nothing moves while you read
 

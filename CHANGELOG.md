@@ -2,6 +2,36 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.36]
+
+**Read only the part of the screen you want**
+- Setup › Services › Reading the screen › **What is read**: the whole screen (as before), only the window in front, an
+  area you draw each time, or an area you draw once and then the same area every time (kept after a restart; if
+  that area is no longer on any screen, you draw it again).
+- Drawing works like the Windows snipping tool: the picture is taken, the screens turn darker, you drag a box; inside
+  it stays bright with a blue border. **Esc** or a right click cancels (nothing is read), and it closes by itself after
+  60 seconds without a move. **Shift+F3** or **New area** draws a new area in any mode.
+- The dark screen is hidden from screen sharing when the window or the overlay is hidden, never takes the keyboard
+  from the meeting (Esc is caught and does not reach the program below), and the overlay stays under it.
+- A small area is sent twice as big (small letters are read better); a big or tall picture is made smaller until the
+  service accepts it.
+- **Ctrl+Alt+S** (see-through window on) reads at once: no countdown, you are already on that screen. F3 and the
+  button keep the countdown so you can switch windows first.
+
+**A clearer answer from the screen**
+- Fixed layout: the whole question translated into your language (every option too), then the answer — for a
+  multiple-choice question the right option exactly as on the screen in bold and one line why; true/false or a gap:
+  only the answer; a written question: the words to say; code: complete code — then what the answer means. Several
+  questions are answered in order. Each part is on its own lines.
+- Each line of the result is shown in its own direction (by its words: a Persian sentence with English terms stays
+  right-to-left, an English answer left-to-right), in the window and in the overlay.
+
+**Checked**
+- Unit tests for every mode, cancelling, the kept area, closing during the countdown, the picture sizes and the
+  prompt; a browser check of the page; a new check on a real Windows machine (CI "Screen area check") that draws boxes
+  with posted and real mouse input, looks at the darkened screen's pixels, cancels in every way, checks hiding from
+  capture and GDI leaks, and runs the whole job with a fake AI service. Reviewed by four independent reviewers.
+
 ## [6.35]
 
 A strict review of the whole program by six independent reviewers (processes, display, flow, features and their
