@@ -353,3 +353,23 @@ def test_global_keys_need_alt(app):
     assert app.combo_problem("g_mark", "Ctrl+Shift+M") != ""            # (Teams' mute)
     assert app.combo_problem("g_mark", "Alt+Shift+M") == "" and app.combo_problem("g_mark", "Ctrl+F4") != ""
     assert app.combo_types_text("Ctrl+Alt+S") is False                  # (not on Windows here: never)
+
+
+def test_marker_look_alikes_and_fences(app):
+    P = app.parse_screen
+    assert P("@@QUESTION\nQ\n@@ANSWERS\nA")["answer"] == "A"               # plural
+    assert P("@@NOTE\nA slide")["notes"] == "A slide"                      # singular
+    assert P("*@@ANSWER*\nyes")["answer"] == "yes"                         # single stars
+    r = P("```text\n@@QUESTION\nQ\n```\n@@ANSWER\nA\n```py\ncode\n```")
+    assert "```" not in r["question"] and r["answer"] == "A\n```py\ncode\n```"   # only the question was in a block
+    assert P("@@ANSWER\nWrite to @Notes")["answer"] == "Write to @Notes"
+
+
+def test_a_key_that_types_a_letter_gets_another_one(app, monkeypatch):
+    monkeypatch.setattr(app, "combo_types_text", lambda c: c == "Ctrl+Alt+D")
+    keys = app.clean_keys({})
+    assert app.altgr_free_key("g_area", "Ctrl+Alt+D", keys) == "Ctrl+Alt+Shift+D"
+    monkeypatch.setattr(app, "combo_types_text", lambda c: c in ("Ctrl+Alt+D", "Ctrl+Alt+Shift+D"))
+    assert app.altgr_free_key("g_area", "Ctrl+Alt+D", keys) == "Alt+Shift+D"
+    monkeypatch.setattr(app, "combo_types_text", lambda c: True)
+    assert app.altgr_free_key("g_area", "Ctrl+Alt+D", keys) == ""

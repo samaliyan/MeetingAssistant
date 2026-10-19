@@ -462,7 +462,7 @@ KEY_RESERVED = {"Ctrl+A", "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y", "Ctr
                 "Ctrl+Shift+Z", "Ctrl+Shift+V", "F5", "Ctrl+F5", "Shift+F5", "F12", "Ctrl+Shift+I", "Alt+F4",
                 "Ctrl+Alt+Delete", "Ctrl+Alt+Shift+Left", "Ctrl+Alt+Shift+Right", "Ctrl+Alt+Shift+Up",
                 "Ctrl+Alt+Shift+Down", "Ctrl+Alt+Shift+Home", "Ctrl+Alt+Shift+End",   # (these move the overlay)
-                "Alt+Space", "Alt+Left", "Alt+Right", "Ctrl+Insert", "Shift+Insert", "Ctrl+Shift+R"}
+                "Alt+Space", "Alt+Left", "Alt+Right", "Ctrl+Insert", "Shift+Insert", "Ctrl+Shift+R", "Ctrl+F4"}
 KEY_MOVE_SPARE = "Ctrl+Alt+Shift+M"      # the see-through window's own move key when no other one can be used
 
 
@@ -506,7 +506,7 @@ def combo_problem(action, combo):
     if info["scope"] == "global":
         if fkey:
             if combo in ("F1", "F10", "Shift+F10", "Ctrl+F4", "Ctrl+F6"):
-                return f"{combo} belongs to every program (help, menu): choose another F key or add Ctrl or Alt."
+                return f"{combo} belongs to every program (help, menu, closing a tab): choose another F key."
         elif len(mods) < 2 or "Alt" not in mods:
             return ("A key from any program needs Alt and Ctrl or Shift (for example Ctrl+Alt+S), or an F key: "
                     "otherwise it would stop working in every other program (Ctrl+Shift keys belong to Teams, Zoom …).")
@@ -584,7 +584,7 @@ def combo_types_text(combo):
         for hkl in layouts[:n]:
             buf = ctypes.create_unicode_buffer(8)
             r = u.ToUnicodeEx(vk, u.MapVirtualKeyExW(vk, 0, hkl), state, buf, 8, 0x4, hkl)   # (0x4: no state change)
-            if r < 0 or (r > 0 and any(ch.isprintable() and not ch.isspace() for ch in buf.value[:r])):
+            if r < 0 or (r > 0 and any(unicodedata.category(ch) != "Cc" and ch != " " for ch in buf.value[:r])):
                 types = True
                 break
         _ALTGR_SEEN[key] = types
@@ -592,6 +592,15 @@ def combo_types_text(combo):
     except Exception as e:
         log("keyboard layout check:", short(e, 100), level="debug")
         return False
+
+
+def altgr_free_key(action, combo, keys):
+    """A key for this action like `combo` that does not type a letter here (Ctrl+Alt+Shift+X, then Alt+Shift+X)."""
+    k = combo.split("+")[-1]
+    for c in (f"Ctrl+Alt+Shift+{k}", f"Alt+Shift+{k}"):
+        if c != combo and not combo_problem(action, c) and not key_conflict(keys, action, c) and not combo_types_text(c):
+            return c
+    return ""
 
 
 def key_conflict(keys, action, combo):
@@ -775,7 +784,7 @@ def own_main_windows(find):
     k.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)]
     k.CloseHandle.argtypes = [wt.HANDLE]
     ours = {os.getpid()} | {p.pid for p in list(HIDDEN_PROC)}
-    me = os.path.normcase(os.path.abspath(sys.executable))
+    me = {os.path.normcase(os.path.abspath(x)) for x in (sys.executable, getattr(sys, "_base_executable", "")) if x}
 
     def same_program(h):
         d = wt.DWORD()
@@ -788,7 +797,7 @@ def own_main_windows(find):
         try:
             buf, n = ctypes.create_unicode_buffer(1024), wt.DWORD(1024)
             return bool(k.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(n))) and \
-                os.path.normcase(os.path.abspath(buf.value)) == me
+                os.path.normcase(os.path.abspath(buf.value)) in me     # (a venv's pythonw starts the base one)
         finally:
             k.CloseHandle(hp)
     out = []
@@ -6490,8 +6499,22 @@ def screen_prompt(c):
             + (f"\n{extra}" if extra else "") + glossary_note(c))
 
 
-_SCREEN_MARK = re.compile(r"^\s*#*\s*\**\s*@@\s*(" + "|".join(SCREEN_PARTS) + r")(?![A-Za-z0-9_.])(?:\*\*)?\s*:?(?:\*\*)?\s*(.*)$",
+_SCREEN_MARK = re.compile(r"^\s*#*\s*\**\s*@@\s*(QUESTION|TRANSLATION|ANSWER|MEANING|NOTE)S?(?![A-Za-z0-9_.])\**\s*:?(?:\*\*)?\s*(.*)$",
                           re.I)                          # (@@ROWCOUNT, @@global.x … of SQL stay text)
+
+
+def _screen_part(m):
+    n = m.group(1).upper()
+    return "notes" if n == "NOTE" else n.lower()
+
+
+def _even_fences(t):
+    """A part with a code block opened or closed in another part: the stray fence line goes."""
+    rows = t.split("\n")
+    if sum(1 for r in rows if r.strip().startswith("```")) % 2 and len(rows) > 1 and rows[-1].strip() == "```" \
+            and not any(r.strip().startswith("```") for r in rows[:-1]):
+        rows.pop()                                       # (only a closing fence with no block: an open one is still
+    return "\n".join(rows).strip()                       #  being written)
 
 
 def parse_screen(text):
@@ -6504,17 +6527,18 @@ def parse_screen(text):
     idx = [i for i, ln in enumerate(lines) if ln.strip()]
     if len(idx) >= 2 and lines[idx[0]].strip().startswith("```") and lines[idx[-1]].strip() == "```":
         marks = [i for i in idx if _SCREEN_MARK.match(lines[i])]
-        if marks and not any(lines[i].strip().startswith("```") for i in idx[1:] if i < marks[0]):
+        close = next((i for i in idx[1:] if lines[i].strip() == "```"), None)   # (where the first block closes)
+        if marks and close == idx[-1] and not any(lines[i].strip().startswith("```") for i in idx[1:] if i < marks[0]):
             lines = lines[idx[0] + 1:idx[-1]]            # (the whole reply put in one code block)
     if lines and lines[-1].strip():
-        m = re.fullmatch(r"[\s*#:]*@?(@\s*([A-Za-z]*))?[\s*:]*", lines[-1])
-        if m and (not m.group(2) or any(p_.startswith(m.group(2).upper()) for p_ in SCREEN_PARTS)):
+        m = re.fullmatch(r"[\s*#:]*(?:@|@@\s*([A-Za-z]*))?[\s*:]*", lines[-1])
+        if m and (not m.group(1) or any(p_.startswith(m.group(1).upper()) for p_ in SCREEN_PARTS)):
             lines.pop()                                  # (one of our markers, or a bold mark, still being written)
     parts, pre, cur, found = {k.lower(): [] for k in SCREEN_PARTS}, [], None, False
     for ln in lines:
         m = _SCREEN_MARK.match(ln)
         if m:
-            cur, found = m.group(1).lower(), True
+            cur, found = _screen_part(m), True
             if parts[cur]:
                 parts[cur].append("")                    # (the same part again: a blank line between)
             if m.group(2).strip():
@@ -6525,8 +6549,8 @@ def parse_screen(text):
         out["answer"] = "\n".join(lines).strip()
         return out
     for k in parts:
-        out[k] = "\n".join(parts[k]).strip()
-    head = "\n".join(pre).strip()
+        out[k] = _even_fences("\n".join(parts[k]).strip())
+    head = _even_fences("\n".join(pre).strip())
     if head and not out["answer"] and not out["notes"]:
         out["answer"] = head                             # (text before the first marker: kept)
     return out
@@ -10476,8 +10500,8 @@ class Engine:
             me, them = c["me_label"], c["them_label"]
             ml = c["my_language"]
             lines = [f"{self.session.label(r)}: {r['text']}" if r["source"] != "screen" else
-                     f"(a question read from the screen, answered by reading, not speaking): {short_text(r['text'], 300)}"
-                     for r in rows]
+                     f"(a question read from the screen, answered by reading, not speaking): {r['text']}"
+                     for r in for_prompt(rows)]
             if ml == "fa":
                 heads = ("## نتیجه کلی", "## نقاط قوت", "## چه چیزی را بهتر کنید", "## پاسخ‌هایی که ارزش دوباره گفتن دارند",
                          "## نحوه صحبت کردن")
@@ -14038,6 +14062,9 @@ class App:
                     if KEY_INFO[a]["scope"] != "global" or not combo or a in held or combo in bad \
                             or (a == "g_move" and self.overlay.on):
                         continue                               # (the ones the program holds now are in use by it)
+                    if combo_types_text(combo):
+                        bad.append(combo)
+                        continue
                     mods, vk = combo_vk(combo)
                     if u.RegisterHotKey(None, 9000 + i, mods | 0x4000, vk):
                         u.UnregisterHotKey(None, 9000 + i)
@@ -17210,9 +17237,16 @@ class Overlay:
                 mods, vk = combo_vk(combo)
                 if combo_types_text(combo):                      # (AltGr: that key is a letter on this keyboard)
                     if (a, combo) not in failed:
-                        note = (f"{combo} types a letter on your keyboard (AltGr), so it is not used for "
-                                f"“{KEY_INFO[a]['text'].lower()}” — the letter stays typeable. Choose another key in "
-                                "Setup › Keys (an F key, or Alt+Shift+…).")
+                        new = altgr_free_key(a, combo, self.app.cfg.get("keys") or {})
+                        what = KEY_INFO[a]["text"].lower()
+                        if new:                                  # another key by itself, said once
+                            note = (f"{combo} types a letter on your keyboard (AltGr), so “{what}” now uses {new}. "
+                                    "You can change it in Setup › Keys.")
+                            threading.Thread(target=self.app.api_save_config, daemon=True,
+                                             kwargs={"keys": dict(self.app.cfg["keys"], **{a: new})}).start()
+                        else:
+                            note = (f"{combo} types a letter on your keyboard (AltGr), so it is not used for “{what}” — "
+                                    "the letter stays typeable. Choose another key in Setup › Keys (an F key).")
                         log(note, level="warn")
                         self.app.hub.toast("warn", note)
                     failed[(a, combo)] = time.time()
