@@ -1523,9 +1523,9 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="range-row"><span>Fainter</span><input type="range" id="fOvT" min="60" max="100" step="5" data-key="overlay_text"><span>Stronger</span></div>
         <div class="seg" data-key="overlay_pos" style="margin-top:8px"><button data-val="top">Top of the screen</button><button data-val="bottom">Bottom of the screen</button></div>
         </div>
-        <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Video mode — subtitles (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. The same as the Video button at the top (before a meeting), or <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> while the overlay is on.</span></span></label>
+        <label class="toggle" style="margin-top:8px"><input type="checkbox" data-key="subtitles"><span class="switch"></span><span class="tt"><b>Video mode — subtitles (film, video, audio)</b><span>For something playing on this computer, not a meeting: only the computer's sound is used (not your microphone), each line shows only its translation, and the overlay shows the last two lines in large letters at the bottom. Answers, coach and the like are paused. The same as the Video button at the top (before a meeting)<span data-has-k="g_subs">, or <kbd data-k="g_subs"></kbd> while the overlay is on</span>.</span></span></label>
         <label class="toggle" style="margin-top:8px" data-part="overlay"><input type="checkbox" data-key="overlay_hide"><span class="switch"></span><span class="tt"><b>Hide the overlay from screen sharing</b><span>Others in a call cannot see it (Windows 10 version 2004 or newer).</span></span></label>
-        <div class="help">Turn it on with the Overlay button <kbd data-k="g_overlay"></kbd>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it. While it is on: <kbd data-k="g_more"></kbd> / <kbd data-k="g_less"></kbd> = more / less solid; <kbd data-k="g_subs"></kbd> = subtitles on / off. To move it: <kbd data-k="g_move"></kbd> (with keys from any program off: <kbd>Ctrl+Alt+Shift+M</kbd>), then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place. All keys: Setup › Keys.</div>
+        <div class="help">Turn it on with the Overlay button<span data-has-k="g_overlay"> or <kbd data-k="g_overlay"></kbd></span>. The normal window is minimized and a see-through window shows what they said, the answer and one line from the coach. The mouse and keyboard go to the program under it.<span data-has-k="g_more"> More / less solid: <kbd data-k="g_more"></kbd> / <kbd data-k="g_less"></kbd>.</span><span data-has-k="g_subs"> Subtitles on / off: <kbd data-k="g_subs"></kbd>.</span> To move it: <span data-has-k="g_move"><kbd data-k="g_move"></kbd> (with keys from any program off: </span><kbd>Ctrl+Alt+Shift+M</kbd><span data-has-k="g_move">)</span>, then drag it with the mouse or use the arrow keys (<kbd>Home</kbd> / <kbd>End</kbd> = bigger / smaller); the same keys again (or <kbd>Esc</kbd>, or 30 seconds without moving) lock it in place. All keys: Setup › Keys.</div>
       </div>
       <div class="field">
         <span class="label">Screen sharing</span>
@@ -1748,7 +1748,7 @@ const label = (src, spk) => {
   if(!(spk > 0)) return base;
   return (base.replace(/\s*\d+$/, "").trim() || base) + " " + (spk + 1);
 };
-const spkKey = e => e.source === "me" ? "me" : (typeof e.who === "string" && e.who.trim()) ? "who:" + Array.from(e.who.trim()).slice(0, 40).join("") : "them:" + (e.speaker || 0);
+const spkKey = e => e.source === "me" ? "me" : e.source === "screen" ? "screen" : (typeof e.who === "string" && e.who.trim()) ? "who:" + Array.from(e.who.trim()).slice(0, 40).join("") : "them:" + (e.speaker || 0);
 const whoOf = e => e.source === "screen" ? "Screen" : (e.source !== "me" && (S.names || {})[spkKey(e)]) || e.who || label(e.source, e.speaker);   // a name the user gave wins
 function initials(name){
   const w = String(name||"?").trim().split(/\s+/).filter(Boolean);
@@ -1978,6 +1978,7 @@ function withKeys(t){
 }
 function paintKeys(root=document){                  // <kbd data-k="start"> and data-title-k="… ({start})"
   root.querySelectorAll("kbd[data-k]").forEach(k => { const t = keyText(k.dataset.k); k.textContent = t; k.hidden = !t; });
+  root.querySelectorAll("[data-has-k]").forEach(e => { e.hidden = !keyText(e.dataset.hasK); });   // a text about a key that is not set
   root.querySelectorAll("[data-title-k]").forEach(e => { e.title = withKeys(e.dataset.titleK); });
   root.querySelectorAll("[data-text-k]").forEach(e => { e.textContent = withKeys(e.dataset.textK); });
 }
@@ -2025,29 +2026,34 @@ function renderKeysPane(){
   }
 }
 function startKeyCap(id){
-  if(S.keyCap) endKeyCap();
+  const switching = !!S.keyCap;
+  if(switching){ S.keyCap = null; renderKeysPane(); }     // (another key: the pause just goes on - no "off" in between)
   S.keyCap = id;
   const r = document.querySelector(`.krow[data-id="${id}"]`); if(!r) return;
   r.querySelector(".kerr").textContent = "";
   const b = r.querySelector(".kbtn"); b.textContent = "Press the keys…"; b.classList.add("cap"); b.focus();
   api("keys_pause", {on: true});                  // the program lets go of its keys, so they can be pressed here
+  clearInterval(S.keyCapTimer);
+  S.keyCapTimer = setInterval(() => { if(S.keyCap) api("keys_pause", {on: true}); else clearInterval(S.keyCapTimer); }, 20000);
 }
 function endKeyCap(){
   if(!S.keyCap) return;
-  S.keyCap = null; api("keys_pause", {on: false}); renderKeysPane();
+  S.keyCap = null; clearInterval(S.keyCapTimer); api("keys_pause", {on: false}); renderKeysPane();
 }
 document.addEventListener("keydown", async ev => {    // (first: a key being chosen in Setup › Keys takes every key)
   if(!S.keyCap) return;
   ev.preventDefault(); ev.stopImmediatePropagation();
+  if(S.keySaving || ev.repeat) return;              // (the key just pressed is being saved)
   if(["Control", "Alt", "Shift", "Meta", "AltGraph"].includes(ev.key)) return;     // (wait for the key itself)
   const id = S.keyCap, row = document.querySelector(`.krow[data-id="${id}"]`), err = row && row.querySelector(".kerr");
   if(ev.key === "Escape"){ endKeyCap(); return; }
   let combo = comboOf(ev);
   if((ev.key === "Backspace" || ev.key === "Delete") && !ev.ctrlKey && !ev.altKey && !ev.shiftKey) combo = "";
   else if(!combo){ if(err) err.textContent = "This key cannot be used. Try a letter, a number, an F key or an arrow, with Ctrl, Alt or Shift."; return; }
-  const r = await api("set_key", {action: id, key: combo});
+  S.keySaving = true;
+  let r; try{ r = await api("set_key", {action: id, key: combo}); } finally{ S.keySaving = false; }
   if(r.ok && r.config){ S.cfg = r.config; endKeyCap(); applyConfig(); }
-  else if(err) err.textContent = r.error || "It could not be saved.";
+  else { if(err) err.textContent = r.error || "It could not be saved."; if(S.keyCap === id) api("keys_pause", {on: true}); }
 }, true);
 document.addEventListener("mousedown", ev => { if(S.keyCap && !ev.target.closest(".kbtn")) endKeyCap(); }, true);
 $("#hkOn").onchange = async ev => {
@@ -2069,7 +2075,12 @@ function applyConfig(){
   applyFeatures();
   paintKeys(); renderKeyHelp(); renderKeysPane();
   const kk = JSON.stringify([c.keys, c.hotkeys]);
-  if(S.keysSeen !== kk){ S.keysSeen = kk; const ab = $("#answerBody"); if(ab) ab._eh = null; if(typeof renderAnswerIfIdle === "function" && S.entries) renderAnswerIfIdle(); }
+  if(S.keysSeen !== kk){
+    S.keysSeen = kk; const ab = $("#answerBody"); if(ab) ab._eh = null;
+    if(typeof renderAnswerIfIdle === "function" && S.entries) renderAnswerIfIdle();
+    document.querySelectorAll("#list .entry:not(.marked) .mark").forEach(b => { b.title = withKeys("Mark as an important moment ({mark})"); });
+    if(typeof renderNow === "function" && document.body.classList.contains("focus")) renderNow();
+  }
   const ml = myLang();
   $$(".myl").forEach(x => { x.textContent = ml.name; });
   document.documentElement.style.setProperty("--font-tr", ml.rtl ? "var(--font-fa)" : "var(--font)");
@@ -2289,7 +2300,7 @@ function groupTurns(full){
   for(let i = from; i < ch.length; i++){
     const el = ch[i];
     if(!el.classList || !el.classList.contains("entry")) continue;
-    const src = (el.classList.contains("me") ? "me" : "them") + "|" + (el.dataset.who || "");   // another speaker starts a new turn
+    const src = (el.classList.contains("me") ? "me" : el.classList.contains("screen") ? "screen" : "them") + "|" + (el.dataset.who || "");   // another speaker starts a new turn
     const gap = prev ? Math.abs(+el.dataset.t - +prev.dataset.t) : 1e9;
     const isQ = el => { const q = el.querySelector(".qtag"); return !!q && !q.hidden; };     // a question stands alone (with its Q number)
     const same = prev && prev.dataset.src2 === src && gap <= 25 && !isQ(el) && !isQ(prev);
@@ -2423,7 +2434,7 @@ function entryShell(e){
   el.querySelector(".act").onclick = () => answerNow(e.id);
   el.querySelector(".edit").onclick = () => startEdit(el, e.id);
   el.querySelector(".mark").onclick = () => markLine(e.id);
-  el.querySelector(".who").onclick = () => { const cur = S.entries.get(e.id); if(cur && cur.source !== "me") startRename(el, cur); };
+  el.querySelector(".who").onclick = () => { const cur = S.entries.get(e.id); if(cur && cur.source === "them") startRename(el, cur); };
   el.querySelector(".who").onkeydown = ev => { if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); el.querySelector(".who").click(); } };
   el.querySelector(".play").onclick = () => playLine(e.id, el.querySelector(".play"));
   return el;
@@ -2555,7 +2566,7 @@ function upsertEntry(e, silent, batch){
      && Date.now() - (S.scrTip || 0) > 60000 && S.running && !silent){
     S.scrTip = Date.now();
     // never by itself: what the meeting says ("look at my screen") cannot take a picture of this screen - you press
-    if(featOn("screen") && !OVERLAY) toast("info", withKeys("They mention the screen. Read it and get the answer? (or press {screen})"), {text: "Read my screen", run: () => readScreen()});
+    if(featOn("screen") && !OVERLAY) toast("info", "They mention the screen. Read it and get the answer?" + (keyText("screen") ? ` (or press ${keyText("screen")})` : ""), {text: "Read my screen", run: () => readScreen()});
     else if(featOn("screen") && OVERLAY && keyText("g_screen")) toast("info", `They mention the screen. ${keyText("g_screen")} reads it${keyText("g_area") ? ", " + keyText("g_area") + " an area you draw" : ""}.`);
   }
   // the newest answer goes to the answer panel automatically
@@ -2850,7 +2861,8 @@ function setFocus(on){
   document.body.classList.toggle("focus", on);
   $("#focusBtn").classList.toggle("on", on);
   $("#focusLabel").textContent = on ? "Full transcript" : "Focus";
-  $("#focusBtn").title = withKeys(on ? "Back to the full transcript ({focus} or Esc)" : "Focus: only the question, its answer and the coach, big — the full transcript is hidden ({focus})");
+  $("#focusBtn").dataset.titleK = on ? "Back to the full transcript ({focus} or Esc)" : "Focus: only the question, its answer and the coach, big — the full transcript is hidden ({focus})";
+  $("#focusBtn").title = withKeys($("#focusBtn").dataset.titleK);
   try{ localStorage.setItem("ma.focus", on ? "1" : "0"); }catch{}
   if(on){ S.readRight = false; $("#feedHold").hidden = true; renderNow(); }
   else requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; S.newBelow = 0; setJump(); });
@@ -2868,7 +2880,7 @@ function renderNow(){
     let last = null; S.entries.forEach(e => { if(String(e.text || "").trim() && (!last || e.t0 > last.t0)) last = e; });
     if(last) item = {t: last.t0, who: whoOf(last), o: last.text, f: hasTr(last) ? last.translation : "", live: false};
   }
-  const key = item ? [item.who, item.o, item.f, item.live].join("|") : (S.running ? "wait" : "idle");
+  const key = (item ? [item.who, item.o, item.f, item.live].join("|") : (S.running ? "wait" : "idle")) + "|" + keyText("focus");
   if(box.dataset.k === key) return;
   box.dataset.k = key;
   if(!item){ box.innerHTML = `<div class="ns-h">${S.running ? "Listening…" : "The meeting has not started."} <span class="spacer"></span>${keyText("focus") ? esc(keyText("focus")) + ": full transcript" : ""}</div>`; return; }
@@ -2903,7 +2915,7 @@ function renderSubs(){
   box.textContent = "";
   if(!items.length){
     const d = document.createElement("div"); d.className = "sub-empty";
-    d.textContent = S.running ? "Subtitles · waiting for the video's sound…" : withKeys("Subtitles · press Start subtitles, then play the video ({g_subs})") ;
+    d.textContent = S.running ? "Subtitles · waiting for the video's sound…" : "Subtitles · press Start subtitles, then play the video" + (keyText("g_subs") ? ` (${keyText("g_subs")}: back to meeting mode)` : "");
     box.append(d); return;
   }
   items.forEach((x, i) => {
@@ -3270,8 +3282,10 @@ function renderAnswer(){
     const thinking = [...S.entries.values()].some(x => x.ans_state === "thinking");
     const tried = [...S.entries.values()].filter(x => x.ans_state && !["off", "none"].includes(x.ans_state)).sort((a, b) => a.t0 - b.t0).pop();
     const failed = !thinking && tried && tried.ans_state === "error";
-    const html = failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source, tried.speaker))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>${keyText("answer") ? `Press ${kbd("answer")} to try again.` : "Press Answer now to try again."} The log (bottom right) says why.</span></div>`
-      : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>Writing an answer…</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
+    const thinkScr = [...S.entries.values()].some(x => x.ans_state === "thinking" && x.source === "screen");
+    const html = failed && tried.source === "screen" ? `<div class="answer-empty">${icon("alert")}<b>The screen could not be read</b><span>${clock(tried.t0)} · press <b>Not read · read again</b> on its line${keyText("screen") ? " or " + kbd("screen") : ""}. The log (bottom right) says why.</span></div>`
+      : failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source, tried.speaker))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>${keyText("answer") ? `Press ${kbd("answer")} to try again.` : "Press Answer now to try again."} The log (bottom right) says why.</span></div>`
+      : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>${thinkScr ? "Reading the screen…" : "Writing an answer…"}</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
       : OVERLAY ? ovIdle()
       : hearing ? `<div class="answer-empty listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><b>Listening to the question…</b><span>The answer appears here as soon as they finish.</span></div>`
       : `<div class="answer-empty">${icon("sparkles")}<b>No question yet</b><span>When the other side asks something, the answer to say appears here.${keyText("answer") ? `<br>Press ${kbd("answer")} to answer the last thing they said.` : ""}</span></div>`;
@@ -4823,20 +4837,22 @@ function runKey(act, ev){
 document.addEventListener("keydown", ev => {
   const act = winAction(ev);
   // in a text box only F keys and keys with Alt act (Space, Ctrl+arrows … are for the text there)
-  if(act && !(textBoxFocused() && !/^F\d/.test(ev.code || "") && !ev.altKey)){
+  // (Ctrl+Alt together is AltGr on many keyboards: in a text box it types a letter, it is never a key of ours)
+  const altGr = ev.ctrlKey && ev.altKey || (ev.getModifierState && ev.getModifierState("AltGraph"));
+  if(act && !(textBoxFocused() && ((!/^F\d/.test(ev.code || "") && !ev.altKey) || altGr))){
     if(ev.repeat && !KEY_REPEATS.includes(act)){ ev.preventDefault(); return; }
     if(runKey(act, ev) !== false){ ev.preventDefault(); return; }
   }
-  if(ev.key === " " && S.running && $("#newQ").hidden && document.activeElement?.tagName === "BUTTON"
+  if(ev.key === " " && S.running && document.activeElement?.tagName === "BUTTON"
      && !document.activeElement.closest(".modal, .drawer, .toolpop, .helppop, .toast")){
     ev.preventDefault(); document.activeElement.blur();   // (during a meeting Space never presses Pause or Stop)
   }
   else if(ev.key === "Escape"){ if(!$("#hideModal").hidden) closeHideAsk(false); else if(!$("#toolPop").hidden) $("#toolPop").hidden = true; else if(!$("#toolModal").hidden) closeTool(); else if(!$("#helpPop").hidden) $("#helpPop").hidden = true; else if(!$("#brModal").hidden) closeBrowser(); else if(!$("#sumModal").hidden) $("#sumModal").hidden = true; else if(!$("#voiceModal").hidden) vmClose(); else if($("#drawer").getAttribute("aria-hidden") === "true" && document.body.classList.contains("focus")) setFocus(false); else closeDrawer(); hideSel(); }
-  else if((ev.ctrlKey || ev.metaKey) && ev.key === ","){ ev.preventDefault(); openDrawer(); }
-  else if((ev.ctrlKey || ev.metaKey) && (ev.key === "=" || ev.key === "+" || ev.key === "-")){
+  else if((ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.code === "Comma" || ev.key === ",")){ ev.preventDefault(); openDrawer(); }
+  else if((ev.ctrlKey || ev.metaKey) && !ev.altKey && (["Equal", "Minus", "NumpadAdd", "NumpadSubtract"].includes(ev.code) || ev.key === "=" || ev.key === "+" || ev.key === "-")){
     ev.preventDefault();
     if(!S.cfg) return;
-    const v = Math.max(80, Math.min(170, (S.cfg.text_size||100) + (ev.key === "-" ? -10 : 10)));
+    const v = Math.max(80, Math.min(170, (S.cfg.text_size||100) + (ev.key === "-" || ev.code === "Minus" || ev.code === "NumpadSubtract" ? -10 : 10)));
     S.cfg.text_size = v; applyConfig(); fillDrawer(true); queueSave({text_size: v});
   }
 });
@@ -4894,24 +4910,25 @@ async function readScreen(newArea, what){
   if(!featOn("screen")) return toast("info", FEATS.find(f => f[0] === "screen")[1] + " is turned off. Turn it on in Setup › Features.");
   if(S.scrBusy){ if(!S.running && TM.kind !== "screen") showScreen({state: "working", note: "Reading the screen…", text: S.scrText || ""}); return; }
   S.scrBusy = true; S.scrText = ""; S.scrLast = {newArea: newArea === true, what: what || ""};
-  if(!S.running) showScreen({state: "working", note: "Starting…"});   // (in a meeting the answer comes in the answer panel)
+  const inMeeting = S.running && featOn("answers");     // (in a meeting the answer comes in the answer panel)
+  if(!inMeeting) showScreen({state: "working", note: "Starting…"});
   else if(TM.kind === "screen") closeTool();
   const body = {}; if(newArea === true) body.new_area = true; if(what) body.what = what;
   const r = await api("screen", body);
-  if(!r.ok){ S.scrBusy = false; if(S.running) toast("error", r.error || "Could not read the screen."); else showScreen({state: "error", note: r.error || "Could not read the screen."}); }
+  if(!r.ok){ S.scrBusy = false; if(inMeeting) toast("error", r.error || "Could not read the screen."); else showScreen({state: "error", note: r.error || "Could not read the screen."}); }
 }
 function scrChoiceHtml(){
   const c = S.cfg || {}, mode = scrMode(), saved = !!c.screen_area;
   const delay = String(c.screen_delay || "0");
   return `<div class="scr-choose">
-    <p class="help">What should be read? The window of this program steps aside while the picture is taken${S.running ? "; the question and its answer come into the meeting, in the answer panel" : ""}.</p>
+    <p class="help">What should be read? The window of this program steps aside while the picture is taken${S.running && featOn("answers") ? "; the question and its answer come into the meeting, in the answer panel" : ""}.</p>
     <div class="scr-grid">${SCR_CHOICES.filter(([v]) => v !== "same" || saved).map(([v, ic, t, sub]) =>
       `<button class="scr-opt" data-what="${v}">${icon(ic)}<b>${t}</b><small>${sub}</small></button>`).join("")}</div>
     <div class="scr-set">
       <label>Wait before the picture <select class="input select" id="scrDelay" aria-label="Wait before the picture">${[["0", "no wait"], ["2", "2 s"], ["3", "3 s"], ["5", "5 s"], ["8", "8 s"]].map(([v, t]) => `<option value="${v}"${v === delay ? " selected" : ""}>${t}</option>`).join("")}</select></label>
-      <label>${esc(withKeys("The key {screen} reads"))} <select class="input select" id="scrMode" aria-label="What the key reads">${[["screen", "the whole screen"], ["window", "the window in front"], ["area", "an area I draw each time"], ["same", "an area I draw once, then the same"]].map(([v, t]) => `<option value="${v}"${v === mode ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>${keyText("screen") ? esc("The key " + keyText("screen") + " reads") : "Without choosing, read"} <select class="input select" id="scrMode" aria-label="What the key reads">${[["screen", "the whole screen"], ["window", "the window in front"], ["area", "an area I draw each time"], ["same", "an area I draw once, then the same"]].map(([v, t]) => `<option value="${v}"${v === mode ? " selected" : ""}>${t}</option>`).join("")}</select></label>
     </div>
-    <p class="help">Drawing an area: the screen turns darker; drag a box around the question. Esc or a right click cancels. A small area is read more sharply.${keyText("area") ? " " + esc(keyText("area")) + " draws a new area." : ""}${keyText("g_area") ? " From any program: " + esc(keyText("g_area")) + (keyText("g_screen") ? " (an area) or " + esc(keyText("g_screen")) : "") + " — no wait, the answer comes into the meeting." : ""}</p>
+    <p class="help">Drawing an area: the screen turns darker; drag a box around the question. Esc or a right click cancels. A small area is read more sharply.${keyText("area") ? " " + esc(keyText("area")) + " draws a new area." : ""}${keyText("g_area") || keyText("g_screen") ? " From any program, during a meeting or with the see-through window on: " + [keyText("g_area") && esc(keyText("g_area")) + " draws an area", keyText("g_screen") && esc(keyText("g_screen")) + " reads " + ({window: "the window in front", area: "an area you draw", same: "the same area"}[scrMode()] || "the whole screen")].filter(Boolean).join(", ") + " — no wait; in a meeting the answer comes in the answer panel." : ""}</p>
   </div>`;
 }
 function showScreen(m){

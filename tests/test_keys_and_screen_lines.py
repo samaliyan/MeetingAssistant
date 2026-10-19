@@ -37,7 +37,13 @@ def test_defaults_and_cleaning(app):
     assert k["screen"] == "F3"                     # damaged: the default
     assert k["answer"] == ""                       # no key on purpose
     assert k["pause"] == "F8"                      # not allowed: the default
-    assert k["coach"] == ""                        # F9 is taken by Start (earlier in the list): none
+    assert k["coach"] == "F9" and k["start"] == ""  # a key chosen on purpose wins over a first key (a file edited by hand)
+    k = app.clean_keys({"screen": "F11", "area": "F3", "start": "F9"})
+    assert k["screen"] == "F11" and k["area"] == "F3"
+    k = app.clean_keys({"screen": 5, "area": None, "mark": True})
+    assert k["screen"] == "F3" and k["area"] == "Shift+F3" and k["mark"] == "F7"   # damaged values: the first keys
+    k = app.clean_keys({"area": "F3", "screen": "garbage"})
+    assert k["area"] == "F3" and k["screen"] == ""                 # a damaged value never takes a chosen key
     k = app.clean_keys({"area": "Shift+F3", "g_area": "Shift+F3"})
     assert k["area"] == k["g_area"] == "Shift+F3"  # twins may share one key
 
@@ -51,7 +57,10 @@ def test_set_key_api(app):
         r = a.api_set_key(action="g_screen", key="F9")
         assert not r["ok"] and "Start the meeting" in r["error"]
         r = a.api_set_key(action="g_screen", key="Q")
-        assert not r["ok"] and "Ctrl or Alt" in r["error"]
+        assert not r["ok"] and "two of Ctrl, Alt and Shift" in r["error"]
+        assert not a.api_set_key(action="g_mark", key="Ctrl+S")["ok"]       # one modifier: not from any program
+        assert not a.api_set_key(action="g_mark", key="Ctrl+Alt+Shift+M")["ok"]   # the overlay's spare move key
+        assert not a.api_set_key(action="answer", key="Alt+Space")["ok"]
         r = a.api_set_key(action="g_screen", key="Ctrl+Hyper+Q")
         assert not r["ok"] and "cannot be used" in r["error"]
         assert not a.api_set_key(action="nope", key="F2")["ok"]
@@ -69,10 +78,9 @@ def test_keys_from_any_program_follow_the_settings(app):
     try:
         ov = a.overlay
         a.running, ov.on = False, False
-        w = ov.wanted_keys()
-        assert w == {"g_overlay": "Ctrl+Alt+O", "g_screen": "Ctrl+Alt+S", "g_area": "Ctrl+Alt+D"}   # always there
+        assert ov.wanted_keys() == {"g_overlay": "Ctrl+Alt+O"}       # (AltGr keyboards: the others only when needed)
         a.running = True
-        assert {"g_mark", "g_say"} <= set(ov.wanted_keys()) and "g_answer" not in ov.wanted_keys()
+        assert {"g_mark", "g_say", "g_screen", "g_area"} <= set(ov.wanted_keys()) and "g_answer" not in ov.wanted_keys()
         ov.on = True
         assert {"g_answer", "g_coach", "g_prev", "g_more", "g_subs"} <= set(ov.wanted_keys())
         assert "g_move" not in ov.wanted_keys()                 # (the see-through window holds that one itself)
@@ -90,6 +98,15 @@ def test_keys_from_any_program_follow_the_settings(app):
     finally:
         a.running = False
         a.closing.set()
+
+
+def test_old_ctrl_alt_shift_settings_are_kept_and_stable(app):
+    c1 = app.sanitize({"hotkeys": "ctrl_alt_shift"})
+    assert c1["keys"]["g_screen"] == "Ctrl+Alt+Shift+S" and c1["keys"]["g_prev"] == "Ctrl+Alt+Left"   # (Shift+arrows move the overlay)
+    assert app.sanitize(c1)["keys"] == c1["keys"]                      # the same after every save
+    for a, k in c1["keys"].items():
+        assert not k or app.combo_problem(a, k) == "", (a, k)
+    assert app.clean_keys(app.clean_keys({}, True)) == app.clean_keys({}, True)
 
 
 def test_key_names_in_messages(app):
@@ -211,7 +228,7 @@ def test_screen_without_a_meeting_is_a_text_in_parts(app, monkeypatch):
         monkeypatch.setattr(a, "vision_target", lambda quick=False: ("groq", "v"))
         monkeypatch.setattr(a, "helper", lambda: None)
         shown = []
-        monkeypatch.setattr(a.overlay, "show_main", lambda: shown.append(1))
+        monkeypatch.setattr(a.overlay, "show_main", lambda since=None: shown.append(1))
 
         class Eng:
             def read_screen(self, png, pid, model, on_text=None):
@@ -238,7 +255,7 @@ def test_the_window_steps_aside_only_when_asked_from_it(app, monkeypatch):
         monkeypatch.setattr(app, "grab_rect", lambda r: (calls.append("grab"), np.zeros((r[3], r[2], 4), dtype=np.uint8).tobytes())[1])
         monkeypatch.setattr(a, "vision_target", lambda quick=False: ("groq", "v"))
         monkeypatch.setattr(a, "helper", lambda: None)
-        monkeypatch.setattr(a.overlay, "show_main", lambda: None)
+        monkeypatch.setattr(a.overlay, "show_main", lambda since=None: None)
 
         def own(show=None):
             calls.append("back" if show is not None else "aside")
@@ -272,3 +289,41 @@ def test_what_choice_and_where_a_drawn_area_is_kept(meeting):
     a.cfg["screen_area"] = ""
     a._screen_job(new_area=True)                                   # the area key with "same" chosen: kept
     assert a.cfg["screen_area"] == "10,10,300,200"
+
+
+def test_odd_replies_are_read_well(app):
+    P = app.parse_screen
+    assert P("@@QUESTION: What is 2+2?\n@@ANSWER: **4**") == dict(P(""), question="What is 2+2?", answer="**4**")
+    assert P("## @@QUESTION\nWhat?\n## @@ANSWER\nThis.")["answer"] == "This."
+    code = "Fix:\n```diff\n@@ -1,2 +1,2 @@\n-a\n+b\n```"
+    assert P(code)["answer"] == code                                   # no marker of ours: all of it
+    two = P("@@QUESTION\n1. Q one\n@@ANSWER\nA one\n@@QUESTION\n2. Q two\n@@ANSWER\nA two")
+    assert two["question"] == "1. Q one\n\n2. Q two" and two["answer"] == "A one\n\nA two"   # one block per question
+    for partial in ("@", "**", "@@ANS"):
+        assert not any(P(partial).values()), partial
+    assert P("**@@QUESTION**\nQ?\n**")["question"] == "Q?"
+    assert P("```\n@@QUESTION\nQ\n@@ANSWER\nA\n```")["answer"] == "A"   # the whole reply in a code block
+    assert P("@@EXPLANATION\nfoo\n@@ANSWER\nbar")["answer"] == "bar"
+    assert P("**@@ANSWER:** **B) 42**")["answer"] == "**B) 42**"
+    f = app.Engine.screen_fields(P("@@ANSWER\n```python\nprint(1)\n```"), True)
+    assert f["text"] == "Question on the screen" and f["ans_state"] == "done"
+    f = app.Engine.screen_fields(P("@@NOTES\nA slide about OSPF\n- area 0\n- LSAs"), True)
+    assert f["text"] == "A slide about OSPF" and f["answer"] == "- area 0\n- LSAs"
+
+
+def test_screen_lines_are_not_speech(app):
+    s = app.Session(app.sanitize({}))
+    t = time.time()
+    q = s.add("them", t, t + 2, "Tell me about OSPF", "en", [])
+    sc = s.add("screen", t + 3, t + 3, "Q\n" + "x" * 900, "", [], ans_state="done", answer="A", tr_state="off")
+    s.add("screen", t + 4, t + 4, "Reading the whole screen…", "", [], ans_state="thinking", tr_state="off")
+    h = s.history(t + 10, 10)
+    assert [n for n, _ in h] == ["Person 1", "Screen"] and len(h[1][1]) <= 300   # short, and not one still being read
+    srt = app.srt_text(s.ordered(), t, s.label)
+    assert "Screen" not in srt and "OSPF" in srt
+    eng = app.App().tool_engine()
+    eng.session = s
+    assert eng.edit(sc["id"], "changed") is False and eng.answer_now(sc["id"]) is False
+    s.save_if_dirty()
+    rows = app.parse_meeting_md(open(s.path, encoding="utf-8").read())
+    assert [r for r in rows if r[0] == "line" and r[2] == "Screen"][0][3].startswith("Q\nx")   # rows kept in one line

@@ -406,7 +406,7 @@ try:
     real_grab = app.grab_rect
     app.grab_rect = lambda r: (seen_iconic.append(bool(u.IsIconic(nh))), real_grab(r))[1]
     a.cfg["screen_area_mode"] = "screen"
-    a.overlay.show_main = lambda: None
+    a.overlay.show_main = lambda since=None: None
     job()
     pump(0.8)
     check("its own window is minimized while the picture is taken", bool(nh) and seen_iconic == [True], f"{nh} {seen_iconic}")

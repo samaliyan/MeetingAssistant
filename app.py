@@ -413,7 +413,8 @@ RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170),
 
 # ---- keyboard shortcuts (6.37): every key can be changed in Setup › Keys ------------------------------------------
 # (id, where it works, default, what it does, the part it belongs to ("" = always there), when a key from any program
-# is held: "always" | "meeting" (during a meeting) | "overlay" (while the see-through window is on))
+# is held: "always" | "meeting" (during a meeting) | "overlay" (while the see-through window is on) | "busy" (during
+# a meeting or while the see-through window is on: Ctrl+Alt is AltGr on many keyboards, so not held all the time))
 KEY_ACTIONS = (
     ("start", "window", "F9", "Start the meeting · during it press twice to stop", "", ""),
     ("resume", "window", "Shift+F9", "Continue the last meeting (same transcript)", "", ""),
@@ -431,8 +432,8 @@ KEY_ACTIONS = (
     ("say", "window", "F6", "Say mode on / off: speak in your language, get the sentence to say", "say", ""),
     ("mark", "window", "F7", "Mark this moment as important", "marks", ""),
     ("g_overlay", "global", "Ctrl+Alt+O", "See-through answer window on / off", "overlay", "always"),
-    ("g_screen", "global", "Ctrl+Alt+S", "Read the screen at once (the answer comes in the meeting)", "screen", "always"),
-    ("g_area", "global", "Ctrl+Alt+D", "Draw an area and read it (the answer comes in the meeting)", "screen", "always"),
+    ("g_screen", "global", "Ctrl+Alt+S", "Read the screen at once (during a meeting: the answer comes in the meeting)", "screen", "busy"),
+    ("g_area", "global", "Ctrl+Alt+D", "Draw an area and read it (during a meeting: the answer comes in the meeting)", "screen", "busy"),
     ("g_answer", "global", "Ctrl+Alt+A", "Answer now", "answers", "overlay"),
     ("g_coach", "global", "Ctrl+Alt+H", "Ask the coach", "coach", "overlay"),
     ("g_mark", "global", "Ctrl+Alt+K", "Mark this moment", "marks", "meeting"),
@@ -460,7 +461,9 @@ KEY_MODS = (("Ctrl", 0x2), ("Alt", 0x1), ("Shift", 0x4))
 KEY_RESERVED = {"Ctrl+A", "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y", "Ctrl+R", "Ctrl+F", "Ctrl+P", "Ctrl+W",
                 "Ctrl+Shift+Z", "Ctrl+Shift+V", "F5", "Ctrl+F5", "Shift+F5", "F12", "Ctrl+Shift+I", "Alt+F4",
                 "Ctrl+Alt+Delete", "Ctrl+Alt+Shift+Left", "Ctrl+Alt+Shift+Right", "Ctrl+Alt+Shift+Up",
-                "Ctrl+Alt+Shift+Down", "Ctrl+Alt+Shift+Home", "Ctrl+Alt+Shift+End"}   # (the last ones move the overlay)
+                "Ctrl+Alt+Shift+Down", "Ctrl+Alt+Shift+Home", "Ctrl+Alt+Shift+End",   # (these move the overlay)
+                "Alt+Space", "Alt+Left", "Alt+Right", "Ctrl+Insert", "Shift+Insert", "Ctrl+Shift+R"}
+KEY_MOVE_SPARE = "Ctrl+Alt+Shift+M"      # the see-through window's own move key when no other one can be used
 
 
 def parse_combo(s):
@@ -494,14 +497,20 @@ def combo_problem(action, combo):
     """Why this key cannot be used for this action ("" when it can)."""
     info = KEY_INFO[action]
     parts = combo.split("+")
-    key, mods = parts[-1], parts[:-1]
+    key, mods = parts[-1], set(parts[:-1])
     fkey = re.fullmatch(r"F\d{1,2}", key) is not None
     if combo in KEY_RESERVED:
         return f"{combo} is kept for Windows or the window itself."
+    if combo == KEY_MOVE_SPARE and action != "g_move":
+        return f"{combo} is kept for moving the see-through window."
     if info["scope"] == "global":
-        if not fkey and not ({"Ctrl", "Alt"} & set(mods)):
-            return "A key from any program needs Ctrl or Alt (or an F key): otherwise it could not be typed in other programs."
-    elif not fkey and key != "Space" and not ({"Ctrl", "Alt"} & set(mods)):
+        if fkey:
+            if combo in ("F1", "F10", "Shift+F10"):
+                return f"{combo} belongs to every program (help, menu): choose another F key or add Ctrl or Alt."
+        elif len(mods) < 2 or not ({"Ctrl", "Alt"} & mods):
+            return ("A key from any program needs two of Ctrl, Alt and Shift (for example Ctrl+Alt+S), or an F key: "
+                    "otherwise it would stop working in every other program.")
+    elif not fkey and key != "Space" and not ({"Ctrl", "Alt"} & mods):
         return "Use an F key, Space, or a key with Ctrl or Alt: otherwise it could not be typed in the text boxes."
     elif key == "Space" and mods:
         return "Space is used alone (with Ctrl or Alt it belongs to Windows)."
@@ -509,27 +518,39 @@ def combo_problem(action, combo):
 
 
 def clean_keys(raw, shift=False):
-    """Every action with a usable key ("" = no key); a key given twice keeps only its first action (twins share).
+    """Every action with a usable key ("" = no key). Keys the user chose come first; then the first keys (the
+    defaults) where they are still free. A key given twice keeps only its first action (twins share one).
     shift: settings from before 6.37 with 'Ctrl + Alt + Shift' chosen: the keys from any program get Shift."""
     raw = raw if isinstance(raw, dict) else {}
     out, used = {}, {}
-    for a in KEY_IDS:
-        info = KEY_INFO[a]
-        if a in raw:
-            v = raw[a]
-            c = parse_combo(v) if isinstance(v, str) and v.strip() else ""
-            if c is None or (c and combo_problem(a, c)):
-                c = info["default"]                         # (a damaged or not allowed key: the default)
+
+    def free(a, c):
+        return c not in used or used[c] == KEY_TWINS.get(a)
+    later = []
+    for a in KEY_IDS:                                  # 1. what was chosen and is usable
+        v = raw.get(a, None)
+        if isinstance(v, str) and not v.strip():
+            out[a] = ""                                 # (no key, on purpose)
+            continue
+        c = parse_combo(v) if isinstance(v, str) else None
+        if c and not combo_problem(a, c) and free(a, c):
+            out[a] = c
+            used.setdefault(c, a)
         else:
-            c = info["default"]
-            if shift and info["scope"] == "global" and c.startswith("Ctrl+Alt+") and "Shift" not in c:
-                c = "Ctrl+Alt+Shift+" + c[len("Ctrl+Alt+"):]
-        if c and c in used and used[c] != KEY_TWINS.get(a):
-            c = ""                                          # (taken by an earlier action: none)
+            later.append(a)                             # (missing, damaged, not allowed or taken: the default)
+    for a in later:                                    # 2. the first keys, where free
+        info = KEY_INFO[a]
+        c = info["default"]
+        if shift and a not in raw and info["scope"] == "global" and c.startswith("Ctrl+Alt+") and "Shift" not in c:
+            s_ = "Ctrl+Alt+Shift+" + c[len("Ctrl+Alt+"):]
+            if not combo_problem(a, s_):
+                c = s_
+        if c and not free(a, c):
+            c = ""
         if c:
             used.setdefault(c, a)
         out[a] = c
-    return out
+    return {a: out[a] for a in KEY_IDS}
 
 
 def key_conflict(keys, action, combo):
@@ -678,6 +699,27 @@ def log(*parts, level="info"):
             fn(entry)
         except Exception:
             pass
+
+
+def last_input_tick():
+    """When the user last typed or clicked anywhere (Windows' tick count), None elsewhere."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        li = LASTINPUTINFO()
+        li.cbSize = ctypes.sizeof(li)
+        return li.dwTime if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li)) else None
+    except Exception:
+        return None
+
+
+def short_text(t, n):
+    t = str(t or "")
+    return t if len(t) <= n else t[:n - 1].rstrip() + "…"
 
 
 def short(e, n=220):
@@ -6327,7 +6369,7 @@ def screen_prompt(c):
             "visible, all of them, numbered (1, 2, …).\n"
             "@@TRANSLATION\n"
             f"The same translated into {my}, faithfully and completely, every option on its own line, translated too, "
-            f"with its letter or number. Leave this part empty when the question is already in {my}.\n"
+            f"with its letter or number. When the question is already in {my}, write nothing under this marker.\n"
             "@@ANSWER\n"
             "By kind of question:\n"
             "- Multiple choice: the first line is only the letter or number of the right option and its text exactly "
@@ -6342,8 +6384,8 @@ def screen_prompt(c):
             "complexity.\n"
             "Several questions: answer each in order, numbered the same way.\n"
             + ("@@MEANING\n"
-               f"The answer translated into {my}. Leave this part empty for code, and when the answer is already in "
-               f"{my}.\n" if meaning else "")
+               f"The answer translated into {my}. For code, and when the answer is already in {my}, write nothing "
+               "under this marker.\n" if meaning else "")
             + "If nothing on the screen needs an answer, write only:\n@@NOTES\n"
             "one short line on what the screen shows, then the important points as short bullets.\n"
             f"Write your own notes in {my}; keep code, commands and technical terms as they are. Never put {my} words "
@@ -6353,30 +6395,44 @@ def screen_prompt(c):
             + (f"\n{extra}" if extra else "") + glossary_note(c))
 
 
+_SCREEN_MARK = re.compile(r"^\s*#*\s*\**\s*@@\s*([A-Za-z]+)(?:\*\*)?\s*:?(?:\*\*)?\s*(.*)$")
+
+
 def parse_screen(text):
-    """The marked parts of a reply (also of one still being written). A reply without markers is all answer."""
+    """The marked parts of a reply (also of one still being written). Models vary, so a marker may be in bold, under
+    a heading, with a colon, or with its first line on the same line; a part given twice (one block per question)
+    is joined, not replaced. A reply without any marker is all answer."""
     out = {k.lower(): "" for k in SCREEN_PARTS}
-    t = str(text or "")
-    if "@@" not in t:
-        out["answer"] = t.strip()
-        return out
+    t = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = t.split("\n")
-    if lines and re.fullmatch(r"\s*\**\s*@@?[A-Za-z]*\s*", lines[-1]) and \
-            (lines[-1].strip(" *@").upper() not in SCREEN_PARTS):
-        lines.pop()                                      # (a marker still being written: not part of the text)
-    cur, buf = None, []
-    for line in lines:
-        m = re.fullmatch(r"\s*\**\s*@@\s*([A-Za-z]+)\s*:?\s*\**\s*", line)
-        if m and m.group(1).upper() in SCREEN_PARTS:
-            if cur:
-                out[cur] = "\n".join(buf).strip()
-            cur, buf = m.group(1).lower(), []
-        elif cur:
-            buf.append(line)
-        elif line.strip() and not out["answer"]:
-            out["answer"] = line.strip()                  # (text before any marker: kept as the answer's start)
-    if cur:
-        out[cur] = "\n".join(buf).strip()
+    full = [ln for ln in lines if ln.strip()]
+    if len(full) >= 2 and full[0].strip().startswith("```") and full[-1].strip() == "```" \
+            and any(_SCREEN_MARK.match(ln) for ln in full[1:-1]):
+        lines = full[1:-1]                               # (the whole reply put in one code block)
+    if lines and lines[-1].strip() and re.fullmatch(r"[\s*#@:]*(@@\s*[A-Za-z]*)?[\s*:]*", lines[-1]):
+        lines.pop()                                      # (a marker or a bold mark still being written, or empty)
+    parts, pre, cur, found = {k.lower(): [] for k in SCREEN_PARTS}, [], None, False
+    for ln in lines:
+        m = _SCREEN_MARK.match(ln)
+        if m:
+            name = m.group(1).upper()
+            if name not in SCREEN_PARTS:
+                continue                                 # (a marker the program does not know: left out)
+            cur, found = name.lower(), True
+            if parts[cur]:
+                parts[cur].append("")                    # (the same part again: a blank line between)
+            if m.group(2).strip():
+                parts[cur].append(m.group(2).strip())
+            continue
+        (parts[cur] if cur else pre).append(ln)
+    if not found:
+        out["answer"] = "\n".join(lines).strip()
+        return out
+    for k in parts:
+        out[k] = "\n".join(parts[k]).strip()
+    head = "\n".join(pre).strip()
+    if head and not out["answer"] and not out["notes"]:
+        out["answer"] = head                             # (text before the first marker: kept)
     return out
 
 
@@ -7009,8 +7065,9 @@ class Session:
             return sorted((dict(e) for e in self.entries.values()), key=lambda e: e["t0"])
 
     def history(self, before_t0, n, exclude=None):
-        rows = [e for e in self.ordered() if e["t0"] < before_t0 and e["id"] != exclude]
-        return [(self.label(e), e["text"]) for e in rows[-n:]]
+        rows = [e for e in self.ordered() if e["t0"] < before_t0 and e["id"] != exclude
+                and not (e["source"] == "screen" and e.get("ans_state") != "done")]   # (a screen still being read)
+        return [(self.label(e), short_text(e["text"], 300) if e["source"] == "screen" else e["text"]) for e in rows[-n:]]
 
     def answered_before(self, before_t0, n, exclude=None):
         """(question, answer) pairs suggested earlier in this meeting, oldest first."""
@@ -7066,13 +7123,16 @@ class Session:
             while marks and e["t0"] >= marks[0]:
                 out += [f"*— continued at {datetime.datetime.fromtimestamp(marks.pop(0)):%H:%M} —*", ""]
             t = datetime.datetime.fromtimestamp(e["t0"]).strftime("%H:%M:%S")
-            out.append(f"**[{t}]{' ★' if e.get('marked') else ''} {self.label(e)}:** {e['text']}")
+            first, *more = str(e["text"]).split("\n")
+            out.append(f"**[{t}]{' ★' if e.get('marked') else ''} {self.label(e)}:** {first}")
+            out += [f"> {x}" for x in more]                     # (a question read from the screen has several rows)
+            quote = lambda pre, x: [f"> {pre}{y}" if i == 0 else f"> {y}" for i, y in enumerate(str(x).split("\n"))]
             if e["translation"]:
-                out += ["", f"> {e['translation']}"]
+                out += [""] + quote("", e["translation"])
             if e["answer"]:
-                out += ["", f"> 💡 {e['answer']}"]
+                out += [""] + quote("💡 ", e["answer"])
                 if e["answer_fa"]:
-                    out += [f"> {e['answer_fa']}"]
+                    out += quote("", e["answer_fa"])
             if e.get("explain"):
                 out += ["", f"> ❓ «{e.get('explain_q', '')}»: {e['explain']}"]
             out.append("")
@@ -8397,6 +8457,7 @@ def srt_text(rows, base, label, with_translation=True):
     """Subtitles: times are seconds from the start of the meeting (the moment Start was pressed). A long line becomes
     several short cues (two lines of at most 42 characters, at most 7 seconds each) with times shared by length."""
     out, n = [], 0
+    rows = [r for r in rows if r.get("source") != "screen"]      # (subtitles are what was said, not the screen)
     speakers = {label(r) for r in rows if (r.get("text") or "").strip()}
     for r in rows:
         if not (r.get("text") or "").strip():
@@ -10118,6 +10179,8 @@ class Engine:
         rows = self.session.ordered()
         if eid is not None:
             target = next((r for r in rows if r["id"] == eid), None)
+            if target and target["source"] == "screen" and not text:
+                return False                                 # (its answer came from the picture: Read my screen again)
             question = (text or target["text"]) if target else None
         else:
             src = "them"
@@ -10206,8 +10269,8 @@ class Engine:
     def edit(self, eid, text):
         e = self.session.get(eid)
         text = re.sub(r"\s+", " ", text or "").strip()
-        if not e or not text or text == e["text"]:
-            return False
+        if not e or not text or text == e["text"] or e["source"] == "screen":
+            return False                                     # (a question read from the screen is read again instead)
         tr_on = e["tr_state"] != "off" and feat(self.cfg, "translate")      # (a part turned off sends nothing)
         e = self.session.update(eid, text=text, edited=True, t_text=time.time(), translation="",
                                 tr_state="pending" if tr_on else "off",
@@ -10314,7 +10377,9 @@ class Engine:
             waiting = lambda w: pub(state="working", text="", stats=stats, note=f"Waiting {round(w)} s for the free limit…")
             me, them = c["me_label"], c["them_label"]
             ml = c["my_language"]
-            lines = [f"{self.session.label(r)}: {r['text']}" for r in rows]
+            lines = [f"{self.session.label(r)}: {r['text']}" if r["source"] != "screen" else
+                     f"(a question read from the screen, answered by reading, not speaking): {short_text(r['text'], 300)}"
+                     for r in rows]
             if ml == "fa":
                 heads = ("## نتیجه کلی", "## نقاط قوت", "## چه چیزی را بهتر کنید", "## پاسخ‌هایی که ارزش دوباره گفتن دارند",
                          "## نحوه صحبت کردن")
@@ -10394,23 +10459,34 @@ class Engine:
 
     def add_screen_line(self, what):
         """6.37: during a meeting, a question read from the screen is a line of the transcript ("Screen"), with its
-        translation and its answer, like a question the other side asked (Q number, answer panel, overlay, file)."""
+        translation and its answer, like a question the other side asked (Q number, answer panel, overlay, file).
+        Returns (line id, the text it shows until the question is read)."""
         now = time.time()
-        e = self.session.add("screen", now, now, f"Reading {what}…", "", [], tr_state="off", ans_state="thinking",
-                             forced=True)
+        wait = f"Reading {what}…"
+        e = self.session.add("screen", now, now, wait, "", [], tr_state="off", ans_state="thinking", forced=True)
         self.hub.publish("entry", entry=e)
-        return e["id"]
+        return e["id"], wait
 
-    def screen_line(self, eid, p, done):
-        """The parts read so far (parse_screen) go into the line; done: the reply is complete."""
-        ans = p["answer"] or p["notes"]
-        q = p["question"] or (p["notes"].split("\n")[0].strip() if p["notes"] and not p["answer"] else "")
+    @staticmethod
+    def screen_fields(p, done):
+        """The parts read so far (parse_screen) as the fields of the line; done: the reply is complete."""
+        ans, notes, q = p["answer"], p["notes"], p["question"]
+        if notes and not ans:                            # nothing to answer: its first line is the line, the rest
+            first, _, rest = notes.partition("\n")      # what it shows
+            q, ans = q or first.strip(), rest.strip() or first.strip()
+        elif notes:
+            ans = ans + "\n\n" + notes
+        if done and not q:
+            q = p["translation"].split("\n")[0].strip() if p["translation"] else "Question on the screen"
         fields = {"answer": ans, "answer_fa": p["meaning"], "translation": p["translation"],
                   "tr_state": ("done" if done else "streaming") if p["translation"] else "off",
                   "ans_state": ("done" if ans else "error") if done else ("streaming" if ans else "thinking")}
         if q:
             fields["text"] = q[:4000]
-        self._publish(eid, **fields)
+        return fields
+
+    def screen_line(self, eid, p, done):
+        self._publish(eid, **self.screen_fields(p, done))
 
     SAY_TONES = {"natural": "natural and conversational", "formal": "polite and formal",
                  "short": "as short as possible (one or two sentences)", "friendly": "warm and friendly",
@@ -13046,8 +13122,8 @@ class App:
     def _own_windows(self, show=None):
         """The program's normal window steps aside while the screen is read from it (it would be in the picture):
         show=None minimizes the ones that are open and returns them; show=[...] brings those back."""
-        if sys.platform != "win32" or getattr(self.overlay, "on", False):
-            return []                                      # (with the overlay on, the window is minimized already)
+        if sys.platform != "win32":
+            return []
         try:
             import ctypes
             from ctypes import wintypes as wt
@@ -13059,8 +13135,16 @@ class App:
                     if u.IsWindow(h) and u.IsIconic(h):
                         u.ShowWindow(h, 9)                     # SW_RESTORE
                 return []
+            u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+            ours = {os.getpid()} | {p.pid for p in list(HIDDEN_PROC)}
+
+            def pid(h):
+                d = wt.DWORD()
+                u.GetWindowThreadProcessId(h, ctypes.byref(d))
+                return d.value
+            # this program's windows only (a folder or browser tab with the same name is not touched)
             mine = [h for h in self.overlay.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes")
-                                                  and OV_TITLE not in t) if not u.IsIconic(h)]
+                                                  and OV_TITLE not in t) if not u.IsIconic(h) and pid(h) in ours]
             for h in mine:
                 u.ShowWindow(h, 6)                             # SW_MINIMIZE
             if mine:
@@ -13112,7 +13196,7 @@ class App:
 
     def _screen_job(self, new_area=False, now=False, what="", from_key=False):
         pub = lambda **kw: self.hub.publish("screen", **kw)
-        model, live, eid, aside = "", None, None, []
+        model, live, eid, aside, wait, since = "", None, None, [], "", None
         try:
             c = self.cfg
             chosen = c.get("screen_area_mode", "screen")
@@ -13132,6 +13216,7 @@ class App:
             if not draw:
                 pub(state="working", text="", note="Taking the picture…")
             got = self._take_picture(draw, saved, mode, keep)
+            since = last_input_tick() if from_key else None   # (the key, or the box just drawn)
             aside = self._own_windows(show=aside) if aside else []
             if got is None:
                 pub(state="cancelled", text="", note="Cancelled — nothing was read.")
@@ -13141,15 +13226,18 @@ class App:
             pid, model = self.vision_target()
             live = self.live_engine()
             my_name = lang_name(c["my_language"])
+            if live and not feat(c, "answers"):
+                live = None                            # (the answer panel is off: the result is shown in Read my screen)
             if live:                                   # 6.37: in the meeting - a line and its answer, like a question
-                eid = live.add_screen_line(what_read)
+                eid, wait = live.add_screen_line(what_read)
                 pub(state="meeting", text="", entry_id=eid, note=f"Reading {what_read} with {self.provider(pid)['name']}…")
                 text = live.read_screen(png, pid, model, lambda t: live.screen_line(eid, parse_screen(t), False))
                 parts = parse_screen(text)
                 if not (parts["answer"] or parts["notes"]):
-                    raise APIError("The model returned nothing. Try again or choose another model.")
+                    raise APIError("No answer was given. Try again, or choose another model in Setup › Services.")
                 live.screen_line(eid, parts, True)
-                live.session.save_if_dirty(final=False)
+                stopped = live.stop_event.is_set() or not self.running
+                live.session.save_if_dirty(final=stopped)     # (the meeting ended meanwhile: "Continue" gets it too)
                 pub(state="done", text="", entry_id=eid, meeting=True, saved=True)
             else:
                 pub(state="working", text="", note=f"Reading {what_read} with {self.provider(pid)['name']} ({short(model, 40)})…")
@@ -13158,15 +13246,16 @@ class App:
                 eng = eng or self.tool_engine()
                 text = eng.read_screen(png, pid, model, lambda t: pub(
                     state="streaming", text=screen_markdown(parse_screen(t), my_name)))
-                md = screen_markdown(parse_screen(text), my_name)
-                if not md:
-                    raise APIError("The model returned nothing. Try again or choose another model.")
+                parts = parse_screen(text)
+                md = screen_markdown(parts, my_name)
+                if not (parts["answer"] or parts["notes"]):
+                    raise APIError("No answer was given. Try again, or choose another model in Setup › Services.")
                 if not own:
                     eng.session.add_screen(md)
                     eng.session.save_if_dirty()
                 pub(state="done", text=md, saved=not own)
                 if from_key and not getattr(self.overlay, "on", False):
-                    self.overlay.show_main()           # (pressed from another program: the answer is in this window)
+                    self.overlay.show_main(since)      # (pressed from another program: the answer is in this window)
             log(f"Screen read with {model} ({what_read}, {len(png) // 1024} KB picture)")
         except BadRequest as e:
             gone = re.search(r"does not exist|not found|no access|decommission|deprecated", str(e), re.I)
@@ -13174,21 +13263,23 @@ class App:
                      else "This model did not accept the picture: ") + short(e, 160)
                     + " — clear the model name in Setup › Services › Reading the screen to pick one automatically, "
                       "or type a model that this service has and that can read pictures.")
-            self._screen_failed(live, eid, note)
+            self._screen_failed(live, eid, note, wait)
         except Exception as e:
             log("screen error:", short(e), level="warn")
-            self._screen_failed(live, eid, short(e, 260))
+            self._screen_failed(live, eid, short(e, 260), wait)
+            if from_key and live is None and not getattr(self.overlay, "on", False):
+                self.overlay.show_main(since)          # (the message is in this window)
         finally:
             if aside:
                 self._own_windows(show=aside)
             self.screen_busy = False
 
-    def _screen_failed(self, live, eid, note):
+    def _screen_failed(self, live, eid, note, wait=""):
         if live is not None and eid is not None:              # the line says it, and stays in the transcript
             try:
                 e = live.session.get(eid)
                 t = (e or {}).get("text") or ""
-                live._publish(eid, ans_state="error", text=t if t and not t.startswith("Reading ") else "Reading the screen failed",
+                live._publish(eid, ans_state="error", text=t if t and t != wait else "Reading the screen failed",
                               tr_state="off" if not (e or {}).get("translation") else "done")
             except Exception:
                 pass
@@ -13283,7 +13374,7 @@ class App:
         eng.say_mode = True
         eng.apply_live_pause()                         # a live service does not hear my microphone in say mode
         self.hub.publish("say_mode", on=True)
-        how = " or ".join(k for k in (key_label(self.cfg, "say"), key_label(self.cfg, "g_say")) if k)
+        how = " or ".join(dict.fromkeys(k for k in (key_label(self.cfg, "say"), key_label(self.cfg, "g_say")) if k))
         self.hub.toast("info", f"Say mode is on: mute yourself in Teams or Zoom, then say it in {lang_name(ml)}. "
                                + (f"Press {how} again to turn it off." if how else "Press the Say button again to turn it off."))
         return {"ok": True, "on": True}
@@ -13566,6 +13657,8 @@ class App:
         e = s.get(entry_id)
         if not e:
             return {"ok": False, "error": "That line is not in the transcript any more."}
+        if e["source"] == "screen":
+            return {"ok": False, "error": "This line was read from the screen: nobody said it."}
         spk = self.voices.fix(e.get("seg_ids") or [], who)
         fields = {"source": who, "speaker": spk if who == "them" else 0}
         eng = self.helper()
@@ -13836,11 +13929,18 @@ class App:
                 u = ctypes.windll.user32
                 u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
                 u.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
-                held = self.overlay.wanted_keys() if sys.platform == "win32" else {}
-                bad = []
+                for _ in range(3):                              # (the keys thread may change them meanwhile)
+                    try:
+                        held = {a for a, _ in dict(getattr(self.overlay, "keys_held", {}) or {}).values()}
+                        bad = [k for (a, k), _ in dict(getattr(self.overlay, "keys_failed", {}) or {}).items()
+                               if self.cfg["keys"].get(a) == k]  # (wanted, and another program has them)
+                        break
+                    except RuntimeError:
+                        held, bad = set(), []
                 for i, a in enumerate(KEY_IDS):
                     combo = self.cfg["keys"].get(a)
-                    if KEY_INFO[a]["scope"] != "global" or not combo or a in held:
+                    if KEY_INFO[a]["scope"] != "global" or not combo or a in held or combo in bad \
+                            or (a == "g_move" and self.overlay.on):
                         continue                               # (the ones the program holds now are in use by it)
                     mods, vk = combo_vk(combo)
                     if u.RegisterHotKey(None, 9000 + i, mods | 0x4000, vk):
@@ -16411,9 +16511,12 @@ def run_overlay_helper(argv):
             ARROWS = [(0x25, (-1, 0)), (0x27, (1, 0)), (0x26, (0, -1)), (0x28, (0, 1)), (0x24, "bigger"), (0x23, "smaller"),
                       (0x1B, "move")]                              # (Esc ends move mode too)
             # with the keys Off (or no move key), Ctrl+Alt+Shift+M stays: there is no other way to move it
-            mv = combo_vk(move) if keys_on and move else (0x7, 0x4D)
+            mv = combo_vk(move) if keys_on and move else combo_vk(KEY_MOVE_SPARE)
             if u.RegisterHotKey(None, 101, mv[0] | 0x4000, mv[1]):
                 keys[101] = "move"
+            elif mv != combo_vk(KEY_MOVE_SPARE) and u.RegisterHotKey(None, 101, 0x7 | 0x4000, 0x4D):
+                keys[101] = "move"                                 # (its key is used by another program: the spare one)
+                log(f"Overlay: the move key {move} is used by another program — {KEY_MOVE_SPARE} moves it", level="warn")
             if keys_on:
                 for i, (vk, act) in enumerate(ARROWS, 102):
                     if vk != 0x1B and u.RegisterHotKey(None, i, 0x2 | 0x1 | 0x4, vk):
@@ -16862,8 +16965,10 @@ class Overlay:
             self.app.hub.publish("overlay", on=False)
         return ""
 
-    def show_main(self):
-        """The program's normal window comes to the front (a result waits there)."""
+    def show_main(self, since=None):
+        """The program's normal window comes to the front (a result waits there). since: the input time (ms tick) when
+        the key was pressed - if the user typed or clicked after it, the window only blinks in the taskbar (the keys
+        typed in another program never land in this window)."""
         if sys.platform != "win32":
             return
         try:
@@ -16872,11 +16977,18 @@ class Overlay:
             u = self.user32()
             u.IsIconic.argtypes = [wt.HWND]
             mains = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
+            if not mains:
+                return
+            if since is not None and last_input_tick() != since:
+                u.FlashWindow.argtypes = [wt.HWND, wt.BOOL]
+                u.FlashWindow(mains[0], True)
+                log("Read my screen: the result is in the window (it blinks in the taskbar)")
+                return
             for m in mains:
                 if u.IsIconic(m):
                     u.ShowWindow(m, 9)
-            if mains:
-                u.SetForegroundWindow(mains[0])
+            if not u.SetForegroundWindow(mains[0]):
+                log("Read my screen: Windows did not bring the window forward", level="debug")
         except Exception as e:
             log("could not show the window:", short(e, 100), level="debug")
 
@@ -16958,7 +17070,9 @@ class Overlay:
             info, combo = KEY_INFO[a], (c.get("keys") or {}).get(a)
             if not combo or (info["part"] and not feat(c, info["part"])):
                 continue
-            if (info["when"] == "meeting" and not self.app.running) or (info["when"] == "overlay" and not self.on):
+            w = info["when"]
+            if (w == "meeting" and not self.app.running) or (w == "overlay" and not self.on) \
+                    or (w == "busy" and not (self.app.running or self.on)):
                 continue
             out[a] = combo
         return out
@@ -16972,6 +17086,7 @@ class Overlay:
         u.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
         ids = {a: i for i, a in enumerate(KEY_IDS, 1)}
         held, failed = {}, {}                                      # id -> (action, key); (action, key) -> when it failed
+        self.keys_held, self.keys_failed = held, failed            # (the health check reads them)
         msg = wt.MSG()
 
         def drop_all():
@@ -16996,7 +17111,8 @@ class Overlay:
                 first = (a, combo) not in failed
                 failed[(a, combo)] = time.time()
                 if first:
-                    twin = key_label(self.app.cfg, KEY_TWINS.get(a, ""))
+                    twin = key_label(self.app.cfg, KEY_TWINS.get(a, "")) if a in KEY_TWINS else ""
+                    twin = "" if twin == combo else twin                 # (the same key cannot reach the window either)
                     note = (f"The key {combo} ({KEY_INFO[a]['text'].lower()}) is used by another program: choose another "
                             "in Setup › Keys" + (f", or use {twin} in the window." if twin else "."))
                     log(note, level="warn")
