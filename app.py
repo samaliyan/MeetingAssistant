@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.37"
+VERSION = "6.38"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -6461,10 +6461,14 @@ def screen_prompt(c):
     meaning = bool(c.get("answer_fa")) and a != ml           # (an answer always in my language needs no meaning)
     extra = mode_text(c, "answer")
     extra = "" if "NO_REPLY" in extra else extra             # (lecture mode's "stay quiet" is for live answers)
+    style = re.sub(r"\s+", " ", str(c.get("answer_style") or "")).strip()[:1500]
+    style = (f"How the user wants answers (Setup › Answers) - follow it in the ANSWER part (its level, depth, length "
+             f"and tone); the markers and the multiple-choice first line stay as described above: {style}\n") if style else ""
     return (f"You help {c['me_label']} (a {lang_name(ml)} speaker) during a meeting, interview or lesson. The picture is a "
             "screenshot of their screen (or of a part of it): it may show a question, a coding task, a slide, a chart, "
             "a document, a diagram or a chat.\n"
             f"Meeting: {c['context'] or '(not given)'}\nAbout the user: {about_text(c) or '(not given)'}\n"
+            + style +
             "If the screen holds a question or task, reply in exactly this format: each marker alone on its own line, "
             "in this order, nothing before the first marker.\n"
             "@@QUESTION\n"

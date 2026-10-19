@@ -2,6 +2,13 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.38]
+
+- **Read my screen follows "How should suggested answers sound?"** (Setup › Answers): for example "Answer at
+  university level, with the reasoning" now gives deeper answers to questions read from the screen too. (The meeting
+  topic, About you and the meeting type were already used; this text was not.) The parts of the answer and the
+  multiple-choice first line stay as they are.
+
 ## [6.37]
 
 **Every key can be changed**
