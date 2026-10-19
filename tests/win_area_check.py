@@ -450,6 +450,14 @@ try:
     if pl:
         u.UnloadKeyboardLayout(pl)
     app._ALTGR_SEEN.clear()
+    fa = u.LoadKeyboardLayoutW("00050429", 0x80)              # Persian (Standard)
+    app._ALTGR_SEEN.clear()
+    fa_keys = {c: app.combo_types_text(c) for c in ("Ctrl+Alt+O", "Ctrl+Alt+S", "Ctrl+Alt+D", "Ctrl+Alt+A", "Ctrl+Alt+H", "Ctrl+Alt+K", "Ctrl+Alt+J", "Ctrl+Alt+T", "Ctrl+Alt+M")}
+    fa_new = app.altgr_free_key("g_area", "Ctrl+Alt+D", app.clean_keys({}))
+    if fa:
+        u.UnloadKeyboardLayout(fa)
+    app._ALTGR_SEEN.clear()
+    check("Persian (Standard): which default keys type a letter, and the new key", bool(fa), f"{fa_keys} -> g_area {fa_new}", hard=False)
     check("Ctrl+Alt+S is held on an English keyboard", before is False, str(before))
     check("with a Polish keyboard Ctrl+Alt+S (ś) is a letter, Ctrl+Alt+D and F keys are not", bool(pl) and with_pl == (True, False, False),
           f"{bool(pl)} {with_pl}", hard=False)
