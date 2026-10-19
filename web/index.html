@@ -836,6 +836,7 @@ details.more .rate-box{border:0;padding:0}
 .keylist{display:flex;flex-direction:column;gap:2px;margin-top:6px}
 .krow{display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 10px;padding:5px 0;border-bottom:1px solid var(--border)}
 .krow .ktext{font-size:.92rem}
+.krow .kwhen{display:block;color:var(--text-2);font-size:.78rem}
 .kbtn{font:inherit;font-size:.86rem;font-family:var(--mono);min-width:118px;padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);cursor:pointer;direction:ltr}
 .kbtn:hover{border-color:var(--accent)}
 .kbtn.none{color:var(--text-2);font-style:italic}
@@ -2015,7 +2016,8 @@ function renderKeysPane(){
   $("#hkOn").checked = c.hotkeys !== "off";
   $("#keysGlobBox").classList.toggle("off", c.hotkeys === "off");
   for(const [scope, box] of [["window", $("#keysWin")], ["global", $("#keysGlob")]]){
-    const html = keyRows(scope).map(a => `<div class="krow" data-id="${a.id}"${a.part ? ` data-part="${a.part}"` : ""}><span class="ktext">${esc(a.text)}</span>`
+    const WHEN = {meeting: "during a meeting", overlay: "while the see-through window is on", busy: "during a meeting or with the see-through window on"};
+    const html = keyRows(scope).map(a => `<div class="krow" data-id="${a.id}"${a.part ? ` data-part="${a.part}"` : ""}><span class="ktext">${esc(a.text)}${WHEN[a.when] ? `<small class="kwhen">${WHEN[a.when]}</small>` : ""}</span>`
       + `<button class="kbtn" type="button" title="Click, then press the new keys (Esc: keep it · Backspace: no key)"></button><span class="kerr" role="alert"></span></div>`).join("");
     if(box.dataset.filled !== html){ box.innerHTML = html; box.dataset.filled = html; box.querySelectorAll(".kbtn").forEach(b => b.onclick = () => startKeyCap(b.closest(".krow").dataset.id)); }
     box.querySelectorAll(".krow").forEach(r => {
@@ -2052,7 +2054,7 @@ document.addEventListener("keydown", async ev => {    // (first: a key being cho
   else if(!combo){ if(err) err.textContent = "This key cannot be used. Try a letter, a number, an F key or an arrow, with Ctrl, Alt or Shift."; return; }
   S.keySaving = true;
   let r; try{ r = await api("set_key", {action: id, key: combo}); } finally{ S.keySaving = false; }
-  if(r.ok && r.config){ S.cfg = r.config; endKeyCap(); applyConfig(); }
+  if(r.ok && r.config){ S.cfg = r.config; if(S.keyCap === id) endKeyCap(); applyConfig(); }   // (another row may be waiting now)
   else { if(err) err.textContent = r.error || "It could not be saved."; if(S.keyCap === id) api("keys_pause", {on: true}); }
 }, true);
 document.addEventListener("mousedown", ev => { if(S.keyCap && !ev.target.closest(".kbtn")) endKeyCap(); }, true);
@@ -3283,7 +3285,7 @@ function renderAnswer(){
     const tried = [...S.entries.values()].filter(x => x.ans_state && !["off", "none"].includes(x.ans_state)).sort((a, b) => a.t0 - b.t0).pop();
     const failed = !thinking && tried && tried.ans_state === "error";
     const thinkScr = [...S.entries.values()].some(x => x.ans_state === "thinking" && x.source === "screen");
-    const html = failed && tried.source === "screen" ? `<div class="answer-empty">${icon("alert")}<b>The screen could not be read</b><span>${clock(tried.t0)} · press <b>Not read · read again</b> on its line${keyText("screen") ? " or " + kbd("screen") : ""}. The log (bottom right) says why.</span></div>`
+    const html = failed && tried.source === "screen" ? `<div class="answer-empty">${icon("alert")}<b>The screen could not be read</b><span>${clock(tried.t0)} · ${OVERLAY ? (keyText("g_screen") ? "press " + kbd("g_screen") + " to read it again" : "read it again from the program's window") : "press <b>Not read · read again</b> on its line" + (keyText("screen") ? " or " + kbd("screen") : "")}. The log (bottom right) says why.</span></div>`
       : failed ? `<div class="answer-empty">${icon("alert")}<b>The answer could not be written</b><span>${esc(label(tried.source, tried.speaker))} · ${clock(tried.t0)}: “${esc((tried.question || tried.text).slice(0, 120))}”<br>${keyText("answer") ? `Press ${kbd("answer")} to try again.` : "Press Answer now to try again."} The log (bottom right) says why.</span></div>`
       : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>${thinkScr ? "Reading the screen…" : "Writing an answer…"}</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
       : OVERLAY ? ovIdle()
@@ -3438,9 +3440,9 @@ function checkSel(){
   if(!art || art.classList.contains("pending") || !list.contains(art) || art.dataset.editing){ hideSel(); return; }
   S.sel = {id: +art.id.slice(1), text: txt.slice(0, 600)};
   const r = range.getBoundingClientRect();
-  selPop.querySelector('[data-a="answer"]').hidden = !featOn("answers");
+  selPop.querySelector('[data-a="answer"]').hidden = !featOn("answers") || art.classList.contains("screen");   // (its answer came from the picture)
   selPop.querySelector('[data-a="explain"]').hidden = !featOn("translate");      // (the meaning belongs to Translation)
-  if(!featOn("answers") && !featOn("translate")){ hideSel(); return; }       // nothing to offer
+  if((!featOn("answers") || art.classList.contains("screen")) && !featOn("translate")){ hideSel(); return; }       // nothing to offer
   selPop.hidden = false;
   const w = selPop.offsetWidth, h = selPop.offsetHeight;
   const x = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
@@ -4838,7 +4840,7 @@ document.addEventListener("keydown", ev => {
   const act = winAction(ev);
   // in a text box only F keys and keys with Alt act (Space, Ctrl+arrows … are for the text there)
   // (Ctrl+Alt together is AltGr on many keyboards: in a text box it types a letter, it is never a key of ours)
-  const altGr = ev.ctrlKey && ev.altKey || (ev.getModifierState && ev.getModifierState("AltGraph"));
+  const altGr = !/^F\d/.test(ev.code || "") && (ev.ctrlKey && ev.altKey || (ev.getModifierState && ev.getModifierState("AltGraph")));
   if(act && !(textBoxFocused() && ((!/^F\d/.test(ev.code || "") && !ev.altKey) || altGr))){
     if(ev.repeat && !KEY_REPEATS.includes(act)){ ev.preventDefault(); return; }
     if(runKey(act, ev) !== false){ ev.preventDefault(); return; }

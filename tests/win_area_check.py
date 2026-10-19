@@ -438,6 +438,21 @@ try:
             held.append(combo)
             u.UnregisterHotKey(None, i)
     check("keys of Setup › Keys can be held from any program", len(held) == 4, ", ".join(held))
+
+    # 10. a key that types a letter with AltGr (Polish Ctrl+Alt+S = ś) is not held
+    u.LoadKeyboardLayoutW.argtypes = [wt.LPCWSTR, wt.UINT]
+    u.LoadKeyboardLayoutW.restype = ctypes.c_void_p
+    u.UnloadKeyboardLayout.argtypes = [ctypes.c_void_p]
+    before = app.combo_types_text("Ctrl+Alt+S")
+    pl = u.LoadKeyboardLayoutW("00000415", 0x80)                # Polish (programmers), without telling the shell
+    app._ALTGR_SEEN.clear()
+    with_pl = (app.combo_types_text("Ctrl+Alt+S"), app.combo_types_text("Ctrl+Alt+D"), app.combo_types_text("Ctrl+Alt+F11"))
+    if pl:
+        u.UnloadKeyboardLayout(pl)
+    app._ALTGR_SEEN.clear()
+    check("Ctrl+Alt+S is held on an English keyboard", before is False, str(before))
+    check("with a Polish keyboard Ctrl+Alt+S (ś) is a letter, Ctrl+Alt+D and F keys are not", bool(pl) and with_pl == (True, False, False),
+          f"{bool(pl)} {with_pl}", hard=False)
     a.closing.set()
 except Exception as e:
     import traceback

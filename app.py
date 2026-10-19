@@ -505,11 +505,11 @@ def combo_problem(action, combo):
         return f"{combo} is kept for moving the see-through window."
     if info["scope"] == "global":
         if fkey:
-            if combo in ("F1", "F10", "Shift+F10"):
+            if combo in ("F1", "F10", "Shift+F10", "Ctrl+F4", "Ctrl+F6"):
                 return f"{combo} belongs to every program (help, menu): choose another F key or add Ctrl or Alt."
-        elif len(mods) < 2 or not ({"Ctrl", "Alt"} & mods):
-            return ("A key from any program needs two of Ctrl, Alt and Shift (for example Ctrl+Alt+S), or an F key: "
-                    "otherwise it would stop working in every other program.")
+        elif len(mods) < 2 or "Alt" not in mods:
+            return ("A key from any program needs Alt and Ctrl or Shift (for example Ctrl+Alt+S), or an F key: "
+                    "otherwise it would stop working in every other program (Ctrl+Shift keys belong to Teams, Zoom …).")
     elif not fkey and key != "Space" and not ({"Ctrl", "Alt"} & mods):
         return "Use an F key, Space, or a key with Ctrl or Alt: otherwise it could not be typed in the text boxes."
     elif key == "Space" and mods:
@@ -551,6 +551,47 @@ def clean_keys(raw, shift=False):
             used.setdefault(c, a)
         out[a] = c
     return {a: out[a] for a in KEY_IDS}
+
+
+_ALTGR_SEEN = {}
+
+
+def combo_types_text(combo):
+    """True when this key types a letter on one of the keyboard layouts on this computer: Ctrl+Alt is AltGr on many
+    layouts (Polish Ctrl+Alt+S = ś). Such a key is not held from any program - the letter must stay typeable, and a
+    letter typed in a chat must never take a picture of the screen. Windows only."""
+    parts = combo.split("+")
+    if sys.platform != "win32" or not {"Ctrl", "Alt"} <= set(parts[:-1]) or re.fullmatch(r"F\d{1,2}", parts[-1]):
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+        u = ctypes.windll.user32
+        u.GetKeyboardLayoutList.argtypes = [ctypes.c_int, ctypes.c_void_p]
+        u.MapVirtualKeyExW.argtypes = [wt.UINT, wt.UINT, ctypes.c_void_p]
+        u.ToUnicodeEx.argtypes = [wt.UINT, wt.UINT, ctypes.c_void_p, wt.LPWSTR, ctypes.c_int, wt.UINT, ctypes.c_void_p]
+        n = u.GetKeyboardLayoutList(0, None)
+        layouts = (ctypes.c_void_p * max(1, n))()
+        n = u.GetKeyboardLayoutList(n, layouts)
+        key = (combo, tuple(layouts[:n]))
+        if key in _ALTGR_SEEN:
+            return _ALTGR_SEEN[key]
+        vk = combo_vk(combo)[1]
+        state = (ctypes.c_ubyte * 256)()
+        for v in (0x11, 0x12, 0xA2, 0xA5) + ((0x10, 0xA0) if "Shift" in parts else ()):
+            state[v] = 0x80                                 # Ctrl, Alt (= AltGr), and Shift when it is part of the key
+        types = False
+        for hkl in layouts[:n]:
+            buf = ctypes.create_unicode_buffer(8)
+            r = u.ToUnicodeEx(vk, u.MapVirtualKeyExW(vk, 0, hkl), state, buf, 8, 0x4, hkl)   # (0x4: no state change)
+            if r < 0 or (r > 0 and any(ch.isprintable() and not ch.isspace() for ch in buf.value[:r])):
+                types = True
+                break
+        _ALTGR_SEEN[key] = types
+        return types
+    except Exception as e:
+        log("keyboard layout check:", short(e, 100), level="debug")
+        return False
 
 
 def key_conflict(keys, action, combo):
@@ -715,6 +756,60 @@ def last_input_tick():
         return li.dwTime if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li)) else None
     except Exception:
         return None
+
+
+APP_TITLE_RE = re.compile(r"Meeting Assistant \d+(\.\d+)*")
+
+
+def own_main_windows(find):
+    """This program's normal window(s): the app window has exactly the page's title ("Meeting Assistant 6.37"; a
+    folder or a browser tab with that name has another title), the hidden window ("Notes") belongs to this program's
+    process or to a process of the same program file (a second start opens it)."""
+    import ctypes
+    from ctypes import wintypes as wt
+    u, k = ctypes.windll.user32, ctypes.windll.kernel32
+    u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    u.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    k.OpenProcess.restype = wt.HANDLE
+    k.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    k.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)]
+    k.CloseHandle.argtypes = [wt.HANDLE]
+    ours = {os.getpid()} | {p.pid for p in list(HIDDEN_PROC)}
+    me = os.path.normcase(os.path.abspath(sys.executable))
+
+    def same_program(h):
+        d = wt.DWORD()
+        u.GetWindowThreadProcessId(h, ctypes.byref(d))
+        if d.value in ours:
+            return True
+        hp = k.OpenProcess(0x1000, False, d.value)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not hp:
+            return False
+        try:
+            buf, n = ctypes.create_unicode_buffer(1024), wt.DWORD(1024)
+            return bool(k.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(n))) and \
+                os.path.normcase(os.path.abspath(buf.value)) == me
+        finally:
+            k.CloseHandle(hp)
+    out = []
+    for h in find(lambda t: bool(APP_TITLE_RE.fullmatch(t)) or t == "Notes"):
+        buf = ctypes.create_unicode_buffer(260)
+        u.GetWindowTextW(h, buf, 260)
+        if APP_TITLE_RE.fullmatch(buf.value) or (buf.value == "Notes" and same_program(h)):
+            out.append(h)
+    return out
+
+
+def for_prompt(rows):
+    """Lines for an AI request: a question read from the screen is shortened, one still being read left out."""
+    out = []
+    for r in rows:
+        if r.get("source") == "screen":
+            if r.get("ans_state") != "done":
+                continue
+            r = dict(r, text=short_text(r.get("text"), 300))
+        out.append(r)
+    return out
 
 
 def short_text(t, n):
@@ -6395,7 +6490,8 @@ def screen_prompt(c):
             + (f"\n{extra}" if extra else "") + glossary_note(c))
 
 
-_SCREEN_MARK = re.compile(r"^\s*#*\s*\**\s*@@\s*([A-Za-z]+)(?:\*\*)?\s*:?(?:\*\*)?\s*(.*)$")
+_SCREEN_MARK = re.compile(r"^\s*#*\s*\**\s*@@\s*(" + "|".join(SCREEN_PARTS) + r")(?![A-Za-z0-9_.])(?:\*\*)?\s*:?(?:\*\*)?\s*(.*)$",
+                          re.I)                          # (@@ROWCOUNT, @@global.x … of SQL stay text)
 
 
 def parse_screen(text):
@@ -6405,20 +6501,20 @@ def parse_screen(text):
     out = {k.lower(): "" for k in SCREEN_PARTS}
     t = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = t.split("\n")
-    full = [ln for ln in lines if ln.strip()]
-    if len(full) >= 2 and full[0].strip().startswith("```") and full[-1].strip() == "```" \
-            and any(_SCREEN_MARK.match(ln) for ln in full[1:-1]):
-        lines = full[1:-1]                               # (the whole reply put in one code block)
-    if lines and lines[-1].strip() and re.fullmatch(r"[\s*#@:]*(@@\s*[A-Za-z]*)?[\s*:]*", lines[-1]):
-        lines.pop()                                      # (a marker or a bold mark still being written, or empty)
+    idx = [i for i, ln in enumerate(lines) if ln.strip()]
+    if len(idx) >= 2 and lines[idx[0]].strip().startswith("```") and lines[idx[-1]].strip() == "```":
+        marks = [i for i in idx if _SCREEN_MARK.match(lines[i])]
+        if marks and not any(lines[i].strip().startswith("```") for i in idx[1:] if i < marks[0]):
+            lines = lines[idx[0] + 1:idx[-1]]            # (the whole reply put in one code block)
+    if lines and lines[-1].strip():
+        m = re.fullmatch(r"[\s*#:]*@?(@\s*([A-Za-z]*))?[\s*:]*", lines[-1])
+        if m and (not m.group(2) or any(p_.startswith(m.group(2).upper()) for p_ in SCREEN_PARTS)):
+            lines.pop()                                  # (one of our markers, or a bold mark, still being written)
     parts, pre, cur, found = {k.lower(): [] for k in SCREEN_PARTS}, [], None, False
     for ln in lines:
         m = _SCREEN_MARK.match(ln)
         if m:
-            name = m.group(1).upper()
-            if name not in SCREEN_PARTS:
-                continue                                 # (a marker the program does not know: left out)
-            cur, found = name.lower(), True
+            cur, found = m.group(1).lower(), True
             if parts[cur]:
                 parts[cur].append("")                    # (the same part again: a blank line between)
             if m.group(2).strip():
@@ -7073,7 +7169,8 @@ class Session:
         """(question, answer) pairs suggested earlier in this meeting, oldest first."""
         rows = [e for e in self.ordered() if e["t0"] < before_t0 and e["id"] != exclude and e.get("answer")
                 and e.get("ans_state") == "done"]
-        return [((e.get("question") or e["text"]), e["answer"]) for e in rows[-n:]]
+        return [((e.get("question") or e["text"]), e["answer"]) if e["source"] != "screen" else
+                (short_text(e["text"], 300), short_text(e["answer"], 600)) for e in rows[-n:]]
 
     def recent(self, source, since):
         return [e for e in self.ordered() if e["source"] == source and e["t0"] >= since]
@@ -8794,7 +8891,7 @@ class Engine:
         return d if isinstance(d, dict) else None
 
     def _coach_run(self):
-        rows = self.session.ordered()[-16:]
+        rows = for_prompt(self.session.ordered()[-16:])
         if not any(r["source"] == "them" for r in rows):
             return
         c = self.cfg
@@ -8881,7 +8978,7 @@ class Engine:
     def coach_help(self, ask=""):
         """The user pressed the help key (or typed a question): advice for right now, with the whole meeting in mind."""
         c = self.cfg
-        rows = self.session.ordered()[-40:]
+        rows = for_prompt(self.session.ordered()[-40:])
         lines = "\n".join(f"{self.session.label(r)}: {short(r['text'], 300)}" for r in rows) or "(nothing said yet)"
         nt = {k: v for k, v in self.notes.items()}
         chk = self.current_check()
@@ -10179,7 +10276,7 @@ class Engine:
         rows = self.session.ordered()
         if eid is not None:
             target = next((r for r in rows if r["id"] == eid), None)
-            if target and target["source"] == "screen" and not text:
+            if target and target["source"] == "screen":
                 return False                                 # (its answer came from the picture: Read my screen again)
             question = (text or target["text"]) if target else None
         else:
@@ -10291,6 +10388,7 @@ class Engine:
         return self._submit(self._summary, rows)
 
     def _summary(self, rows):
+        rows = for_prompt(rows)
         c = self.cfg
         pub = lambda **kw: self.hub.publish("summary", session_file=self.session.path, **kw)
         lines = [f"{'★ ' if r.get('marked') else ''}{self.session.label(r)}: {r['text']}" for r in rows]
@@ -10557,7 +10655,7 @@ class Engine:
         pub = lambda **kw: self.hub.publish("notes_full", session_file=s.path, **kw)
         ml = c["my_language"]
         mine = s.my_notes.strip()
-        lines = [f"{'★ ' if r.get('marked') else ''}{s.label(r)}: {r['text']}" for r in rows]
+        lines = [f"{'★ ' if r.get('marked') else ''}{s.label(r)}: {r['text']}" for r in for_prompt(rows)]
         text = "\n".join(lines)
         if len(text) > 24000:                               # the newest part counts most; very long meetings are cut
             text = "…\n" + text[-24000:]
@@ -12823,6 +12921,9 @@ class App:
         eng = self.helper()
         if not eng:
             return {"ok": False, "error": "Start the meeting first."}
+        line = eng.session.get(entry_id) if isinstance(entry_id, int) else None
+        if line and line.get("source") == "screen":
+            return {"ok": False, "error": "This line was read from the screen: read it again (Read my screen) for a new answer."}
         if not eng.answer_now(entry_id, (text or "").strip()[:600] or None):
             return {"ok": False, "error": "Nothing has been said yet."}
         return {"ok": True}
@@ -13076,6 +13177,9 @@ class App:
                 return {"ok": False, "error": "This key cannot be used. Use letters, numbers, F1–F24, arrows, Page Up / "
                                               "Down, Home, End, Insert, Delete or Space, with Ctrl, Alt or Shift."}
             why = combo_problem(action, combo)
+            if not why and KEY_INFO[action]["scope"] == "global" and combo_types_text(combo):
+                why = (f"{combo} types a letter on your keyboard (AltGr), so it cannot be held from any program. "
+                       "Choose an F key or Alt+Shift+… instead.")
             if why:
                 return {"ok": False, "error": why}
             other = key_conflict(self.cfg["keys"], action, combo)
@@ -13135,26 +13239,7 @@ class App:
                     if u.IsWindow(h) and u.IsIconic(h):
                         u.ShowWindow(h, 9)                     # SW_RESTORE
                 return []
-            u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
-            ours = {os.getpid()} | {p.pid for p in list(HIDDEN_PROC)}
-
-            def pid(h):
-                d = wt.DWORD()
-                u.GetWindowThreadProcessId(h, ctypes.byref(d))
-                return d.value
-            # this program's windows only: its app window has exactly the page's title ("Meeting Assistant 6.37" -
-            # a folder named Meeting Assistant or a browser tab has another one); the hidden window is ours by process
-            app_title = re.compile(r"Meeting Assistant \d+(\.\d+)*")
-            found = self.overlay.find(lambda t: bool(app_title.fullmatch(t)) or t == "Notes")
-            u.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
-            mine = []
-            for h in found:
-                if u.IsIconic(h):
-                    continue
-                buf = ctypes.create_unicode_buffer(260)
-                u.GetWindowTextW(h, buf, 260)
-                if app_title.fullmatch(buf.value) or (buf.value == "Notes" and pid(h) in ours):
-                    mine.append(h)
+            mine = [h for h in own_main_windows(self.overlay.find) if not u.IsIconic(h)]
             for h in mine:
                 u.ShowWindow(h, 6)                             # SW_MINIMIZE
             if mine:
@@ -13291,6 +13376,7 @@ class App:
                 t = (e or {}).get("text") or ""
                 live._publish(eid, ans_state="error", text=t if t and t != wait else "Reading the screen failed",
                               tr_state="off" if not (e or {}).get("translation") else "done")
+                live.session.save_if_dirty(final=live.stop_event.is_set() or not self.running)
             except Exception:
                 pass
         self.hub.publish("screen", state="error", text="", note=note, meeting=live is not None)
@@ -13957,8 +14043,13 @@ class App:
                         u.UnregisterHotKey(None, 9000 + i)
                     else:
                         bad.append(combo)
-                add("Keys from any program", "ok" if not bad else "warn",
-                    "free" if not bad else "used by another program: " + ", ".join(bad) + ". Choose others in Setup › Keys.")
+                letters = [k for k in bad if combo_types_text(k)]
+                bad = [k for k in bad if k not in letters]
+                add("Keys from any program", "ok" if not (bad or letters) else "warn",
+                    "free" if not (bad or letters) else "; ".join(x for x in (
+                        bad and "used by another program: " + ", ".join(bad),
+                        letters and "type a letter on your keyboard (AltGr), not used: " + ", ".join(letters)) if x)
+                    + ". Choose others in Setup › Keys.")
             try:
                 dev = list_devices()
                 if dev.get("error"):
@@ -16986,13 +17077,16 @@ class Overlay:
             from ctypes import wintypes as wt
             u = self.user32()
             u.IsIconic.argtypes = [wt.HWND]
-            mains = self.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes") and OV_TITLE not in t)
+            mains = own_main_windows(self.find)
             if not mains:
                 return
             if since is not None and last_input_tick() != since:
-                u.FlashWindow.argtypes = [wt.HWND, wt.BOOL]
-                u.FlashWindow(mains[0], True)
-                log("Read my screen: the result is in the window (it blinks in the taskbar)")
+                class FLASHWINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", wt.UINT), ("hwnd", wt.HWND), ("dwFlags", wt.DWORD), ("uCount", wt.UINT),
+                                ("dwTimeout", wt.DWORD)]
+                fi = FLASHWINFO(ctypes.sizeof(FLASHWINFO), mains[0], 0x2 | 0xC, 0, 0)   # taskbar, until it is opened
+                u.FlashWindowEx(ctypes.byref(fi))
+                log("Read my screen: the result is in the window (its taskbar button blinks)")
                 return
             for m in mains:
                 if u.IsIconic(m):
@@ -17114,6 +17208,15 @@ class Overlay:
                 if i in held or time.time() - failed.get((a, combo), -1e9) < 30:
                     continue                                       # (a key another program holds: tried again in 30 s)
                 mods, vk = combo_vk(combo)
+                if combo_types_text(combo):                      # (AltGr: that key is a letter on this keyboard)
+                    if (a, combo) not in failed:
+                        note = (f"{combo} types a letter on your keyboard (AltGr), so it is not used for "
+                                f"“{KEY_INFO[a]['text'].lower()}” — the letter stays typeable. Choose another key in "
+                                "Setup › Keys (an F key, or Alt+Shift+…).")
+                        log(note, level="warn")
+                        self.app.hub.toast("warn", note)
+                    failed[(a, combo)] = time.time()
+                    continue
                 if u.RegisterHotKey(None, i, mods | (0 if a in self.KEY_REPEAT else 0x4000), vk):
                     held[i] = (a, combo)
                     failed.pop((a, combo), None)

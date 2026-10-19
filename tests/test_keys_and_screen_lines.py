@@ -57,7 +57,7 @@ def test_set_key_api(app):
         r = a.api_set_key(action="g_screen", key="F9")
         assert not r["ok"] and "Start the meeting" in r["error"]
         r = a.api_set_key(action="g_screen", key="Q")
-        assert not r["ok"] and "two of Ctrl, Alt and Shift" in r["error"]
+        assert not r["ok"] and "needs Alt" in r["error"]
         assert not a.api_set_key(action="g_mark", key="Ctrl+S")["ok"]       # one modifier: not from any program
         assert not a.api_set_key(action="g_mark", key="Ctrl+Alt+Shift+M")["ok"]   # the overlay's spare move key
         assert not a.api_set_key(action="answer", key="Alt+Space")["ok"]
@@ -327,3 +327,29 @@ def test_screen_lines_are_not_speech(app):
     s.save_if_dirty()
     rows = app.parse_meeting_md(open(s.path, encoding="utf-8").read())
     assert [r for r in rows if r[0] == "line" and r[2] == "Screen"][0][3].startswith("Q\nx")   # rows kept in one line
+
+
+def test_sql_variables_and_code_blocks_survive(app):
+    P = app.parse_screen
+    r = P("@@QUESTION\nWhat does it return?\n@@ANSWER\n@@ROWCOUNT returns the number of rows affected.\nUse it after DML.")
+    assert r["answer"] == "@@ROWCOUNT returns the number of rows affected.\nUse it after DML."
+    assert P("@@ANSWER\nThe function is\n@@IDENTITY")["answer"] == "The function is\n@@IDENTITY"
+    assert P("@@ANSWER\n@@global.sql_mode shows the mode")["answer"] == "@@global.sql_mode shows the mode"
+    assert P("```\n@@QUESTION\nQ\n@@ANSWER\nPara one.\n\nPara two.\n```")["answer"] == "Para one.\n\nPara two."
+    two = P("```python\nx=1\n```\n@@ANSWER\nfoo\n```js\nbar\n```")
+    assert two["answer"] == "foo\n```js\nbar\n```"                       # (not one block around the whole reply)
+    assert P("@@QUESTION\nQ\n@@ANS")["question"] == "Q" and P("@@ANSWER\nThe options are:")["answer"] == "The options are:"
+
+
+def test_screen_lines_in_prompts_are_short_and_finished(app):
+    rows = [{"source": "them", "text": "x" * 500, "ans_state": "none"},
+            {"source": "screen", "text": "y" * 900, "ans_state": "done"},
+            {"source": "screen", "text": "Reading the whole screen…", "ans_state": "thinking"}]
+    out = app.for_prompt(rows)
+    assert len(out) == 2 and len(out[0]["text"]) == 500 and len(out[1]["text"]) <= 300 and rows[1]["text"] == "y" * 900
+
+
+def test_global_keys_need_alt(app):
+    assert app.combo_problem("g_mark", "Ctrl+Shift+M") != ""            # (Teams' mute)
+    assert app.combo_problem("g_mark", "Alt+Shift+M") == "" and app.combo_problem("g_mark", "Ctrl+F4") != ""
+    assert app.combo_types_text("Ctrl+Alt+S") is False                  # (not on Windows here: never)
