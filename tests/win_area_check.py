@@ -397,25 +397,36 @@ try:
     notes = tk.Toplevel(root)
     notes.title("Notes")
     notes.geometry("300x200+850+150")
+    appwin = tk.Toplevel(root)
+    appwin.title("Meeting Assistant 6.37")
+    appwin.geometry("300x200+850+400")
+    folder = tk.Toplevel(root)
+    folder.title("Meeting Assistant")                      # (like a folder with that name: not ours to move)
+    folder.geometry("300x200+500+400")
     pump(0.8)
     u.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
     u.FindWindowW.restype = wt.HWND
     u.IsIconic.argtypes = [wt.HWND]
     nh = u.FindWindowW(None, "Notes")
-    seen_iconic = []
+    ah = u.FindWindowW(None, "Meeting Assistant 6.37")
+    fh = u.FindWindowW(None, "Meeting Assistant")
+    seen_iconic, others = [], []
     real_grab = app.grab_rect
-    app.grab_rect = lambda r: (seen_iconic.append(bool(u.IsIconic(nh))), real_grab(r))[1]
+    app.grab_rect = lambda r: (seen_iconic.append(bool(u.IsIconic(nh))), others.append((bool(u.IsIconic(ah)), bool(u.IsIconic(fh)))), real_grab(r))[2]
     a.cfg["screen_area_mode"] = "screen"
     a.overlay.show_main = lambda since=None: None
     job()
     pump(0.8)
     check("its own window is minimized while the picture is taken", bool(nh) and seen_iconic == [True], f"{nh} {seen_iconic}")
     check("and comes back afterwards", bool(nh) and not u.IsIconic(nh), str(bool(nh and u.IsIconic(nh))))
+    check("its app window steps aside too, a folder with the same name does not", others[:1] == [(True, False)], str(others))
     seen_iconic.clear()
     job(now=True, from_key=True)
     check("from another program it stays where it is", seen_iconic == [False], str(seen_iconic))
     app.grab_rect = real_grab
     notes.destroy()
+    appwin.destroy()
+    folder.destroy()
 
     # 9. keys from any program: the keys of Setup › Keys can be held (and given back)
     u.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]

@@ -13142,9 +13142,19 @@ class App:
                 d = wt.DWORD()
                 u.GetWindowThreadProcessId(h, ctypes.byref(d))
                 return d.value
-            # this program's windows only (a folder or browser tab with the same name is not touched)
-            mine = [h for h in self.overlay.find(lambda t: (t.startswith("Meeting Assistant") or t == "Notes")
-                                                  and OV_TITLE not in t) if not u.IsIconic(h) and pid(h) in ours]
+            # this program's windows only: its app window has exactly the page's title ("Meeting Assistant 6.37" -
+            # a folder named Meeting Assistant or a browser tab has another one); the hidden window is ours by process
+            app_title = re.compile(r"Meeting Assistant \d+(\.\d+)*")
+            found = self.overlay.find(lambda t: bool(app_title.fullmatch(t)) or t == "Notes")
+            u.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+            mine = []
+            for h in found:
+                if u.IsIconic(h):
+                    continue
+                buf = ctypes.create_unicode_buffer(260)
+                u.GetWindowTextW(h, buf, 260)
+                if app_title.fullmatch(buf.value) or (buf.value == "Notes" and pid(h) in ours):
+                    mine.append(h)
             for h in mine:
                 u.ShowWindow(h, 6)                             # SW_MINIMIZE
             if mine:
