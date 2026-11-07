@@ -27,6 +27,7 @@ class FakeOpenAILive:
         self.auth = None
         self.audio_bytes = 0
         self.commits = 0
+        self.pings = 0
         self.sock = socket.socket()
         self.sock.bind(("127.0.0.1", 0))
         self.sock.listen(5)
@@ -122,6 +123,10 @@ class FakeOpenAILive:
             op, data = self._recv_frame(conn)
             if op == 0x8:
                 return
+            if op == 0x9:                                    # ping -> pong
+                self.pings += 1
+                conn.sendall(bytes([0x8A, len(data)]) + data)
+                continue
             event = json.loads(data)
             if event["type"] == "session.update":
                 self.session = event["session"]
@@ -166,7 +171,7 @@ def test_session_for_the_live_model_and_for_the_gpt4o_models(app):
     inp = s["audio"]["input"]
     assert s["type"] == "transcription"
     assert inp["format"] == {"type": "audio/pcm", "rate": 24000}
-    assert inp["transcription"] == {"model": "gpt-live-transcribe", "delay": "low", "languages": ["de"]}
+    assert inp["transcription"] == {"model": "gpt-live-transcribe", "delay": "low", "languages": ["de"], "keywords": ["OSPF"]}
     assert inp["turn_detection"]["type"] == "server_vad"
     s = app.openai_live_session("gpt-4o-mini-transcribe", "en", ["OSPF", "RMAN"])
     assert s["audio"]["input"]["transcription"] == {"model": "gpt-4o-mini-transcribe", "language": "en",
@@ -274,15 +279,29 @@ def test_silence_is_not_sent_after_two_seconds(app):
         server.close()
 
 
-def test_stop_finishes_quietly(app):
+def test_stop_finishes_quietly_and_commits_the_last_words(app):
     server = FakeOpenAILive(sentences=[])
     lv, _, _, failed = _open(app, server)
     lv.feed(tone(0.3), 16000)
     assert _wait(lambda: server.audio_bytes > 0)
     lv.stop()
     assert _wait(lambda: not lv.thread.is_alive(), 8)
+    assert server.commits == 1                       # (the empty-buffer answer is harmless)
     assert not failed
     server.close()
+
+
+def test_a_quiet_line_is_kept_alive_with_pings(app):
+    server = FakeOpenAILive(sentences=[])
+    lv, _, _, failed = _open(app, server)
+    try:
+        lv.feed(tone(0.2), 16000)
+        assert _wait(lambda: server.pings >= 1, 10)   # nothing to send for 4 s: a ping goes out
+        assert not lv._idle_check(30) and lv._idle_check(46)
+        assert not failed and lv.ok
+    finally:
+        lv.stop()
+        server.close()
 
 
 def test_a_rejected_key_fails_with_its_reason(app):
@@ -312,7 +331,8 @@ def test_open_words_are_kept_when_the_connection_breaks(app):
     lv = app.OpenAILive.__new__(app.OpenAILive)
     lv.__dict__.update(source="them", sid=1, utt=0, sent=3.0, t_audio0=1000.0, break_pos=[0.0], break_off=[0.0],
                        items=app.collections.OrderedDict(), on_final=lambda *a: final.append(a),
-                       on_interim=lambda *a: None, speaking=False, ready=threading.Event())
+                       on_interim=lambda *a: None, speaking=False, ready=threading.Event(),
+                       done=app.collections.deque(maxlen=200))
     lv._handle({"type": "input_audio_buffer.speech_started", "item_id": "a", "audio_start_ms": 1000})
     lv._handle({"type": "conversation.item.input_audio_transcription.delta", "item_id": "a", "delta": "half a"})
     lv._flush()
@@ -320,6 +340,29 @@ def test_open_words_are_kept_when_the_connection_breaks(app):
     lv._handle({"type": "error", "error": {"code": "input_audio_buffer_commit_empty"}})   # harmless: ignored
     with pytest.raises(app.AuthError):
         lv._handle({"type": "error", "error": {"message": "You exceeded your current quota"}})
+    with pytest.raises(app.AuthError):                   # a setting it does not take: not retried every minute
+        lv._handle({"type": "error", "error": {"code": "invalid_value", "message": "Unsupported model"}})
+    with pytest.raises(app.Transient):
+        lv._handle({"type": "error", "error": {"code": "server_error", "message": "try again"}})
+
+
+def test_repeated_or_late_events_never_write_a_sentence_twice(app):
+    final, interim = [], []
+    lv = app.OpenAILive.__new__(app.OpenAILive)
+    lv.__dict__.update(source="them", sid=1, utt=0, sent=3.0, t_audio0=1000.0, break_pos=[0.0], break_off=[0.0],
+                       items=app.collections.OrderedDict(), on_final=lambda *a: final.append(a),
+                       on_interim=lambda *a: interim.append(a), speaking=False, ready=threading.Event(),
+                       done=app.collections.deque(maxlen=200))
+    done = {"type": "conversation.item.input_audio_transcription.completed", "item_id": "x", "transcript": "Hi."}
+    lv._handle(done)                                   # (no speech_started seen for it)
+    lv._handle(done)                                   # the same event again
+    lv._handle({"type": "conversation.item.input_audio_transcription.delta", "item_id": "x", "delta": "late"})
+    lv._handle({"type": "input_audio_buffer.speech_started", "item_id": "y", "audio_start_ms": 500})
+    lv._handle({"type": "conversation.item.input_audio_transcription.delta", "item_id": "y", "delta": "next"})
+    lv._flush()
+    assert [f[3] for f in final] == ["Hi.", "next"]
+    assert final[0][0] != final[1][0]                  # each sentence its own key
+    assert [i[2] for i in interim] == ["next"]
 
 
 def test_check_reports_the_time_to_a_ready_session(app):
