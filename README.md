@@ -23,7 +23,7 @@ you are asked a question.
 - Select words in any line to get them explained, or to get an answer about them
 - Stop and **continue** the same meeting later (Shift+F9), even after restarting the program
 - Meeting summary, and transcription of recorded audio / video files
-- Works with **Groq** (free API key), any **OpenAI-compatible** service, **Deepgram** live — or completely
+- Works with **Groq** (free API key), any **OpenAI-compatible** service, **Deepgram** or **OpenAI** live — or completely
   **offline**: a local Whisper model for speech to text and a local AI model (llama.cpp, `.gguf`) for translation
   and answers, both downloadable inside the program
 - Tools: post-meeting feedback, "help me say", read the screen, search past meetings, export (Word, subtitles, PDF), glossary, speaker separation, CV from a file
@@ -83,7 +83,7 @@ In **Setup › Meeting**:
 
 | Task | Options |
 |---|---|
-| Speech to text | Groq Whisper, any OpenAI-compatible `/audio/transcriptions`, Deepgram (live streaming), local faster-whisper model |
+| Speech to text | Groq Whisper, any OpenAI-compatible `/audio/transcriptions`, Deepgram or OpenAI (live streaming), local faster-whisper model |
 | Translation / answers | Groq, OpenAI, OpenRouter, Google Gemini, Cerebras, Mistral, any OpenAI-compatible chat service, or a local AI model (`.gguf`, llama.cpp) |
 
 Each task can use a different service; Groq can act as a backup when another service fails.

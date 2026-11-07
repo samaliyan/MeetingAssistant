@@ -1,4 +1,8 @@
-# Meeting Assistant — User Guide (version 6.38)
+# Meeting Assistant — User Guide (version 6.39)
+
+## Version 6.39
+
+- New live service: **OpenAI live**. With an OpenAI API key, the other side's words appear while they are spoken, like with Deepgram. See "Text while people are speaking" below.
 
 ## Version 6.38
 
@@ -1249,6 +1253,40 @@ Deepgram — LIVE speech to text
 ```
 Deepgram — LIVE
 ```
+
+#### OpenAI live (instead of Deepgram)
+
+The same LIVE method with an OpenAI API key (paid by use, no free credit).
+
+1. Create a key on the website below and copy it:
+
+```
+https://platform.openai.com/api-keys
+```
+
+2. In the app, in the services section, choose this option from the list and click the add button:
+
+```
+OpenAI live — LIVE speech to text
+```
+
+3. Paste the key and click the test button.
+
+4. In the speech-to-text row, choose this service:
+
+```
+OpenAI live — LIVE
+```
+
+5. The model is filled in by itself. You can pick another one in the model box next to it:
+
+```
+gpt-live-transcribe
+gpt-4o-transcribe
+gpt-4o-mini-transcribe
+```
+
+"Tell the other speakers apart" works with Deepgram only.
 
 ### Preview method (for Groq and other services)
 

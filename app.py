@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.38"
+VERSION = "6.39"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -290,6 +290,7 @@ PRESETS = {
     "cerebras":   {"name": "Cerebras", "base_url": "https://api.cerebras.ai/v1", "use_proxy": True},
     "mistral":    {"name": "Mistral", "base_url": "https://api.mistral.ai/v1", "use_proxy": True},
     "deepgram":   {"name": "Deepgram", "base_url": "https://api.deepgram.com/v1", "use_proxy": True, "kind": "live"},
+    "openai-live": {"name": "OpenAI live", "base_url": "https://api.openai.com/v1", "use_proxy": True, "kind": "live"},
     "custom":     {"name": "My service", "base_url": "", "use_proxy": True},
 }
 TASKS = {"stt": "Speech to text", "tr": "Translation", "ans": "Answers"}
@@ -1138,7 +1139,7 @@ def clean_providers(v):
                     "api_key": clean_key(p.get("api_key")),
                     "use_proxy": (p.get("use_proxy").strip().lower() in ("1", "true", "yes", "on")
                                   if isinstance(p.get("use_proxy"), str) else bool(p.get("use_proxy", True))),
-                    "kind": "live" if str(p.get("preset")) == "deepgram" else "openai",
+                    "kind": "live" if str(p.get("preset")) in ("deepgram", "openai-live") else "openai",
                     "models": [str(m)[:120] for m in (p.get("models") if isinstance(p.get("models"), list) else [])
                                if m][:500],
                     "caps": {k: v for k, v in p.get("caps").items() if k == "at" or isinstance(v, dict)}
@@ -2592,6 +2593,7 @@ BILLING_PAGES = {
     "groq": "https://console.groq.com/settings/limits", "openai": "https://platform.openai.com/settings/organization/billing",
     "openrouter": "https://openrouter.ai/settings/credits", "gemini": "https://aistudio.google.com/",
     "cerebras": "https://cloud.cerebras.ai/", "mistral": "https://console.mistral.ai/", "deepgram": "https://console.deepgram.com/",
+    "openai-live": "https://platform.openai.com/settings/organization/billing",
     "avalai": "https://avalai.ir/", "gapgpt": "https://gapgpt.app/",
 }
 
@@ -3248,6 +3250,8 @@ class DeepgramLive:
     on_fail(error)             - the connection broke; the program falls back to Groq
     """
 
+    USAGE_NAME = "Deepgram (live)"
+
     def __init__(self, source, key, model, language, proxy, on_interim, on_final, on_fail, terms=None, diarize=False):
         self.source, self.key, self.model, self.language, self.proxy = source, key, model, language, proxy
         self.terms, self.diarize = list(terms or []), bool(diarize)
@@ -3346,7 +3350,7 @@ class DeepgramLive:
             if self.usage_done:
                 return
             self.usage_done = True
-        record_usage("Deepgram (live)", requests=0, audio=self.sent)
+        record_usage(self.USAGE_NAME, requests=0, audio=self.sent)
         if self.skipped > 1:
             log(f"Live {self.source}: {self.skipped:.0f} s of silence were not sent (not billed)", level="debug")
 
@@ -3367,16 +3371,33 @@ class DeepgramLive:
             except Exception:
                 pass
 
+    # --- what differs between live services (the rest is shared) -------------------------------
+    def _connect(self):
+        return WSClient(deepgram_url(self.model, self.language, self.terms, self.diarize),
+                        {"Authorization": f"Token {self.key}"}, self.proxy)
+
+    def _idle_check(self, idle):
+        # audio is flowing but nothing came back for 25 s: the connection is dead even if nobody closed it
+        return (idle > 25 and self.paused_at is None
+                and time.time() - self.last_audio < 3 and not self.stop_event.is_set())
+
+    def _keepalive(self):
+        self.ws.send('{"type": "KeepAlive"}', text=True)
+
+    def _send_audio(self, pcm16k):
+        self.ws.send(pcm16k)
+
+    def _end_stream(self, rx):
+        """After the last audio: let the service finish and wait for the last words."""
+        self.ws.send('{"type": "CloseStream"}', text=True)
+        rx.join(timeout=5)                    # (the server closes when it is done)
+
     def _run(self):
         try:
-            self.ws = WSClient(deepgram_url(self.model, self.language, self.terms, self.diarize),
-                               {"Authorization": f"Token {self.key}"},
-                               self.proxy)
+            self.ws = self._connect()
         except Exception as e:
             return self._fail(e)
-        # audio is flowing but nothing came back for 25 s: the connection is dead even if nobody closed it
-        self.ws.idle_check = lambda idle: (idle > 25 and self.paused_at is None
-                                           and time.time() - self.last_audio < 3 and not self.stop_event.is_set())
+        self.ws.idle_check = self._idle_check
         rx = threading.Thread(target=self._receive, daemon=True, name=f"live-rx-{self.source}")
         rx.start()
         last_send = time.time()
@@ -3386,7 +3407,7 @@ class DeepgramLive:
                     chunk = self.q.get(timeout=0.3)
                 except queue.Empty:
                     if time.time() - last_send > 4:
-                        self.ws.send('{"type": "KeepAlive"}', text=True)
+                        self._keepalive()
                         last_send = time.time()
                     continue
                 if self.paused_at is not None:
@@ -3408,8 +3429,7 @@ class DeepgramLive:
                         except queue.Empty:
                             break
                         self._send_parts([item])
-                    self.ws.send('{"type": "CloseStream"}', text=True)
-                    rx.join(timeout=5)                    # ... and the last words are waited for (the server closes)
+                    self._end_stream(rx)                  # ... and the last words are waited for
                 except Exception:
                     pass
         except Exception as e:
@@ -3433,7 +3453,7 @@ class DeepgramLive:
             off = at - (self.sent + len(buf) / 32000)
             if abs(off - self.break_off[-1]) > 0.02:
                 if buf:
-                    self.ws.send(buf)
+                    self._send_audio(buf)
                     self.sent += len(buf) / 32000
                     buf = b""
                 if off - self.break_off[-1] > 1.0:
@@ -3442,7 +3462,7 @@ class DeepgramLive:
                 self.break_pos.append(self.sent)           #  without its offset)
             buf += pcm
         if buf:
-            self.ws.send(buf)
+            self._send_audio(buf)
             self.sent += len(buf) / 32000
 
     def _wall(self, t, end=False):
@@ -3549,6 +3569,321 @@ def deepgram_check(key, proxy, model="nova-3", language="auto", seconds=2.0):
     finally:
         ws.close()
     return connected
+
+
+# ---- OpenAI live speech to text (Realtime API, transcription session) -------------------------
+OPENAI_LIVE_MODELS = ["gpt-live-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+OPENAI_LIVE_RATE = 24000                    # the Realtime API takes 24 kHz 16-bit mono PCM
+PAC_OPENAI = "https://api.openai.com/"
+
+
+def openai_live_session(model, language=None, terms=None):
+    """The transcription session sent to OpenAI. The live model takes a delay and a list of languages;
+    the gpt-4o transcribe models take one language and a prompt (the user's technical words)."""
+    model = model or OPENAI_LIVE_MODELS[0]
+    tr = {"model": model}
+    if model.startswith("gpt-live"):
+        tr["delay"] = "low"
+        if language:
+            tr["languages"] = [language]
+        if terms:
+            tr["keywords"] = list(terms)[:40]          # the user's technical words
+    else:
+        if language:
+            tr["language"] = language
+        if terms:
+            tr["prompt"] = ", ".join(terms)[:400]
+    return {"type": "transcription",
+            "audio": {"input": {"format": {"type": "audio/pcm", "rate": OPENAI_LIVE_RATE},
+                                "transcription": tr,
+                                # the service ends a sentence after half a second of quiet
+                                "turn_detection": {"type": "server_vad", "threshold": 0.5,
+                                                   "prefix_padding_ms": 300, "silence_duration_ms": 500}}}}
+
+
+def openai_live_secret(key, base_url, proxy, session):
+    """A short-lived key bound to this transcription session (the real API key never goes on the stream)."""
+    api = GroqAPI(key, proxy, base_url or "https://api.openai.com/v1", "OpenAI")
+    try:
+        r = api.request("POST", "/realtime/client_secrets", json={"session": session},
+                        timeout=httpx.Timeout(15.0, connect=8.0))
+        body = r.json()
+    finally:
+        api.close()
+    secret = str(body.get("value") or "").strip() if isinstance(body, dict) else ""
+    if not secret or ((body.get("session") or {}).get("type") not in (None, "transcription")):
+        raise Transient("OpenAI did not open a live speech-to-text session.")
+    return secret
+
+
+def openai_live_url(base_url):
+    """wss://<host>/v1/realtime for the service address (ws:// only for a plain http:// address, e.g. a local
+    gateway)."""
+    u = urllib.parse.urlsplit(base_url or "https://api.openai.com/v1")
+    scheme = "ws" if u.scheme == "http" else "wss"
+    return f"{scheme}://{u.netloc or 'api.openai.com'}{(u.path or '/v1').rstrip('/')}/realtime"
+
+
+class Upsample24k:
+    """16 kHz -> 24 kHz (exactly 3 : 2) across chunks, so no click at the edge of each piece."""
+
+    STEP = 2.0 / 3.0
+
+    def __init__(self):
+        self.prev = None
+        self.pos = 0.0          # where the next output sample lies, in input samples from the next chunk's start
+
+    def __call__(self, pcm16k):
+        x = np.frombuffer(pcm16k, dtype="<i2").astype(np.float32)
+        if x.size == 0:
+            return b""
+        y, base = (x, 0) if self.prev is None else (np.concatenate(([self.prev], x)), 1)
+        start = self.pos + base
+        last = y.size - 1
+        n = int(np.floor((last - start) / self.STEP)) + 1 if last >= start else 0
+        out = np.interp(start + self.STEP * np.arange(n), np.arange(y.size), y)
+        self.pos = start + self.STEP * n - base - x.size
+        self.prev = x[-1]
+        return np.clip(np.round(out), -32768, 32767).astype("<i2").tobytes()
+
+
+class OpenAILive(DeepgramLive):
+    """OpenAI's live transcription over the Realtime API, with the same contract as DeepgramLive.
+
+    Sentences are cut by the service (server VAD). Each one is an "item": its words arrive as deltas
+    (shown at once) and then the finished transcript."""
+
+    USAGE_NAME = "OpenAI (live)"
+    BENIGN_ERRORS = {"input_audio_buffer_commit_empty"}
+
+    # Errors that will not go away by trying again (a model or setting the service does not accept):
+    # the stream is given up for this meeting instead of being reopened every minute.
+    FATAL_CODES = {"invalid_value", "invalid_request_error", "model_not_found", "unsupported_model",
+                   "invalid_model", "unknown_parameter"}
+
+    def __init__(self, source, key, model, language, proxy, on_interim, on_final, on_fail, terms=None,
+                 diarize=False, base_url=""):
+        self.base_url = base_url
+        self.up = Upsample24k()
+        self.done = collections.deque(maxlen=200)   # finished item ids (a repeated event is ignored)
+        self.items = collections.OrderedDict()     # item_id -> {"key", "start", "end", "text"}
+        self.ready = threading.Event()             # the session was accepted
+        self.speaking = False                      # inside a sentence (audio not committed yet)
+        super().__init__(source, key, model or OPENAI_LIVE_MODELS[0], language, proxy, on_interim, on_final,
+                         on_fail, terms, False)    # (OpenAI does not tell speakers apart)
+
+    def _session(self):
+        lang = self.language if self.language and self.language != "auto" else None
+        return openai_live_session(self.model, lang, self.terms)
+
+    def _connect(self):
+        try:
+            secret = openai_live_secret(self.key, self.base_url, self.proxy, self._session())
+        except (BadRequest, ModelUnavailable) as e:
+            raise AuthError(f"OpenAI did not accept the live settings (model {self.model}): {short(e, 160)}")
+        ws = WSClient(openai_live_url(self.base_url), {"Authorization": f"Bearer {secret}"}, self.proxy)
+        ws.send(json.dumps({"type": "session.update", "session": self._session()}), text=True)
+        return ws
+
+    def _idle_check(self, idle):
+        # OpenAI says nothing while nobody speaks, but it answers the pings sent every few seconds:
+        # no data at all for 45 s means the line is dead (a proxy or VPN dropped it quietly).
+        return idle > 45 and not self.stop_event.is_set()
+
+    def _keepalive(self):
+        """A WebSocket ping: keeps proxies and NAT from closing a quiet line, and its pong proves it is alive."""
+        with self.ws.lock:
+            self.ws.sock.sendall(bytes([0x89, 0x80]) + os.urandom(4))
+
+    def _send_audio(self, pcm16k):
+        data = base64.b64encode(self.up(pcm16k)).decode()
+        self.ws.send('{"type":"input_audio_buffer.append","audio":"' + data + '"}', text=True)
+
+    def _end_stream(self, rx):
+        # Whatever was said last is written now (an empty buffer only gives a harmless error).
+        self.ws.send('{"type":"input_audio_buffer.commit"}', text=True)
+        end = time.time() + 4
+        while self.items and time.time() < end:     # the last words are waited for ...
+            time.sleep(0.05)
+        self.ws.close()                             # ... then the line is closed (OpenAI does not close it)
+        rx.join(timeout=2)
+
+    def _item(self, item_id, start=None):
+        if item_id in self.done:
+            return None
+        it = self.items.get(item_id)
+        if it is None:
+            it = self.items[item_id] = {"key": f"L{self.source}{self.sid}_{self.utt}",
+                                        "start": self.sent if start is None else start, "end": None, "text": ""}
+            self.utt += 1
+        return it
+
+    def _receive(self):
+        try:
+            while not self.ws.closed:
+                op, data = self.ws.recv()
+                if op == 0x8:
+                    if not self.stop_event.is_set():
+                        code, why = ws_close_reason(data)
+                        raise ConnectionError("the live service closed the connection"
+                                              + (f" (code {code}{': ' + why if why else ''})" if code else ""))
+                    break
+                if op != 0x1:
+                    continue
+                try:
+                    m = json.loads(data)
+                except ValueError:
+                    continue
+                if isinstance(m, dict):
+                    self._handle(m)
+        except Exception as e:
+            if not self.stop_event.is_set():
+                self._flush()                           # words already heard are kept, then the backup takes over
+                self._fail(e)
+        self._flush()
+
+    def _handle(self, m):
+        typ = m.get("type") or ""
+        iid = str(m.get("item_id") or "")
+        if typ in ("session.created", "session.updated", "transcription_session.updated"):
+            self.ready.set()
+        elif typ == "input_audio_buffer.speech_started" and iid:
+            self.speaking = True
+            self._item(iid, float(m.get("audio_start_ms") or 0) / 1000)
+        elif typ == "input_audio_buffer.speech_stopped" and iid:
+            self.speaking = False
+            it = self._item(iid)
+            if it is not None:
+                it["end"] = float(m.get("audio_end_ms") or 0) / 1000
+        elif typ == "input_audio_buffer.committed" and iid:
+            self.speaking = False
+            self._item(iid)
+        elif typ == "conversation.item.input_audio_transcription.delta" and iid:
+            it = self._item(iid)
+            if it is None:
+                return                                  # (after its sentence was finished)
+            it["text"] += str(m.get("delta") or "")
+            if it["text"].strip():
+                self._cb(self.on_interim, it["key"], self._wall(it["start"]), it["text"].strip())
+        elif typ == "conversation.item.input_audio_transcription.completed" and iid:
+            if iid in self.done:
+                return                                  # the same sentence twice: written once
+            it = self.items.pop(iid, None) or self._item(iid) and self.items.pop(iid)
+            self.done.append(iid)
+            text = str(m.get("transcript") or it["text"]).strip()
+            self._final(it, text)
+        elif typ == "conversation.item.input_audio_transcription.failed" and iid:
+            err = m.get("error") or {}
+            log(f"Live {self.source}: one sentence could not be written ({short(err.get('message') or err, 120)})",
+                level="warn")
+            it = self.items.pop(iid, None)
+            self.done.append(iid)
+            if it and it["text"].strip():
+                self._final(it, it["text"].strip())       # what was heard of it is kept
+        elif typ == "error":
+            err = m.get("error") or {}
+            if err.get("code") in self.BENIGN_ERRORS:
+                return
+            msg = str(err.get("message") or err.get("code") or m)
+            if openai_live_fatal(err):
+                raise AuthError("Live service error: " + short(msg, 200))
+            raise Transient("Live service error: " + short(msg, 200))
+
+    def _final(self, it, text):
+        if text:
+            end = it["end"] if it["end"] is not None else self.sent
+            self._cb(self.on_final, it["key"], self._wall(it["start"]), self._wall(max(end, it["start"]), True), text)
+
+    def _flush(self):
+        while self.items:
+            _, it = self.items.popitem(last=False)
+            self._final(it, it["text"].strip())
+
+
+def openai_live_fatal(err):
+    """True for an error event that trying again will not fix: the key, the account, or a setting or model
+    the service does not accept."""
+    code = str(err.get("code") or err.get("type") or "")
+    msg = str(err.get("message") or "")
+    return (code in OpenAILive.FATAL_CODES or
+            bool(re.search(r"api[ _-]?key|auth|permission|quota|billing|insufficient", code + " " + msg, re.I)))
+
+
+def openai_live_check(key, proxy, model=None, language="auto", base_url="", seconds=0.5):
+    """Opens a live session, waits until OpenAI accepts it, sends a short test sound and closes it.
+    Returns seconds until the session was ready."""
+    t = time.time()
+    lang = language if language and language != "auto" else None
+    session = openai_live_session(model or OPENAI_LIVE_MODELS[0], lang)
+    secret = openai_live_secret(key, base_url, proxy, session)
+    ws = WSClient(openai_live_url(base_url), {"Authorization": f"Bearer {secret}"}, proxy)
+    try:
+        ws.send(json.dumps({"type": "session.update", "session": session}), text=True)
+        ws.deadline = time.time() + 8
+        while True:
+            op, data = ws.recv()
+            if op == 0x8:
+                code, why = ws_close_reason(data)
+                raise Transient(f"Live service refused the session (code {code}): {why}")
+            if op != 0x1:
+                continue
+            m = json.loads(data)
+            if m.get("type") == "error":
+                err = m.get("error") or {}
+                msg = str(err.get("message") or err.get("code") or m)
+                raise (AuthError if openai_live_fatal(err) else Transient)("Live service error: " + short(msg, 200))
+            if m.get("type") in ("session.updated", "transcription_session.updated"):
+                break
+        connected = time.time() - t
+        tt = np.arange(int(16000 * seconds)) / 16000
+        pcm = (0.1 * np.sin(2 * np.pi * 200 * tt) * 32767).astype("<i2").tobytes()
+        up = Upsample24k()
+        for i in range(0, len(pcm), 3200):
+            ws.send('{"type":"input_audio_buffer.append","audio":"' + base64.b64encode(up(pcm[i:i + 3200])).decode()
+                    + '"}', text=True)
+        return connected
+    finally:
+        ws.close()
+
+
+# ---- live services: what differs between them --------------------------------------------------
+LIVE_SERVICES = {
+    "deepgram": {"models": ["nova-3", "nova-2"], "pac": PAC_DEEPGRAM, "usage": "Deepgram (live)"},
+    "openai-live": {"models": OPENAI_LIVE_MODELS, "pac": PAC_OPENAI, "usage": "OpenAI (live)"},
+}
+
+
+def live_service(prov):
+    """The live-service entry of a provider ("deepgram" for providers saved before there were others)."""
+    return LIVE_SERVICES.get(str((prov or {}).get("preset") or ""), LIVE_SERVICES["deepgram"])
+
+
+def live_preset(prov):
+    p = str((prov or {}).get("preset") or "")
+    return p if p in LIVE_SERVICES else "deepgram"
+
+
+def live_model(prov, model):
+    """The chosen model when it belongs to this live service, otherwise its default (e.g. after switching
+    from Deepgram to OpenAI the old 'nova-3' is not sent to OpenAI)."""
+    models = live_service(prov)["models"]
+    m = str(model or "").strip()
+    if not m:
+        return models[0]
+    if live_preset(prov) == "deepgram":
+        return m if not m.startswith("gpt-") else models[0]
+    return m if m.startswith("gpt-") else models[0]
+
+
+def live_check(prov, proxy, model=None, language="auto", seconds=0.5):
+    if live_preset(prov) == "openai-live":
+        return openai_live_check(prov["api_key"], proxy, live_model(prov, model), language,
+                                 prov.get("base_url") or "", seconds)
+    return deepgram_check(prov["api_key"], proxy, live_model(prov, model), language, seconds)
+
+
+def live_proxy(cfg, prov):
+    return detect_proxy(cfg["proxy"], live_service(prov)["pac"])[0] if prov.get("use_proxy", True) else ""
 
 
 # ----------------------------------------------------------------------------
@@ -9062,7 +9397,9 @@ class Engine:
         prov = self.app.provider(pid)
         if not prov or prov.get("kind") != "live" or not prov.get("api_key"):
             return
-        proxy = detect_proxy(self.cfg["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else ""
+        proxy = live_proxy(self.cfg, prov)
+        Live = OpenAILive if live_preset(prov) == "openai-live" else DeepgramLive
+        extra = {"base_url": prov.get("base_url") or ""} if Live is OpenAILive else {}
         for cap in captures:
             src = cap.source
             was_dead = src in self.live_dead
@@ -9075,12 +9412,12 @@ class Engine:
                     and getattr(cap, "tap", None) == old.feed:
                 continue                                  # (already streaming: a second start changes nothing)
             box = []
-            lv = DeepgramLive(src, prov["api_key"], self.cfg["stt_model"] or "nova-3", fixed_lang(self.cfg) or "auto", proxy,
+            lv = Live(src, prov["api_key"], live_model(prov, self.cfg["stt_model"]), fixed_lang(self.cfg) or "auto", proxy,
                               on_interim=lambda k, t0, text, s=src: self.live_interim(s, k, t0, text),
                               on_final=lambda k, t0, t1, text, who=None, s=src: self._submit_live(s, k, t0, t1, text, who),
                               on_fail=lambda e, s=src, b=box: self.live_failed(s, e, b[0] if b else None),
                               terms=glossary_terms(self.cfg),
-                              diarize=bool(self.cfg["diarize"]) and src == "them" and not self.file_mode)
+                              diarize=bool(self.cfg["diarize"]) and src == "them" and not self.file_mode, **extra)
             box.append(lv)
             self.live[src] = lv
             cap.tap = lv.feed
@@ -14615,8 +14952,8 @@ class App:
             return {"ok": False, "error": "Paste the API key first."}
         if prov.get("kind") == "live":
             try:
-                proxy = detect_proxy(self.cfg["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else ""
-                secs = deepgram_check(prov["api_key"], proxy, seconds=0.5)
+                proxy = live_proxy(self.cfg, prov)
+                secs = live_check(prov, proxy, seconds=0.5)
             except APIError as e:
                 log(f"{prov['name']} test failed: {e}", level="error")
                 return {"ok": False, "error": str(e)}
@@ -14625,8 +14962,8 @@ class App:
             with self.lock:
                 p = next((x for x in self.cfg["providers"] if x["id"] == id), None)
                 if p is not None:
-                    p["models"] = ["nova-3", "nova-2"]
-                    p["caps"] = {"stt": {"ok": True, "model": "nova-3", "mode": "live", "secs": round(secs, 2)},
+                    p["models"] = list(live_service(prov)["models"])
+                    p["caps"] = {"stt": {"ok": True, "model": p["models"][0], "mode": "live", "secs": round(secs, 2)},
                                  "chat": {"ok": False, "why": "Speech-to-text only — translation and answers need another service (e.g. Groq)."},
                                  "at": time.time()}
                 self._save_and_publish()
@@ -14755,8 +15092,10 @@ class App:
     def _credit_of(self, pid, prov, preset, row):
         lines = row["lines"]
         base = (prov.get("base_url") or "").rstrip("/")
+        if prov.get("kind") == "live" and live_preset(prov) == "openai-live":
+            return                                           # OpenAI does not report credit through its API
         if prov.get("kind") == "live":                       # Deepgram: real balance in dollars
-            api = GroqAPI(prov["api_key"], detect_proxy(self.cfg["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else "",
+            api = GroqAPI(prov["api_key"], live_proxy(self.cfg, prov),
                           base or "https://api.deepgram.com/v1", prov["name"])
             try:
                 auth = {"Authorization": f"Token {prov['api_key']}"}
@@ -14817,8 +15156,8 @@ class App:
 
         def service_and_model(task):
             pid, model = c[f"{task}_provider"], c[f"{task}_model"]
-            if pid != "groq" and (self.provider(pid) or {}).get("kind") == "live" and not model:
-                model = "nova-3"
+            if pid != "groq" and (self.provider(pid) or {}).get("kind") == "live":
+                model = live_model(self.provider(pid), model)
             if pid == "groq" and not model:
                 model = {"stt": "whisper-large-v3-turbo", "tr": TRANSLATE_CHAIN[0][0],
                          "ans": ANSWER_CHAINS[c["answer_mode"]][0][0]}[task]
@@ -14903,8 +15242,8 @@ class App:
             results.append(row)
 
         def stt_live(prov, model):
-            proxy = detect_proxy(c["proxy"], PAC_DEEPGRAM)[0] if prov.get("use_proxy", True) else ""
-            secs = deepgram_check(prov["api_key"], proxy, model or "nova-3", fixed_lang(c) or "auto")
+            proxy = live_proxy(c, prov)
+            secs = live_check(prov, proxy, model, fixed_lang(c) or "auto")
             return {"detail": f"LIVE — connected in {secs:.1f} s; words appear while they are spoken"}
 
         def stt(client, model, t0):
