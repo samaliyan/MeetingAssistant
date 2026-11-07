@@ -1235,7 +1235,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
         <div class="field"><label for="fMe">My name on screen</label><input class="input" id="fMe" data-key="me_label" maxlength="24"></div>
         <div class="field"><label for="fThem">Other side's name</label><input class="input" id="fThem" data-key="them_label" maxlength="24"></div>
       </div>
-      <label class="toggle"><input type="checkbox" data-key="diarize"><span class="switch"></span><span class="tt"><b>Tell the other speakers apart</b><span>Names several people on the other side (Interviewer, Interviewer 2 …). Works with the live service (Deepgram) only; applies from the next Start.</span></span></label>
+      <label class="toggle"><input type="checkbox" data-key="diarize"><span class="switch"></span><span class="tt"><b>Tell the other speakers apart</b><span>Names several people on the other side (Interviewer, Interviewer 2 …). Works with Deepgram live only; applies from the next Start.</span></span></label>
     </section>
 
     <!-- ANSWERS -->
@@ -1373,6 +1373,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
             <option value="cerebras">Cerebras — very fast · translation &amp; answers</option>
             <option value="mistral">Mistral — speech, translation, answers</option>
             <option value="deepgram">Deepgram — LIVE speech to text, word by word ($200 free credit)</option>
+            <option value="openai-live">OpenAI live — LIVE speech to text, word by word (paid)</option>
             <option value="custom">Another service (type its address)</option>
           </select>
           <button class="btn primary" id="addProv"><span data-icon="plus"></span>Add service</button>
@@ -3980,7 +3981,10 @@ const GROQ_MODELS = {stt: ["whisper-large-v3-turbo", "whisper-large-v3"],
 let provTimers = {}, provPending = {};
 
 const AV_COLORS = {openai:"#10a37f", avalai:"#2563eb", gapgpt:"#7c3aed", openrouter:"#6366f1", gemini:"#1a73e8",
-                   cerebras:"#f97316", mistral:"#ff7000", deepgram:"#13ef93", custom:"#64748b"};
+                   cerebras:"#f97316", mistral:"#ff7000", deepgram:"#13ef93", "openai-live":"#10a37f", custom:"#64748b"};
+// The models of each live service (the first is used when nothing else is chosen).
+const LIVE_MODELS = {deepgram: ["nova-3", "nova-2"], "openai-live": ["gpt-live-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]};
+function liveModels(p){ return (p.models && p.models.length) ? p.models : (LIVE_MODELS[p.preset] || LIVE_MODELS.deepgram); }
 S.openCards = new Set();
 function usedFor(pid){
   const c = S.cfg, names = {stt: "speech to text", tr: "translation", ans: "answers"};
@@ -4546,7 +4550,7 @@ function renderAssign(){
     if(!am){ am = document.createElement("span"); am.className = "amodel"; inp.after(am); }
     am.hidden = !inp.hidden; am.textContent = "automatic";
     const cp = provs.find(p => p.id === cur) || {};
-    const models = cur === "groq" ? ((S.groqLive && S.groqLive[t] && S.groqLive[t].length) ? S.groqLive[t] : GROQ_MODELS[t]) : cp.kind === "live" ? (cp.models && cp.models.length ? cp.models : ["nova-3"])
+    const models = cur === "groq" ? ((S.groqLive && S.groqLive[t] && S.groqLive[t].length) ? S.groqLive[t] : GROQ_MODELS[t]) : cp.kind === "live" ? liveModels(cp)
                  : (cp.models || []).filter(t === "stt" ? isSttModel : isChatModel);
     dl.innerHTML = models.map(m => `<option value="${esc(m)}">`).join("");
   }
@@ -4556,7 +4560,7 @@ for(const t of ["stt", "tr", "ans"]){
     const pid = e.target.value, provs = S.cfg.providers || [];
     let model = "";
     const chosen = provs.find(p => p.id === pid) || {};
-    if(chosen.kind === "live") model = "nova-3";
+    if(chosen.kind === "live") model = liveModels(chosen)[0];
     else if(pid === "llm"){
       const tasks = ["tr", "ans"].filter(x => x === t || S.cfg[x + "_provider"] === "llm");
       api("llm_use", {tasks}).then(r => { applyLlmState(r); if(!r.ok) toast("error", r.error); });

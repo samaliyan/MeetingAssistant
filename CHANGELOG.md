@@ -2,6 +2,21 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.39]
+
+**OpenAI live speech to text**
+- New service **OpenAI live** (Setup › Services › Add service): the other side's words appear while they are
+  spoken, like Deepgram, using an OpenAI API key. Models: `gpt-live-transcribe` (default), `gpt-4o-transcribe`,
+  `gpt-4o-mini-transcribe`. With one meeting language set, it is told that language; your technical words go to the
+  gpt-4o models as a hint.
+- Everything the live service already did applies: silence after the first 2 seconds is not sent (not billed),
+  Pause sends nothing, a broken line opens again by itself, and if it stops working Groq (or the local model) takes
+  over. **Test** checks the key and the session; **Credit & limits** links to the OpenAI billing page (OpenAI does
+  not report the balance through its API).
+- The real API key is used only to open a short-lived session key; only that session key goes on the stream.
+- Switching between Deepgram and OpenAI live never sends one service's model name to the other.
+- "Tell the other speakers apart" stays a Deepgram feature.
+
 ## [6.38]
 
 - **Read my screen follows "How should suggested answers sound?"** (Setup › Answers): for example "Answer at

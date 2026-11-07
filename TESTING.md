@@ -24,6 +24,7 @@ Ways of checking:
 | Model chain, rate limits, blank replies, previews | yes | – | yes | – | real limits of Groq, OpenAI, Gemini … |
 | Speech to text: Groq, OpenAI-compatible | encoder and fallback only | – | yes | – | real services |
 | Deepgram live | fake server only | – | yes | – | real account, Farsi, key limits |
+| OpenAI live (6.39) | yes (local fake of the session-key request and the WebSocket session: words while spoken, two sentences, 24 kHz audio, silence not sent, stop, rejected key, service error, Test) | – | yes | – | real OpenAI account and models, real network / proxy, Farsi, a session lasting a whole meeting |
 | Local Whisper / local AI | – | – | yes | – | real models, GPU / CPU speed |
 | Coach (situation, silence, kinds of question, words to say) | yes (fake model) | yes (overlay layout) | yes | – | quality of real coach text, real silence timing |
 | Practice interview, job advert, scores | yes | yes | yes (2 rounds) | – | speech reading aloud (voices) |
