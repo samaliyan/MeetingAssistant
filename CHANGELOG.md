@@ -27,6 +27,12 @@ All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [G
   taken for dead ("Live text stopped", backup, reopen). It is now pinged also while sound flows.
 - **Live services**: after long silences the clock of the live text no longer falls behind (lines of the other side
   were stamped slightly early); a very rare error between two threads that also showed "Live text stopped" is gone.
+- **Live line reopening in the middle of a sentence**: the sentence is finished by the backup service, so its
+  beginning is no longer lost (and no "speaking…" row is left behind).
+- A translation that comes back empty is shown as failed instead of an empty line; the coach keeps working when its
+  model is resting (another model of the chain takes over); a line can no longer stay on "Writing an answer…" when its
+  question continued in the next line.
+- Recordings: a sentence that had to be tried again is never glued behind a later one.
 - A page error written to the log never contains this run's window key.
 
 ## [6.39]

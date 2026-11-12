@@ -9059,6 +9059,7 @@ class Engine:
         self.live_retries = collections.Counter()   # how many times a broken live stream was reopened by itself
         self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
         self.live_lock = threading.RLock()   # one start of live streams at a time (never two streams for one source)
+        self.own_segs = set()          # (6.40) sentences that began while no live stream heard their source
         self.live_backlog = {}         # source -> recent finished sentences (audio) while a live service runs
         self.live_heard = {}           # source -> time up to which the live service wrote the text
         self.live_talk_at = {}         # source -> last time the live service showed words still being spoken
@@ -9220,7 +9221,10 @@ class Engine:
         """One model for the coach: the last of the chain (its limits are not the answers' limits); when the user chose the
         local model as the main one, only that model - the background text is not sent to any other service."""
         chain = self.chat_targets("ans")
-        return chain[:1] if chain and chain[0][0] == "llm" else chain[-1:]
+        if chain and chain[0][0] == "llm":
+            return chain[:1]
+        ok = [t for t in chain if self.models.ok(f"{t[0]}|{t[1]}")]      # (6.40) a resting last model: the one before it
+        return (ok or chain)[-1:]
 
     def _check_reply_later(self):
         try:
@@ -9768,7 +9772,15 @@ class Engine:
             self.app.voices.add_segment(seg_id, kw["audio"], kw["t0"], kw["t_end"])   # who said it: decided beside
         if source == "me" and kind in ("start", "preview", "segment") and not person:
             self.me_voice_at = time.time()                   # the user is speaking (before any text exists)
-        if self.live_mode(source):
+        # (6.40) a sentence that began while the live line was down (the backup was writing) is finished by the backup,
+        # also when the line opens again in the middle of it: the live service heard only its end, and its beginning
+        # was never written
+        if kind == "start" and not self.live_mode(source):
+            self.own_segs.add(seg_id)
+        own = kind in ("segment", "discard") and seg_id in self.own_segs
+        if kind in ("segment", "discard"):
+            self.own_segs.discard(seg_id)
+        if self.live_mode(source) and not own:
             if kind == "segment" and not self.paused:        # kept for a while: if the live service fails,
                 with self.cv:                               # what it never answered is written another way
                     self.live_backlog.setdefault(source, collections.deque(maxlen=15)).append(
@@ -9947,7 +9959,7 @@ class Engine:
                         o = self.pending[k]
                         if (o["source"] == job["source"] and bool(o.get("say")) == bool(job.get("say"))
                                 and job["dur"] + o["dur"] <= MAX_MERGED
-                                and (self.file_mode or self._adjacent(job, o))
+                                and ((self.file_mode and o["t0"] >= job["t0"]) or self._adjacent(job, o))   # (6.40: never an earlier sentence behind a later one)
                                 and self._usable(model, job["dur"] + o["dur"], now)):
                             gap = np.zeros(4000, dtype=np.float32)          # 0.25 s pause
                             job = {**job, "segs": job["segs"] + o["segs"],
@@ -10255,8 +10267,9 @@ class Engine:
                 if prev and e["t0"] - prev[-1]["t_end"] < 8 and prev[-1].get("ans_state") in ("thinking", "streaming") \
                         and not prev[-1].get("forced") and prev[-1]["text"] not in parts:
                     parts = [prev[-1]["text"]]                 # the first piece is already being answered: the newer answer covers both
-                    self.ans_gen[prev[-1]["id"]] += 1          # ... and the first piece's own answer stops
-                    self._publish(prev[-1]["id"], ans_state="none", answer="", answer_fa="")
+                    with self.tr_lock:                         # (6.40: with _answer's start, so it cannot say "thinking" after this)
+                        self.ans_gen[prev[-1]["id"]] += 1      # ... and the first piece's own answer stops
+                        self._publish(prev[-1]["id"], ans_state="none", answer="", answer_fa="")
             if old:
                 old["timer"].cancel()
                 self._publish(old["eid"], ans_state="none")   # merged into the newer piece
@@ -10527,6 +10540,8 @@ class Engine:
                 text = self.run_chat(self.chat_targets("tr"), messages, 500, 0.2, on_text)
             if not current():
                 return
+            if not text.strip():                            # (6.40) nothing came back: an error is shown, not an empty line
+                raise APIError("the service sent an empty translation")
             self._publish(eid, translation=text.strip().strip('"«»').strip(), tr_state="done")
             t = e.get("timing") or {}
             if t and state["first"]:
@@ -10561,8 +10576,11 @@ class Engine:
         sure = force or reps > 0                            # a question asked again is never skipped
         if reps != (e.get("repeat") or 0):
             self._publish(eid, repeat=reps)
-        self._publish(eid, ans_state="thinking", forced=force,
-                      question=(question if question and question != e["text"] else ""))
+        with self.tr_lock:                                  # (6.40) cancelled meanwhile: the line never stays on "thinking"
+            if not current():
+                return
+            self._publish(eid, ans_state="thinking", forced=force,
+                          question=(question if question and question != e["text"] else ""))
         hist = self.session.history(e["t0"], ANSWER_HISTORY if force else 6, exclude=eid)
         system = ANSWER_SYSTEM.format(
             context=(c["context"] or "(not given)") + job_note(c) + glossary_note(c),

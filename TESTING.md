@@ -1,7 +1,7 @@
 # What is tested, and how
 
 This file says, part by part, how the program is checked and what cannot be checked without a real Windows computer,
-real sound or real services. It is updated with every audit (last: 6.35, six independent reviewers of the whole program — processes, display, flow, features and switches, performance, security/setup — plus two re-reviewers of the fixes; 6.19 and 6.17 before).
+real sound or real services. It is updated with every audit (last: 6.40, four independent reviewers of the whole program with fixes in the meeting file, live services, engine and audio; before it 6.35, six independent reviewers of the whole program — processes, display, flow, features and switches, performance, security/setup — plus two re-reviewers of the fixes; 6.19 and 6.17 before).
 
 Ways of checking:
 
