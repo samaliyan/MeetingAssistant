@@ -7414,6 +7414,7 @@ class Session:
             if not s.entries:
                 return None
             s.dirty = False
+            s.loaded = True
             if LAST_OWNER[0] is None:
                 LAST_OWNER[0] = (s.started.timestamp(), s.path)
             return s
@@ -7421,7 +7422,14 @@ class Session:
             log("the last meeting could not be read (Continue is not offered):", short(e, 100), level="warn")
             return None
 
+    @staticmethod
+    def _u(v):
+        """(6.40) Text without half characters (a lone surrogate from a cut emoji): one of them stopped the 'Continue'
+        copy, the export and the window's events for the rest of the meeting."""
+        return v.encode("utf-8", "replace").decode("utf-8") if isinstance(v, str) else v
+
     def add(self, source, t0, t_end, text, lang, seg_ids, speaker=None, **fields):
+        text = self._u(text)
         with self.lock:
             eid = next(_entry_ids)
             e = {"id": eid, "source": source, "t0": t0, "t_end": t_end, "t_text": time.time(),
@@ -7431,7 +7439,7 @@ class Session:
                  "explain": "", "explain_q": "", "ex_state": "none", "edited": False, "repeat": 0,
                  "qtype": "", "qhint": "", "qmin": 0, "qmax": 0, "marked": False,
                  "speaker": speaker if isinstance(speaker, int) and speaker > 0 else None}
-            e.update({k: v for k, v in fields.items() if k in self.FIELDS and k not in ("source", "t0")})
+            e.update({k: self._u(v) for k, v in fields.items() if k in self.FIELDS and k not in ("source", "t0")})
             self.entries[eid] = e
             self.dirty = True
             return dict(e)
@@ -7443,7 +7451,7 @@ class Session:
 
     def set_feedback(self, text):
         with self.lock:
-            self.feedback = text
+            self.feedback = self._u(text)
             self.scores = {}                        # a new review: the old scores no longer belong to it
             self.dirty = True
 
@@ -7454,22 +7462,22 @@ class Session:
 
     def add_screen(self, text):
         with self.lock:
-            row = {"t": time.time(), "text": text}
+            row = {"t": time.time(), "text": self._u(text)}
             self.screens = (self.screens + [row])[-30:]
             self.dirty = True
             return dict(row)
 
     def set_summary(self, text):
         with self.lock:
-            self.summary = text
+            self.summary = self._u(text)
             self.dirty = True
 
     def set_notes(self, mine=None, full=None):
         with self.lock:
             if mine is not None:
-                self.my_notes = str(mine)[:20000]
+                self.my_notes = self._u(str(mine)[:20000])
             if full is not None:
-                self.notes_full = str(full)[:40000]
+                self.notes_full = self._u(str(full)[:40000])
             self.dirty = True
 
     def set_name(self, key, name):
@@ -7511,7 +7519,7 @@ class Session:
             e = self.entries.get(eid)
             if not e:
                 return None
-            e.update(fields)
+            e.update({k: self._u(v) for k, v in fields.items()})
             self.dirty = True
             return dict(e)
 
@@ -7560,7 +7568,10 @@ class Session:
     def _save(self, final=True):
         with self.lock:
             only_state = not self.dirty
-            if only_state and not (final and getattr(self, "state_dirty", False)):
+            # (6.40) a 'Continue' copy that an earlier save skipped is caught up as soon as it is due, also when nobody
+            # speaks afterwards (before: only at Stop, so a crash in a quiet minute lost the last lines of the copy)
+            if only_state and not (getattr(self, "state_dirty", False) and
+                                   (final or time.time() - getattr(self, "state_t", 0) > getattr(self, "state_every", 5.0))):
                 return
             self.dirty = False
             rows = self.ordered()
@@ -7616,6 +7627,12 @@ class Session:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8", errors="replace") as f:      # (a stray half character never loses the file)
                 f.write("\n".join(out))
+            if getattr(self, "loaded", False):                 # (6.40) the first save after Continue: the file as it was
+                self.loaded = False                            # is kept once (.bak) - it may hold lines the copy lacks
+                try:
+                    shutil.copy2(self.path, self.path + ".bak")
+                except OSError:
+                    pass
             os.replace(tmp, self.path)
             if getattr(self, "save_bad", False):
                 self.save_bad = False
@@ -7647,7 +7664,7 @@ class Session:
         self.state_t = time.time()
         try:
             tmp = LAST_MEETING + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8", errors="replace") as f:
                 f.write(json.dumps(self.state(), ensure_ascii=False))   # (one write: several times faster than json.dump)
                 f.flush()
                 os.fsync(f.fileno())                            # on the disk before it replaces the last good copy
@@ -12289,6 +12306,7 @@ class Hub:
 
     def publish(self, type_, **data):
         msg = json.dumps({"type": type_, **data}, ensure_ascii=False, default=float)
+        msg = msg.encode("utf-8", "replace").decode("utf-8")     # (6.40) a half character never blocks the window's events
         with self.lock:
             clients = list(self.clients)
         for q in clients:
@@ -13997,12 +14015,14 @@ class App:
             if self.running or self.stopping:
                 return None, "A session started meanwhile. Try again after it."
             self._stop_captures()
+            self.monitor_until = 0.0                              # (6.40: a running 'Test audio' timer no longer cuts this off)
             problems, mic, _spk = self._start_captures(lambda *a, **k: None, True, want_loop=False)
             for c in self.captures:
                 c.saver = keep
         if not any(c.source == "me" for c in self.captures):
             with self.lock:
-                self._stop_captures()
+                if not (self.running or self.stopping):
+                    self._stop_captures()
             return None, " ".join(problems) or "No microphone found."
         log(f"Voice: listening to the microphone ({mic or 'default'}) for {secs} s")
         end = time.time() + secs
@@ -14019,7 +14039,10 @@ class App:
                 time.sleep(0.4)
         finally:
             with self.lock:
-                self._stop_captures()
+                # (6.40) a meeting started while this was listening owns the microphone now: stopping here left the
+                # meeting running with no sound at all, and nothing said so
+                if not (self.running or self.stopping):
+                    self._stop_captures()
         if cancel.is_set():
             return None, "cancelled"
         if not raw:
@@ -15920,6 +15943,8 @@ class App:
         if self.running or self.stopping:
             return {"ok": False, "error": "Stop the meeting first, then run the check."}
         with self.lock:
+            if self.running or self.stopping:                     # (6.40: checked again under the lock)
+                return {"ok": False, "error": "Stop the meeting first, then run the check."}
             self._stop_captures()
             self.monitor_until = 0.0
         self.publish_running()
@@ -15952,7 +15977,8 @@ class App:
         return self._reveal(LOG_PATH)
 
     def api_ui_error(self, message="", stack=""):
-        one_line = lambda t, n: short(str(t), n).replace("\r", " ").replace("\n", " | ")   # no fake log lines
+        # (6.40) the page's address in a stack trace carries this run's key: it is never written to the log
+        one_line = lambda t, n: short(str(t).replace(self.token, "…"), n).replace("\r", " ").replace("\n", " | ")   # no fake log lines
         log("UI error:", one_line(message, 300), one_line(stack, 600))
         return {"ok": True}
 

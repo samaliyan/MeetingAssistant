@@ -354,3 +354,67 @@ def test_a_key_that_cannot_be_read_here_is_never_destroyed(app):
         app.SECRET_CODEC[0] = old
         app.SECRETS_KEPT.clear()
         app.CONFIG_NOTE.clear()
+
+
+# ---- 6.40: the meeting file and its 'Continue' copy -----------------------------------------
+def _last_copy(app):
+    with open(app.LAST_MEETING, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_continue_copy_catches_up_in_a_quiet_period(app):
+    """A save inside the 5 s pause skips the 'Continue' copy; the next tick writes it even when nobody speaks."""
+    s = app.Session(app.sanitize({}))
+    s.add("them", time.time(), time.time() + 1, "first line", "en", [])
+    s.save_if_dirty(final=False)
+    assert len(_last_copy(app)["entries"]) == 1
+    s.add("them", time.time(), time.time() + 1, "second line", "en", [])
+    s.save_if_dirty(final=False)                               # too soon: only the meeting file
+    assert len(_last_copy(app)["entries"]) == 1
+    s.state_t -= 30                                   # ... 30 quiet seconds later
+    s.save_if_dirty(final=False)
+    assert len(_last_copy(app)["entries"]) == 2
+
+
+def test_half_character_never_stops_saving(app):
+    """A lone surrogate (an emoji cut in two by a stream) is replaced; the copy, the export and events go on."""
+    s = app.Session(app.sanitize({}))
+    e = s.add("them", time.time(), time.time() + 1, "hello \ud83d", "en", [])
+    s.update(e["id"], answer="fine \ude00", ans_state="done")
+    s.add("them", time.time() + 2, time.time() + 3, "later line", "en", [])
+    s.save_if_dirty(final=True)
+    d = _last_copy(app)
+    assert len(d["entries"]) == 2
+    json.dumps(d, ensure_ascii=False).encode("utf-8")
+    hub = app.Hub()
+    q = hub.subscribe() if hasattr(hub, "subscribe") else None
+    hub.publish("toast", text="bad \ud83d")
+    if q is not None:
+        q.get_nowait().encode("utf-8")
+
+
+def test_continue_keeps_the_file_as_it_was_once(app):
+    """The first save after Continue keeps the earlier .md as .bak: it may hold lines the copy did not have."""
+    s = app.Session(app.sanitize({}))
+    s.add("them", time.time(), time.time() + 1, "kept line", "en", [])
+    s.save_if_dirty(final=True)
+    with open(s.path, "a", encoding="utf-8") as f:
+        f.write("\nONLY-IN-THE-FILE\n")
+    r = app.Session.load_last(app.sanitize({}))
+    assert r is not None
+    r.add("them", time.time(), time.time() + 1, "after continue", "en", [])
+    r.save_if_dirty(final=True)
+    with open(r.path + ".bak", encoding="utf-8") as f:
+        assert "ONLY-IN-THE-FILE" in f.read()
+
+
+def test_page_error_never_logs_the_session_key(app):
+    a = app.App()
+    seen = []
+    old = app.log
+    app.log = lambda *x, **k: seen.append(" ".join(map(str, x)))
+    try:
+        a.api_ui_error("boom", f"at f (http://127.0.0.1:1/?t={a.token}:1:1)")
+    finally:
+        app.log = old
+    assert seen and a.token not in " ".join(seen)
