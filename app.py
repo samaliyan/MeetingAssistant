@@ -225,6 +225,7 @@ DEFAULTS = {
     "keys": {},                  # 6.37: the key of every action (see KEY_ACTIONS), "" = none
     "coach": True,               # the situation card: phase, difficulty, repeated questions, a tip
     "answer_fa": True,           # the meaning (in my language) under the suggested answer
+    "answer_lines": True,        # (6.40) the suggested answer is shown one sentence per line (off: one paragraph)
     "mic_device": "",            # "" = Windows default
     "speaker_device": "",
     "sensitivity": 6,            # 1 (less) .. 10 (more)

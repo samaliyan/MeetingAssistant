@@ -19,6 +19,14 @@ def test_bad_values_are_fixed(app):
     assert c["sensitivity"] == 10 and c["theme"] == "system" and c["stt_provider"] == "groq"
 
 
+def test_answer_lines_is_on_by_default_and_can_be_turned_off(app):
+    """6.40: the answer is shown one sentence per line; the switch in Setup › Answers turns it off."""
+    assert app.sanitize({})["answer_lines"] is True
+    assert app.sanitize({"answer_lines": False})["answer_lines"] is False
+    page = open(os.path.join(app.WEB_DIR, "index.html"), encoding="utf-8").read()
+    assert 'data-key="answer_lines"' in page and "function sentences(" in page
+
+
 def test_legacy_single_language_key_is_converted(app):
     with open(app.CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump({"config_version": app.CONFIG_VERSION, "language": "de", "api_key": " gsk_x "}, f)

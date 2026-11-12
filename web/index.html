@@ -266,6 +266,18 @@ body.subs .entry.cont.has-tr .fa,body.subs .entry.cont.pending.has-tr .live-fa{m
 .a-text{font-size:var(--answer-size);line-height:1.5;font-weight:500;letter-spacing:-.005em;color:var(--text);overflow-wrap:anywhere;margin:0;white-space:pre-wrap;max-width:66ch}
 .a-lead{font-weight:700;color:var(--text)}
 .a-rest{color:var(--text-2)}
+/* (6.40) one sentence per line: while speaking, the eye finds its place again after every look at the camera */
+.a-text.lines .a-s{display:block;margin-top:.42em}
+.a-text.lines .a-lead.full{display:block}
+.a-text.lines .a-s.join{display:inline;margin-top:0}
+.a-text.lines.caret::after{display:none}
+.a-text.lines.caret .a-rest > .a-s:last-child::after,.a-text.lines.caret .a-lead:last-child::after{content:"";display:inline-block;width:2px;height:1em;margin-inline-start:3px;vertical-align:-.12em;background:var(--accent);opacity:.85;animation:blink 1s steps(2) infinite}
+body.ov .a-text.lines .a-s{margin-top:.2em}
+/* (6.40) what each block is, in one word: the question they asked / the words to say */
+.q-head .q-what{font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:.78rem;color:var(--amber)}
+.a-label{display:flex;align-items:center;gap:6px;margin:2px 0 6px;font-size:.78rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--accent-text)}
+.a-label svg{width:14px;height:14px}
+body.ov .a-label,body.ov .q-what{display:none}
 .a-fa{margin-top:18px;padding-top:14px;border-top:1px dashed var(--border-strong)}
 .a-fa-label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
 .a-fa p[dir=rtl]{margin-left:auto}
@@ -454,7 +466,7 @@ ul.pl,.tool-body ul.pl{padding-inline-start:4px;list-style-position:inside}
 .ans-nav .btn{width:26px;height:26px;font-size:1.1rem;line-height:1;padding:0}
 .ans-nav.old #ansPos{color:var(--warn);font-weight:600}
 .answer-foot .hint{font-size:.78rem;color:var(--muted)}
-.size-ctl{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.size-ctl{display:flex;flex:none;border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .size-ctl button{border:0;background:transparent;height:30px;width:32px;font-weight:700;color:var(--text-2);font-size:.8rem}
 .size-ctl button:hover{background:var(--surface-3)}
 .size-ctl button + button{border-left:1px solid var(--border)}
@@ -963,7 +975,7 @@ body.capturing #sbDelay,body.capturing #sbUsage{display:none}
 @media (max-width:900px){ .subtitle{display:none} }
 @media (max-width:1060px){ .card-head .btn.sm .hide-sm{display:none} }
 @media (max-width:980px){
-  .layout{grid-template-columns:1fr;grid-template-rows:minmax(320px,70%) minmax(120px,1fr)}
+  .layout{grid-template-columns:1fr;grid-template-rows:minmax(320px,66%) minmax(150px,1fr)}
   .answer-card{order:-1}
   .subtitle{max-width:30vw}
 }
@@ -1271,6 +1283,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
           <button class="opt" data-val="smart"><b><span data-icon="sparkles"></span>Deeper</b><span>Stronger model for hard technical questions. About half a second slower.</span></button>
         </div>
       </div>
+      <label class="toggle" data-part="answers"><input type="checkbox" data-key="answer_lines"><span class="switch"></span><span class="tt"><b>Each sentence of the answer on its own line</b><span>Easier to keep your place while you speak. Off: one paragraph, as before.</span></span></label>
       <label class="toggle" data-part="answers"><input type="checkbox" data-key="answer_fa"><span class="switch"></span><span class="tt"><b>Show the meaning of each answer in <span class="myl">Persian</span></b><span>Appears under the answer, after it is written.</span></span></label>
       <label class="toggle" data-part="translate"><input type="checkbox" data-key="translate_me"><span class="switch"></span><span class="tt"><b>Translate my own lines too</b><span>A <span class="myl">Persian</span> translation under what you say (the other side's lines are always translated).</span></span></label>
       <label class="toggle" data-part="answers"><input type="checkbox" data-key="answer_me"><span class="switch"></span><span class="tt"><b>Test mode: answer my own questions too</b><span>Turn on to practise alone — ask a question into your microphone. Turn off for real meetings.</span></span></label>
@@ -3261,20 +3274,56 @@ function setScreenAnswer(el, t){        // an answer read from the screen: the r
   el.dataset.t = t; el.removeAttribute("dir");
   el.innerHTML = mdLite(t, true);
 }
+/* (6.40) Splits an answer into its sentences (for one sentence per line). Not after "e.g.", "Dr.", a single letter
+   or a list number; a very short piece stays with the sentence after it. */
+const NO_BREAK = /(?:(?:^|[\s(])(?:e\.g|i\.e|vs|etc|mr|mrs|ms|dr|prof|sr|jr|st|no|approx|fig|inc|ltd|co|[A-Za-z]|\d{1,2}))\.$/i;
+function sentences(t){
+  const out = [], re = /[.!?؟。…]+["'”’»)\]]*\s+/g; let from = 0, m;
+  while((m = re.exec(t))){
+    const end = m.index + m[0].length;
+    if(end >= t.length) break;
+    const upto = t.slice(from, m.index + 1);
+    if(upto.trim().length < 12 || NO_BREAK.test(upto)) continue;
+    out.push(t.slice(from, end)); from = end;
+  }
+  if(from < t.length) out.push(t.slice(from));
+  return out;
+}
+const answerLines = () => !S.cfg || S.cfg.answer_lines !== false;
+function setRest(R, rest, join){                // the text after the bold start; only what changed is touched (it streams)
+  if(!answerLines()){ if(R.textContent !== rest || R.children.length) R.textContent = rest; return; }
+  const parts = sentences(join ? rest : rest.replace(/^\s+/, ""));
+  if(R.childNodes.length !== R.children.length) R.textContent = "";
+  while(R.children.length > parts.length) R.lastChild.remove();
+  parts.forEach((x, i) => {
+    let c = R.children[i];
+    if(!c){ c = document.createElement("span"); R.appendChild(c); }
+    const cls = "a-s" + (join && i === 0 ? " join" : ""), v = i === parts.length - 1 ? x : x.trimEnd();
+    if(c.className !== cls) c.className = cls;
+    if(c.textContent !== v) c.textContent = v;
+  });
+}
 function setAnswerText(el, t){          // first sentence bold: the user can start speaking after one glance
   t = String(t || "");
-  if(el.dataset.t === t) return;
-  el.dataset.t = t;
+  const lines = answerLines(), k = (lines ? "L" : "P") + t;
+  if(el.dataset.t === k) return;
+  el.dataset.t = k;
+  el.classList.toggle("lines", lines);
   const m = t.match(/^[\s\S]{20,240}?[.!?؟](?=\s|$)/);
   let lead = m ? m[0] : (t.length < 240 ? t : "");             // still streaming the first sentence: it is all lead (no jump later)
+  let whole = !!m;                                             // the bold start is a whole sentence
   if(lead.length > 130){                                       // a long first sentence: bold only its first part
     const cut = lead.slice(40).search(/,\s|\s(because|so|and|which|but)\s/i);
-    if(cut >= 0) lead = lead.slice(0, 40 + cut + 1);
+    if(cut >= 0){ lead = lead.slice(0, 40 + cut + 1); whole = false; }
   }
-  const L = el.querySelector(".a-lead"), R = el.querySelector(".a-rest");
-  if(L && R && L.textContent === lead){ R.textContent = t.slice(lead.length); return; }   // only the rest grew: keep the rest of the text as it is
   if(!lead){ el.textContent = t; return; }
-  el.innerHTML = `<span class="a-lead">${esc(lead)}</span><span class="a-rest">${esc(t.slice(lead.length))}</span>`;
+  let L = el.querySelector(".a-lead"), R = el.querySelector(".a-rest");
+  if(!(L && R && L.textContent === lead)){                     // (only the rest grew: the start is left as it is)
+    el.innerHTML = `<span class="a-lead"></span><span class="a-rest"></span>`;
+    L = el.firstChild; R = el.lastChild; L.textContent = lead;
+  }
+  L.classList.toggle("full", whole);
+  setRest(R, t.slice(lead.length), lines && !whole);
 }
 function renderAnswer(){
   const body = $("#answerBody");
@@ -3299,7 +3348,7 @@ function renderAnswer(){
   body._eh = null;
   const streaming = e.ans_state === "streaming", scr = e.source === "screen";
   const showFa = (S.cfg?.answer_fa || scr) && e.answer_fa;
-  const key = [e.id, !!showFa, !!e.translation, e.question || e.text, e.forced, S.running, e.repeat || 0, qNumOf(e), (newestAnswered() || {}).id].join("|");
+  const key = [e.id, !!showFa, !!e.translation, e.question || e.text, e.forced, S.running, e.repeat || 0, qNumOf(e), (newestAnswered() || {}).id, scr].join("|");
   if(body.dataset.key === key && body.querySelector(".a-text")){
     const at = body.querySelector(".a-text");
     if(scr) setScreenAnswer(at, e.answer); else setAnswerText(at, e.answer);
@@ -3317,11 +3366,12 @@ function renderAnswer(){
   if(body.dataset.eid !== String(e.id)){ body.scrollTop = 0; body.dataset.eid = String(e.id); }     // a new answer starts at its top
   body.innerHTML = `
     <div class="q-block">
-      <div class="q-head"><span class="qtag" title="The same number is on its line in the transcript">Q${qNumOf(e)}</span><span>${scr ? "Read from your screen" : (e.forced ? "You asked for an answer to · " : "") + esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}${newestAnswered() && newestAnswered().id !== e.id ? " · an earlier question" : ""}</span><span class="spacer"></span><button class="q-find" title="Scroll the transcript to this question and light it up">Show it in the transcript</button></div>
+      <div class="q-head"><span class="qtag" title="The same number is on its line in the transcript">Q${qNumOf(e)}</span><span class="q-what">${scr ? "On screen" : "They asked"}</span><span>${scr ? "Read from your screen" : (e.forced ? "You asked for an answer to · " : "") + esc(whoOf(e))} · ${clock(e.t0)}${!S.running && !recActive() ? " · meeting ended" : ""}${newestAnswered() && newestAnswered().id !== e.id ? " · an earlier question" : ""}</span><span class="spacer"></span><button class="q-find" title="Scroll the transcript to this question and light it up">Show it in the transcript</button></div>
       <p class="q-orig" dir="auto"></p>
       ${e.translation ? `<p class="q-fa" ${trAttr()}></p>` : ""}
     </div>
     ${e.repeat ? `<div class="rep-note">${icon("alert")} They asked this again (asked ${e.repeat + 1} times). This answer is written to be more direct than the last one: say the point in the first sentence, then one example.</div>` : ""}
+    <div class="a-label">${icon(scr ? "sparkles" : "mic")}${scr ? "Answer" : "Say this"}</div>
     <${scr ? "div" : "p"} class="a-text${streaming && !e.answer_fa ? " caret":""}" dir="auto"></${scr ? "div" : "p"}>
     ${showFa ? `<div class="a-fa"><div class="a-fa-label">Meaning in ${esc(myLang().name)}</div><p ${trAttr()} class="${streaming?"caret":""}"></p></div>` : ""}`;
   body.querySelector(".q-orig").textContent = e.question || e.text;
