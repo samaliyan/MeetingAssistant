@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.39"
+VERSION = "6.40"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -2254,19 +2254,25 @@ class AudioCapture(threading.Thread):
                     reader = start_reader(stream, rate, q, stop_reader)
                 stalled = lost = False
                 self.last_data = time.time()
+                gap_from = time.time()
                 while not self.stop_event.is_set():
                     try:
                         data = q.get(timeout=0.05)
                     except queue.Empty:
+                        # (6.40) the time that really passed, not a fixed 0.05 s: the wait is longer than asked (on
+                        # Windows by up to a timer tick), and the live service's clock fell behind in long silences
+                        now_ = time.time()
+                        gap = max(0.0, min(1.0, now_ - max(gap_from, self.last_data)))
+                        gap_from = now_
                         try:
-                            self.seg.silence(0.05)
+                            self.seg.silence(gap)
                         except Exception as e:
                             self._soft_error("segment", e)
                         self.level = 0.0
                         tap = self.tap
                         if tap is not None:
                             try:
-                                tap(None, 0.05)             # keeps the live service's clock in step
+                                tap(None, gap)              # keeps the live service's clock in step
                             except Exception as e:
                                 self._soft_error("live", e)
                         # a microphone always delivers audio (even silence); nothing at all = this way is broken
@@ -3469,7 +3475,7 @@ class DeepgramLive:
     def _wall(self, t, end=False):
         """Wall-clock time of stream time t (Deepgram counts only the audio it got). end=True: the end of a sentence
         that ends exactly where silence was skipped belongs before the skip, not after it."""
-        n = len(self.break_off)
+        n = min(len(self.break_off), len(self.break_pos))   # (6.40: a mark being written, whichever list is first, is harmless)
         i = (bisect.bisect_left(self.break_pos, t - 1e-6, 0, n) if end else bisect.bisect_right(self.break_pos, t + 1e-6, 0, n)) - 1
         return (self.t_audio0 or time.time()) + t + self.break_off[max(0, min(i, n - 1))]
 
@@ -3697,6 +3703,11 @@ class OpenAILive(DeepgramLive):
             self.ws.sock.sendall(bytes([0x89, 0x80]) + os.urandom(4))
 
     def _send_audio(self, pcm16k):
+        # (6.40) pings also while sound flows: with noise but no speech nothing else comes back, and after 45 s the
+        # line was taken for dead ("Live text stopped") although it worked
+        if time.time() - getattr(self, "_pinged", 0.0) > 4:
+            self._pinged = time.time()
+            self._keepalive()
         data = base64.b64encode(self.up(pcm16k)).decode()
         self.ws.send('{"type":"input_audio_buffer.append","audio":"' + data + '"}', text=True)
 
