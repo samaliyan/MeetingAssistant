@@ -1,4 +1,11 @@
-# Meeting Assistant — User Guide (version 6.39)
+# Meeting Assistant — User Guide (version 6.40)
+
+## Version 6.40: easier to read while you speak
+
+- **The answer is shown one sentence per line.** The first sentence is bold; say it first. The next sentences are under it, each on its own line, so you find your place again quickly. To get one paragraph as before: Setup › Answers › turn off "Each sentence of the answer on its own line".
+- The answer panel has two labels: **They asked** (the question) and **Say this** (the words to say).
+- **Continue is safer**: the copy used by Continue is kept up to date also in quiet minutes, and the first save after Continue keeps the meeting file as it was next to it (`.md.bak`).
+- Starting a meeting while "Learn my voice" is still listening no longer leaves the meeting without sound.
 
 ## Version 6.39
 

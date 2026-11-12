@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.39"
+VERSION = "6.40"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -225,6 +225,7 @@ DEFAULTS = {
     "keys": {},                  # 6.37: the key of every action (see KEY_ACTIONS), "" = none
     "coach": True,               # the situation card: phase, difficulty, repeated questions, a tip
     "answer_fa": True,           # the meaning (in my language) under the suggested answer
+    "answer_lines": True,        # (6.40) the suggested answer is shown one sentence per line (off: one paragraph)
     "mic_device": "",            # "" = Windows default
     "speaker_device": "",
     "sensitivity": 6,            # 1 (less) .. 10 (more)
@@ -2253,19 +2254,25 @@ class AudioCapture(threading.Thread):
                     reader = start_reader(stream, rate, q, stop_reader)
                 stalled = lost = False
                 self.last_data = time.time()
+                gap_from = time.time()
                 while not self.stop_event.is_set():
                     try:
                         data = q.get(timeout=0.05)
                     except queue.Empty:
+                        # (6.40) the time that really passed, not a fixed 0.05 s: the wait is longer than asked (on
+                        # Windows by up to a timer tick), and the live service's clock fell behind in long silences
+                        now_ = time.time()
+                        gap = max(0.0, min(1.0, now_ - max(gap_from, self.last_data)))
+                        gap_from = now_
                         try:
-                            self.seg.silence(0.05)
+                            self.seg.silence(gap)
                         except Exception as e:
                             self._soft_error("segment", e)
                         self.level = 0.0
                         tap = self.tap
                         if tap is not None:
                             try:
-                                tap(None, 0.05)             # keeps the live service's clock in step
+                                tap(None, gap)              # keeps the live service's clock in step
                             except Exception as e:
                                 self._soft_error("live", e)
                         # a microphone always delivers audio (even silence); nothing at all = this way is broken
@@ -3468,7 +3475,7 @@ class DeepgramLive:
     def _wall(self, t, end=False):
         """Wall-clock time of stream time t (Deepgram counts only the audio it got). end=True: the end of a sentence
         that ends exactly where silence was skipped belongs before the skip, not after it."""
-        n = len(self.break_off)
+        n = min(len(self.break_off), len(self.break_pos))   # (6.40: a mark being written, whichever list is first, is harmless)
         i = (bisect.bisect_left(self.break_pos, t - 1e-6, 0, n) if end else bisect.bisect_right(self.break_pos, t + 1e-6, 0, n)) - 1
         return (self.t_audio0 or time.time()) + t + self.break_off[max(0, min(i, n - 1))]
 
@@ -3696,6 +3703,11 @@ class OpenAILive(DeepgramLive):
             self.ws.sock.sendall(bytes([0x89, 0x80]) + os.urandom(4))
 
     def _send_audio(self, pcm16k):
+        # (6.40) pings also while sound flows: with noise but no speech nothing else comes back, and after 45 s the
+        # line was taken for dead ("Live text stopped") although it worked
+        if time.time() - getattr(self, "_pinged", 0.0) > 4:
+            self._pinged = time.time()
+            self._keepalive()
         data = base64.b64encode(self.up(pcm16k)).decode()
         self.ws.send('{"type":"input_audio_buffer.append","audio":"' + data + '"}', text=True)
 
@@ -7413,6 +7425,7 @@ class Session:
             if not s.entries:
                 return None
             s.dirty = False
+            s.loaded = True
             if LAST_OWNER[0] is None:
                 LAST_OWNER[0] = (s.started.timestamp(), s.path)
             return s
@@ -7420,7 +7433,14 @@ class Session:
             log("the last meeting could not be read (Continue is not offered):", short(e, 100), level="warn")
             return None
 
+    @staticmethod
+    def _u(v):
+        """(6.40) Text without half characters (a lone surrogate from a cut emoji): one of them stopped the 'Continue'
+        copy, the export and the window's events for the rest of the meeting."""
+        return v.encode("utf-8", "replace").decode("utf-8") if isinstance(v, str) else v
+
     def add(self, source, t0, t_end, text, lang, seg_ids, speaker=None, **fields):
+        text = self._u(text)
         with self.lock:
             eid = next(_entry_ids)
             e = {"id": eid, "source": source, "t0": t0, "t_end": t_end, "t_text": time.time(),
@@ -7430,7 +7450,7 @@ class Session:
                  "explain": "", "explain_q": "", "ex_state": "none", "edited": False, "repeat": 0,
                  "qtype": "", "qhint": "", "qmin": 0, "qmax": 0, "marked": False,
                  "speaker": speaker if isinstance(speaker, int) and speaker > 0 else None}
-            e.update({k: v for k, v in fields.items() if k in self.FIELDS and k not in ("source", "t0")})
+            e.update({k: self._u(v) for k, v in fields.items() if k in self.FIELDS and k not in ("source", "t0")})
             self.entries[eid] = e
             self.dirty = True
             return dict(e)
@@ -7442,7 +7462,7 @@ class Session:
 
     def set_feedback(self, text):
         with self.lock:
-            self.feedback = text
+            self.feedback = self._u(text)
             self.scores = {}                        # a new review: the old scores no longer belong to it
             self.dirty = True
 
@@ -7453,22 +7473,22 @@ class Session:
 
     def add_screen(self, text):
         with self.lock:
-            row = {"t": time.time(), "text": text}
+            row = {"t": time.time(), "text": self._u(text)}
             self.screens = (self.screens + [row])[-30:]
             self.dirty = True
             return dict(row)
 
     def set_summary(self, text):
         with self.lock:
-            self.summary = text
+            self.summary = self._u(text)
             self.dirty = True
 
     def set_notes(self, mine=None, full=None):
         with self.lock:
             if mine is not None:
-                self.my_notes = str(mine)[:20000]
+                self.my_notes = self._u(str(mine)[:20000])
             if full is not None:
-                self.notes_full = str(full)[:40000]
+                self.notes_full = self._u(str(full)[:40000])
             self.dirty = True
 
     def set_name(self, key, name):
@@ -7510,7 +7530,7 @@ class Session:
             e = self.entries.get(eid)
             if not e:
                 return None
-            e.update(fields)
+            e.update({k: self._u(v) for k, v in fields.items()})
             self.dirty = True
             return dict(e)
 
@@ -7559,7 +7579,10 @@ class Session:
     def _save(self, final=True):
         with self.lock:
             only_state = not self.dirty
-            if only_state and not (final and getattr(self, "state_dirty", False)):
+            # (6.40) a 'Continue' copy that an earlier save skipped is caught up as soon as it is due, also when nobody
+            # speaks afterwards (before: only at Stop, so a crash in a quiet minute lost the last lines of the copy)
+            if only_state and not (getattr(self, "state_dirty", False) and
+                                   (final or time.time() - getattr(self, "state_t", 0) > getattr(self, "state_every", 5.0))):
                 return
             self.dirty = False
             rows = self.ordered()
@@ -7615,6 +7638,12 @@ class Session:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8", errors="replace") as f:      # (a stray half character never loses the file)
                 f.write("\n".join(out))
+            if getattr(self, "loaded", False):                 # (6.40) the first save after Continue: the file as it was
+                self.loaded = False                            # is kept once (.bak) - it may hold lines the copy lacks
+                try:
+                    shutil.copy2(self.path, self.path + ".bak")
+                except OSError:
+                    pass
             os.replace(tmp, self.path)
             if getattr(self, "save_bad", False):
                 self.save_bad = False
@@ -7646,7 +7675,7 @@ class Session:
         self.state_t = time.time()
         try:
             tmp = LAST_MEETING + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8", errors="replace") as f:
                 f.write(json.dumps(self.state(), ensure_ascii=False))   # (one write: several times faster than json.dump)
                 f.flush()
                 os.fsync(f.fileno())                            # on the disk before it replaces the last good copy
@@ -9030,6 +9059,7 @@ class Engine:
         self.live_retries = collections.Counter()   # how many times a broken live stream was reopened by itself
         self.live_fatal = set()        # ... failed for good (key refused, no credit): not tried again
         self.live_lock = threading.RLock()   # one start of live streams at a time (never two streams for one source)
+        self.own_segs = set()          # (6.40) sentences that began while no live stream heard their source
         self.live_backlog = {}         # source -> recent finished sentences (audio) while a live service runs
         self.live_heard = {}           # source -> time up to which the live service wrote the text
         self.live_talk_at = {}         # source -> last time the live service showed words still being spoken
@@ -9191,7 +9221,10 @@ class Engine:
         """One model for the coach: the last of the chain (its limits are not the answers' limits); when the user chose the
         local model as the main one, only that model - the background text is not sent to any other service."""
         chain = self.chat_targets("ans")
-        return chain[:1] if chain and chain[0][0] == "llm" else chain[-1:]
+        if chain and chain[0][0] == "llm":
+            return chain[:1]
+        ok = [t for t in chain if self.models.ok(f"{t[0]}|{t[1]}")]      # (6.40) a resting last model: the one before it
+        return (ok or chain)[-1:]
 
     def _check_reply_later(self):
         try:
@@ -9739,7 +9772,15 @@ class Engine:
             self.app.voices.add_segment(seg_id, kw["audio"], kw["t0"], kw["t_end"])   # who said it: decided beside
         if source == "me" and kind in ("start", "preview", "segment") and not person:
             self.me_voice_at = time.time()                   # the user is speaking (before any text exists)
-        if self.live_mode(source):
+        # (6.40) a sentence that began while the live line was down (the backup was writing) is finished by the backup,
+        # also when the line opens again in the middle of it: the live service heard only its end, and its beginning
+        # was never written
+        if kind == "start" and not self.live_mode(source):
+            self.own_segs.add(seg_id)
+        own = kind in ("segment", "discard") and seg_id in self.own_segs
+        if kind in ("segment", "discard"):
+            self.own_segs.discard(seg_id)
+        if self.live_mode(source) and not own:
             if kind == "segment" and not self.paused:        # kept for a while: if the live service fails,
                 with self.cv:                               # what it never answered is written another way
                     self.live_backlog.setdefault(source, collections.deque(maxlen=15)).append(
@@ -9918,7 +9959,7 @@ class Engine:
                         o = self.pending[k]
                         if (o["source"] == job["source"] and bool(o.get("say")) == bool(job.get("say"))
                                 and job["dur"] + o["dur"] <= MAX_MERGED
-                                and (self.file_mode or self._adjacent(job, o))
+                                and ((self.file_mode and o["t0"] >= job["t0"]) or self._adjacent(job, o))   # (6.40: never an earlier sentence behind a later one)
                                 and self._usable(model, job["dur"] + o["dur"], now)):
                             gap = np.zeros(4000, dtype=np.float32)          # 0.25 s pause
                             job = {**job, "segs": job["segs"] + o["segs"],
@@ -10226,8 +10267,9 @@ class Engine:
                 if prev and e["t0"] - prev[-1]["t_end"] < 8 and prev[-1].get("ans_state") in ("thinking", "streaming") \
                         and not prev[-1].get("forced") and prev[-1]["text"] not in parts:
                     parts = [prev[-1]["text"]]                 # the first piece is already being answered: the newer answer covers both
-                    self.ans_gen[prev[-1]["id"]] += 1          # ... and the first piece's own answer stops
-                    self._publish(prev[-1]["id"], ans_state="none", answer="", answer_fa="")
+                    with self.tr_lock:                         # (6.40: with _answer's start, so it cannot say "thinking" after this)
+                        self.ans_gen[prev[-1]["id"]] += 1      # ... and the first piece's own answer stops
+                        self._publish(prev[-1]["id"], ans_state="none", answer="", answer_fa="")
             if old:
                 old["timer"].cancel()
                 self._publish(old["eid"], ans_state="none")   # merged into the newer piece
@@ -10498,6 +10540,8 @@ class Engine:
                 text = self.run_chat(self.chat_targets("tr"), messages, 500, 0.2, on_text)
             if not current():
                 return
+            if not text.strip():                            # (6.40) nothing came back: an error is shown, not an empty line
+                raise APIError("the service sent an empty translation")
             self._publish(eid, translation=text.strip().strip('"«»').strip(), tr_state="done")
             t = e.get("timing") or {}
             if t and state["first"]:
@@ -10532,8 +10576,11 @@ class Engine:
         sure = force or reps > 0                            # a question asked again is never skipped
         if reps != (e.get("repeat") or 0):
             self._publish(eid, repeat=reps)
-        self._publish(eid, ans_state="thinking", forced=force,
-                      question=(question if question and question != e["text"] else ""))
+        with self.tr_lock:                                  # (6.40) cancelled meanwhile: the line never stays on "thinking"
+            if not current():
+                return
+            self._publish(eid, ans_state="thinking", forced=force,
+                          question=(question if question and question != e["text"] else ""))
         hist = self.session.history(e["t0"], ANSWER_HISTORY if force else 6, exclude=eid)
         system = ANSWER_SYSTEM.format(
             context=(c["context"] or "(not given)") + job_note(c) + glossary_note(c),
@@ -12288,6 +12335,7 @@ class Hub:
 
     def publish(self, type_, **data):
         msg = json.dumps({"type": type_, **data}, ensure_ascii=False, default=float)
+        msg = msg.encode("utf-8", "replace").decode("utf-8")     # (6.40) a half character never blocks the window's events
         with self.lock:
             clients = list(self.clients)
         for q in clients:
@@ -13996,12 +14044,14 @@ class App:
             if self.running or self.stopping:
                 return None, "A session started meanwhile. Try again after it."
             self._stop_captures()
+            self.monitor_until = 0.0                              # (6.40: a running 'Test audio' timer no longer cuts this off)
             problems, mic, _spk = self._start_captures(lambda *a, **k: None, True, want_loop=False)
             for c in self.captures:
                 c.saver = keep
         if not any(c.source == "me" for c in self.captures):
             with self.lock:
-                self._stop_captures()
+                if not (self.running or self.stopping):
+                    self._stop_captures()
             return None, " ".join(problems) or "No microphone found."
         log(f"Voice: listening to the microphone ({mic or 'default'}) for {secs} s")
         end = time.time() + secs
@@ -14018,7 +14068,10 @@ class App:
                 time.sleep(0.4)
         finally:
             with self.lock:
-                self._stop_captures()
+                # (6.40) a meeting started while this was listening owns the microphone now: stopping here left the
+                # meeting running with no sound at all, and nothing said so
+                if not (self.running or self.stopping):
+                    self._stop_captures()
         if cancel.is_set():
             return None, "cancelled"
         if not raw:
@@ -15919,6 +15972,8 @@ class App:
         if self.running or self.stopping:
             return {"ok": False, "error": "Stop the meeting first, then run the check."}
         with self.lock:
+            if self.running or self.stopping:                     # (6.40: checked again under the lock)
+                return {"ok": False, "error": "Stop the meeting first, then run the check."}
             self._stop_captures()
             self.monitor_until = 0.0
         self.publish_running()
@@ -15951,7 +16006,8 @@ class App:
         return self._reveal(LOG_PATH)
 
     def api_ui_error(self, message="", stack=""):
-        one_line = lambda t, n: short(str(t), n).replace("\r", " ").replace("\n", " | ")   # no fake log lines
+        # (6.40) the page's address in a stack trace carries this run's key: it is never written to the log
+        one_line = lambda t, n: short(str(t).replace(self.token, "…"), n).replace("\r", " ").replace("\n", " | ")   # no fake log lines
         log("UI error:", one_line(message, 300), one_line(stack, 600))
         return {"ok": True}
 

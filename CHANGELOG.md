@@ -2,6 +2,39 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.40]
+
+**Easier to read while you speak**
+- **Each sentence of the answer on its own line**: the first sentence stays bold, the others follow one under the
+  other, so your eyes find their place again after every look at the camera. Also in the overlay. Setup › Answers ›
+  "Each sentence of the answer on its own line" turns it off (one paragraph, as before).
+- The answer panel says what each block is: **They asked** on the question, **Say this** on the answer.
+- The A− / A+ buttons are no longer cut off while a new question waits in the bar above the answer.
+- Small windows (one column): the transcript gets a little more of the height.
+
+**A full check of the program (four independent reviewers) — what was found and fixed**
+- **Continue**: the copy of the meeting that "Continue" uses is brought up to date also when nobody speaks (before,
+  a line written less than 5 seconds after the last copy reached it only with the next line or at Stop — a crash in
+  a quiet minute lost it from the copy).
+- **Continue never loses lines of the meeting file**: the first save after Continue keeps the file as it was once,
+  next to it, as `….md.bak`.
+- A half character (an emoji cut in two by a service) no longer stops the Continue copy, the export or the window's
+  events for the rest of the meeting; it is replaced.
+- **Starting a meeting while "Learn my voice" / "Test my voice" is still listening** no longer leaves the meeting
+  running without any sound; the audio check cannot do that either.
+- "Learn my voice" right after "Test for 30 seconds" is no longer cut off by that test's timer.
+- **OpenAI live**: with noise but no speech on the other side for 45 seconds (while you talk), the line was wrongly
+  taken for dead ("Live text stopped", backup, reopen). It is now pinged also while sound flows.
+- **Live services**: after long silences the clock of the live text no longer falls behind (lines of the other side
+  were stamped slightly early); a very rare error between two threads that also showed "Live text stopped" is gone.
+- **Live line reopening in the middle of a sentence**: the sentence is finished by the backup service, so its
+  beginning is no longer lost (and no "speaking…" row is left behind).
+- A translation that comes back empty is shown as failed instead of an empty line; the coach keeps working when its
+  model is resting (another model of the chain takes over); a line can no longer stay on "Writing an answer…" when its
+  question continued in the next line.
+- Recordings: a sentence that had to be tried again is never glued behind a later one.
+- A page error written to the log never contains this run's window key.
+
 ## [6.39]
 
 **OpenAI live speech to text**
