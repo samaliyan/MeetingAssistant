@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.40"
+VERSION = "6.41"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -1665,8 +1665,8 @@ class Segmenter:
             self.quiet += dur
             if self.quiet >= self.end_silence(self.samples / self.rate):
                 self._finish()
-            elif self.spec_final and not self.spec_sent and self.samples / self.rate >= 0.6 and 0.1 <= self.quiet < 0.2:
-                self.spec_sent = True
+            elif self.spec_final and not self.spec_sent and self.samples / self.rate >= 0.6 and self.quiet >= 0.1:
+                self.spec_sent = True                           # (6.41: no upper limit - a step longer than 0.1 s skipped it)
                 self.sink("preview", self.source, self.seg_id,
                           audio=resample16k(np.concatenate(self.frames), self.rate), t0=self.t0, spec=True)
 
@@ -1683,7 +1683,8 @@ class Segmenter:
         self.loud_run = 0
         self.samples = sum(len(f) for f in self.frames)
         self.quiet = 0.0
-        self.t0 = self.clock() - sum(len(f) for f in self.frames[-3:]) / self.rate
+        # (6.41) as far back as it took to be sure this is speech (more frames when the sensitivity is low)
+        self.t0 = self.clock() - sum(len(f) for f in self.frames[-self.need_loud:]) / self.rate
         self.seg_id = next(_seg_counter)
         self.last_preview = 0.0                   # first preview as soon as 1.2 s have been spoken
         self.spec_sent = False
@@ -1721,6 +1722,9 @@ class Segmenter:
         self.rms = self.rms[i + 1:]
         self.samples -= head_samples
         self.t0 += head_dur
+        if not self.frames:                       # (6.41) cut at the very last frame: nothing is left to be a new
+            self._reset()                         # sentence - no empty "speaking…" row; the next sound starts one
+            return
         q = 0
         while q < len(self.louds) and not self.louds[-1 - q]:
             q += 1
@@ -2899,6 +2903,9 @@ class GroqAPI:
                     try:
                         j = r.json()
                         raw = ((j.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                        u = j.get("usage") or {}                    # (6.41: the real count, not an estimate)
+                        if isinstance(u, dict) and isinstance(u.get("total_tokens"), int) and u["total_tokens"] > 0:
+                            used[0] = u["total_tokens"]
                     except (ValueError, AttributeError, IndexError, TypeError):
                         raise Transient(f"{self.name} sent something that is not an answer "
                                         "(a page from a proxy or login portal?)")
@@ -3012,10 +3019,11 @@ def open_tunnel(host, port, proxy, timeout=10):
     try:
         user = urllib.parse.unquote(u.username or "")
         pwd = urllib.parse.unquote(u.password or "")
+        login = bool(user or pwd)                  # (6.41: a proxy with only a password is logged in to as well)
         if u.scheme.startswith("socks"):
-            sock.sendall(b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")    # no login / user+password
+            sock.sendall(b"\x05\x02\x00\x02" if login else b"\x05\x01\x00")    # no login / user+password
             reply = _recv_exact(sock, 2)
-            if reply == b"\x05\x02" and user:
+            if reply == b"\x05\x02" and login:
                 ub, pb = user.encode()[:255], pwd.encode()[:255]
                 sock.sendall(b"\x01" + bytes([len(ub)]) + ub + bytes([len(pb)]) + pb)
                 if _recv_exact(sock, 2)[1] != 0:
@@ -3031,7 +3039,7 @@ def open_tunnel(host, port, proxy, timeout=10):
             _recv_exact(sock, (extra if extra else _recv_exact(sock, 1)[0]) + 2)
         else:
             auth = ""
-            if user:
+            if login:
                 auth = "Proxy-Authorization: Basic " + base64.b64encode(f"{user}:{pwd}".encode()).decode() + "\r\n"
             hp = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"        # an IPv6 address needs brackets
             sock.sendall(f"CONNECT {hp} HTTP/1.1\r\nHost: {hp}\r\n{auth}\r\n".encode())

@@ -2,6 +2,17 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.41]
+
+Small fixes from an outside review of the code:
+- **Proxy**: a proxy that has only a password (no user name) is logged in to as well (HTTP and SOCKS5).
+- A very long sentence that is cut exactly at its last moment no longer leaves an empty "speaking…" row.
+- With a low microphone sensitivity, the start time of a line is no longer up to 0.15 s late.
+- Local speech to text: the update at a pause is no longer skipped when the computer's sound stops in one longer
+  step.
+- A service that sends its answer in one piece (not streamed) is counted with its real number of tokens in
+  Credit & limits, not an estimate.
+
 ## [6.40]
 
 **Easier to read while you speak**
