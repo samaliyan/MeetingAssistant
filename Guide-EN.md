@@ -1,4 +1,8 @@
-# Meeting Assistant — User Guide (version 6.40)
+# Meeting Assistant — User Guide (version 6.41)
+
+## Version 6.41
+
+- Small fixes only: a proxy with only a password now works, no empty "speaking…" row after a very long sentence, more exact start times with a low microphone sensitivity. Nothing changes in how you use the program.
 
 ## Version 6.40: easier to read while you speak
 

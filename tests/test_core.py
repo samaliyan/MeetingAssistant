@@ -418,3 +418,110 @@ def test_page_error_never_logs_the_session_key(app):
     finally:
         app.log = old
     assert seen and a.token not in " ".join(seen)
+
+
+# ---- 6.41: small fixes from an outside review -------------------------------------------------
+def _segmenter(app, sens=6, source="me"):
+    import numpy as np
+    events = []
+    seg = app.Segmenter(source, 16000, sens, lambda kind, *a, **k: events.append((kind, k)))
+    n = int(16000 * app.FRAME_SEC)
+    t = np.arange(n) / 16000.0
+    loud = (np.sin(2 * np.pi * 220 * t) * 0.3).astype("float32")
+    room = (np.random.RandomState(2).randn(n) * 0.0004).astype("float32")
+    for _ in range(int(3.0 / app.FRAME_SEC)):              # a quiet room first (sets the noise floor)
+        seg.feed(room)
+    return seg, events, loud, np.zeros(n, dtype="float32")
+
+
+def test_forced_cut_at_the_last_frame_starts_no_empty_sentence(app):
+    seg, events, loud, silent = _segmenter(app)
+    for _ in range(10):
+        seg.feed(loud)
+    assert seg.active
+    seg.rms = [1.0] * (len(seg.rms) - 1) + [0.0]          # the quietest moment is the very last frame
+    seg._cut()
+    assert not seg.active and seg.frames == []
+    assert [k for k, _ in events] == ["start", "discard"] or [k for k, _ in events] == ["start", "segment"]
+    for _ in range(10):                                    # the next sound starts a sentence as usual
+        seg.feed(loud)
+    assert seg.active and [k for k, _ in events].count("start") == 2
+
+
+def test_start_time_goes_back_as_far_as_the_sensitivity_needed(app):
+    for sens in (6, 1):
+        now = [100.0]
+        seg, events, loud, _silent = _segmenter(app, sens)
+        seg.clock = lambda: now[0]
+        for _ in range(seg.need_loud):
+            seg.feed(loud)
+        assert seg.active
+        assert abs((100.0 - seg.t0) - seg.need_loud * app.FRAME_SEC) < 1e-6
+
+
+def test_pause_update_is_not_skipped_by_a_long_silent_step(app):
+    seg, events, loud, _silent = _segmenter(app, source="them")
+    seg.spec_final = True
+    for _ in range(40):                                    # 1.2 s of speech
+        seg.feed(loud)
+    seg.silence(0.25)                                      # one step right over the old 0.1 - 0.2 s window
+    assert [k for k, kw in events if k == "preview" and kw.get("spec")] == ["preview"]
+    seg.silence(0.05)                                      # ... and only once per pause
+    assert len([k for k, kw in events if k == "preview"]) == 1
+
+
+def test_proxy_with_only_a_password_is_logged_in_to(app):
+    import socket
+    import threading
+    got = {}
+
+    def serve(srv, kind):
+        c, _ = srv.accept()
+        with c:
+            if kind == "http":
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += c.recv(4096)
+                got["http"] = data
+                c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            else:
+                got["hello"] = c.recv(16)
+                c.sendall(b"\x05\x02")
+                got["login"] = c.recv(600)
+                c.sendall(b"\x01\x00")
+                c.recv(600)
+                c.sendall(b"\x05\x00\x00\x01" + bytes(6))
+
+    for kind, scheme in (("http", "http"), ("socks", "socks5")):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        th = threading.Thread(target=serve, args=(srv, kind), daemon=True)
+        th.start()
+        s = app.open_tunnel("example.com", 443, f"{scheme}://:secret@127.0.0.1:{srv.getsockname()[1]}", timeout=5)
+        s.close()
+        th.join(5)
+        srv.close()
+    assert b"Proxy-Authorization: Basic " in got["http"]
+    assert got["hello"] == b"\x05\x02\x00\x02" and got["login"] == b"\x01\x00\x06secret"
+
+
+def test_a_whole_answer_counts_its_real_tokens(app):
+    """A service that ignores "stream" sends one JSON answer: its own token count is recorded, not an estimate."""
+    import httpx
+    seen = []
+    old_rec, real = app.record_usage, app.httpx.Client
+    app.record_usage = lambda name, **k: seen.append(k)
+    reply = {"choices": [{"message": {"content": "hello there"}}], "usage": {"total_tokens": 4321}}
+    app.httpx.Client = lambda **kw: real(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=reply)),
+                                         **{k: v for k, v in kw.items() if k not in ("proxy", "transport")})
+    try:
+        api = app.GroqAPI("gsk_" + "x" * 40, "")
+        text = api.chat_stream("some-model", [{"role": "user", "content": "hi"}], 50, 0.2, None, lambda t: True)
+    finally:
+        app.record_usage, app.httpx.Client = old_rec, real
+        try:
+            api.close()
+        except Exception:
+            pass
+    assert text == "hello there" and seen and seen[-1].get("tokens") == 4321
