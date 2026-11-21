@@ -21,6 +21,7 @@ you are asked a question.
 - Suggested answers, in the language of the question or in a fixed language, with their meaning in your language
 - Answers use only the facts you give about yourself and stay consistent when a question is asked again
 - Select words in any line to get them explained, or to get an answer about them
+- **Screen mode**: nothing is listened to — draw a box around a question on your screen and get its answer, one after another
 - Stop and **continue** the same meeting later (Shift+F9), even after restarting the program
 - Meeting summary, and transcription of recorded audio / video files
 - Works with **Groq** (free API key), any **OpenAI-compatible** service, **Deepgram** or **OpenAI** live — or completely

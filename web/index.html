@@ -349,6 +349,8 @@ body.inperson #mThem{display:none}
 .note-box{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;margin-bottom:10px;border-radius:10px;background:var(--accent-soft);color:var(--accent-text);font-size:.88rem;line-height:1.5}
 .note-box[hidden]{display:none}
 body.subs #mMe{display:none}
+/* (6.42) screen mode: nothing is listened to - no sound meters, no pause, no speaker legend */
+body.scrmode .meters,body.scrmode #pauseBtn,body.scrmode #legend,body.scrmode #recBtn,body.scrmode #resumeBtn,body.scrmode #answerNowBtn,body.scrmode #sbMode{display:none!important}
 /* subtitle mode: a line shows only its translation (the original is kept, and shown again when the mode is off) */
 body.subs .entry.has-tr:not([data-editing]) .orig{display:none}
 body.subs .entry.has-tr .fa{font-size:1.08em;margin-top:0}
@@ -985,6 +987,7 @@ body.capturing #sbDelay,body.capturing #sbUsage{display:none}
   .statusbar{gap:12px}
   .two,.opt-cards{grid-template-columns:1fr}
 }
+@media (max-width:600px){ .modeseg button{padding:0 7px} .topbar .brand{flex:none} }   /* (6.42: four modes fit a narrow window) */
 @media (max-width:560px){
   .subtitle,.meters{display:none}
   .topbar{padding:8px 10px;gap:8px}
@@ -1058,6 +1061,7 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <button data-mode="meeting" role="radio" title="Online meeting (Teams, Zoom, Meet): the computer's sound is the other side, your microphone is you"><span data-icon="headphones"></span><span class="hide-sm">Meeting</span></button>
       <button data-mode="inperson" role="radio" title="In person, or a phone on speaker: only the microphone is used and the program tells the voices apart"><span data-icon="mic"></span><span class="hide-sm">In person</span></button>
       <button data-mode="video" role="radio" data-title-k="A film or video on this computer: only its sound, only its translation, like subtitles ({g_subs})"><span data-icon="text"></span><span class="hide-sm">Video</span></button>
+      <button data-mode="screen" role="radio" title="Only questions on your screen: nothing is listened to. Draw a box around a question (or read the whole screen) and get its answer, one after another"><span data-icon="monitor"></span><span class="hide-sm">Screen</span></button>
     </div>
     <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts and tips" aria-label="Help"><span data-icon="help"></span></button>
     <button class="btn ghost" id="setupBtn" title="Setup (Ctrl+,)"><span data-icon="sliders"></span><span class="hide-sm">Setup</span></button>
@@ -1071,6 +1075,8 @@ pre.code{direction:ltr;text-align:left;background:var(--surface-3);border-radius
       <span id="mbState"></span> <span id="mbVoice"></span></div>
     <button class="btn sm" id="mbLearn" hidden><span data-icon="mic"></span><span id="mbLearnLabel">Learn my voice</span></button>
     <button class="btn sm" id="mbHold" hidden title="Hold this button (or Right Ctrl) while you speak: those words are yours"><span data-icon="mic"></span>Hold while I speak</button>
+    <button class="btn sm primary" id="mbArea" hidden><span data-icon="crop"></span>Draw an area <kbd data-k="area"></kbd></button>
+    <button class="btn sm" id="mbScreen" hidden><span data-icon="monitor"></span>Whole screen</button>
     <button class="btn sm" id="mbOverlay"><span data-icon="eye"></span><span id="mbOverlayLabel">Show over the video</span></button>
     <button class="btn sm ghost" id="mbLeave">Back to meeting mode</button>
   </div>
@@ -1935,7 +1941,9 @@ const PRESETS = {text: {files: true, marks: true, detect: true}, translate: {tra
 const userFeatOn = k => !S.cfg || !S.cfg.features || S.cfg.features[k] !== false;      // the user's own choice
 const SUBS_KEEP = ["translate", "overlay", "files"];
 // what is on right now: subtitle mode (a film or video) pauses everything but translation, the overlay and files
+const SCREEN_ON = ["screen", "answers"], SCREEN_OFF = ["coach", "say", "detect", "prep", "files"];   // (6.42, as in the program)
 const featOn = k => S.cfg && S.cfg.subtitles ? (k === "translate" || (SUBS_KEEP.includes(k) && userFeatOn(k)))
+  : curMode() === "screen" && SCREEN_ON.includes(k) ? true : curMode() === "screen" && SCREEN_OFF.includes(k) ? false
   : (curMode() === "inperson" && k === "say") ? false : userFeatOn(k);     // (in person the microphone hears everyone: no "say it")
 function curMode(){ return S.cfg ? (S.cfg.work_mode || (S.cfg.subtitles ? "video" : "meeting")) : "meeting"; }
 function featNeed(tasks){                                    // the services a part needs, as one short line
@@ -2139,8 +2147,8 @@ function renderRunning(){
   const recOn = recActive(), prob = S.running ? liveProblem() : "";
   document.body.classList.toggle("capturing", !!(S.running || S.monitoring));
   if(S.running && S.paused){ pill.classList.add("busy"); txt.textContent = "Paused"; }
-  else if(S.running && prob){ pill.classList.add("problem"); txt.textContent = "Live · " + prob; }
-  else if(S.running){ pill.classList.add("live"); txt.textContent = "Live"; }
+  else if(S.running && prob){ pill.classList.add("problem"); txt.textContent = (curMode() === "screen" ? "Reading · " : "Live · ") + prob; }
+  else if(S.running){ pill.classList.add("live"); txt.textContent = curMode() === "screen" ? "Reading" : "Live"; }
   else if(recOn){ pill.classList.add("busy"); txt.textContent = S.rec?.state === "downloading" ? "Downloading link" : "Transcribing recording"; }
   else if(S.stopping){ pill.classList.add("busy"); txt.textContent = "Finishing & saving…"; }
   else if(S.monitoring){ pill.classList.add("test"); txt.textContent = "Testing audio"; }
@@ -2150,7 +2158,7 @@ function renderRunning(){
   else { txt.textContent = "Ready"; }
   btn.className = "btn " + (S.running ? "stop" : "primary");
   btn.querySelector("[data-icon]").innerHTML = icon(S.running ? "stop" : "play");
-  $("#startLabel").textContent = S.running ? "Stop" : S.busy ? "Starting…" : ({video: "Start subtitles", inperson: "Start listening"}[curMode()] || "Start");
+  $("#startLabel").textContent = S.running ? "Stop" : S.busy ? "Starting…" : ({video: "Start subtitles", inperson: "Start listening", screen: "Start reading"}[curMode()] || "Start");
   btn.disabled = S.stopping || S.busy || recOn;
   const rb = $("#resumeBtn"), ri = S.resume;
   rb.hidden = !ri || S.running || S.stopping || recOn;
@@ -2668,6 +2676,7 @@ function renderSubBtn(){                               // the mode switch in the
   const m = curMode();
   $$("#modeSeg [data-mode]").forEach(b => b.setAttribute("aria-checked", b.dataset.mode === m ? "true" : "false"));
   document.body.classList.toggle("inperson", m === "inperson");
+  document.body.classList.toggle("scrmode", m === "screen");
   renderModeBar(); renderVoiceField();
 }
 const MODE_UI = {
@@ -2675,6 +2684,8 @@ const MODE_UI = {
              toast: "In-person mode: only your microphone is used, and the program tells your voice from the others."},
   video: {icon: "text", title: "Video mode (subtitles)", what: "for a film, video or audio playing on this computer.",
           toast: "Video mode: only the computer's sound (the video) is used and only the translation is shown, like subtitles."},
+  screen: {icon: "monitor", title: "Screen mode", what: "only questions on your screen; nothing is listened to.",
+           toast: "Screen mode: nothing is listened to. Each question you read from the screen gets its answer, one after another."},
   meeting: {toast: "Meeting mode: the computer's sound is the other side, your microphone is you."}};
 const READ_ME = {fa: "امروز برنامه را امتحان می‌کنم تا صدای مرا یاد بگیرد. معمولی حرف می‌زنم، مثل یک جلسه‌ی کاری. اول خودم را معرفی می‌کنم و بعد کمی درباره‌ی کارم و آخرین پروژه‌ام توضیح می‌دهم.",
                  en: "Today I am trying the program so it learns my voice. I speak normally, as in a work meeting. First I introduce myself, then I say a little about my work and my last project."};
@@ -2694,7 +2705,14 @@ function renderModeBar(){
   const u = MODE_UI[m], ml = myLang().name, v = S.voice || {}, L = v.learning || {};
   $("#mbIcon").innerHTML = icon(u.icon); $("#mbTitle").textContent = u.title; $("#mbWhat").textContent = S.running ? "" : u.what;
   bar.classList.toggle("short", !!S.running);                    // during the session: one line (the room is for the text)
-  if(m === "video"){
+  $("#mbArea").hidden = $("#mbScreen").hidden = !(m === "screen" && S.running);
+  if(m === "screen"){
+    const any = keyText("g_area") ? ` From any program: ${keyText("g_area")} draws an area${keyText("g_screen") ? ", " + keyText("g_screen") + " reads the screen" : ""}.` : "";
+    $("#mbState").textContent = S.running
+      ? `draw a box around a question — its answer comes on the right.${any}`
+      : `Press Start reading, then draw a box around each question. What the questions are about: Setup › Meeting.`;
+    $("#mbVoice").textContent = "";
+  } else if(m === "video"){
     $("#mbState").textContent = S.running
       ? `only the computer's sound · ${ml} translation`
       : `Press Start subtitles, then play it. Only the computer's sound is used (not your microphone); you see only the ${ml} translation.`;
@@ -2853,11 +2871,14 @@ $("#voiceForgetBtn").onclick = async () => {
   ["pointerup", "pointerleave", "pointercancel", "blur"].forEach(t => b.addEventListener(t, () => set(false)));
 })();
 $("#mbLeave").onclick = () => setMode("meeting");
+$("#mbArea").onclick = () => readScreen(true);
+$("#mbScreen").onclick = () => readScreen(false, "screen");
 $("#mbOverlay").onclick = () => { if(!S.overlay) $("#ovBtn").click(); };
 function setMode(m){
   if(!S.cfg || curMode() === m) return;
   S.cfg.work_mode = m; S.cfg.subtitles = m === "video";
   document.body.classList.toggle("subs", m === "video");
+  if(m === "screen" && TM.kind === "screen") closeTool();
   applyConfig();
   queueSave({work_mode: m});
   // the bar under the header already explains video and in-person mode: a message only when it is not shown, and a
@@ -3217,6 +3238,26 @@ function renderEmpty(){
     const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
     return;
   }
+  if(curMode() === "screen"){
+    const c = S.cfg || {}, ok = c.ready !== false;
+    const keys = [keyText("area") && `<b>${esc(keyText("area"))}</b> draws an area`, keyText("screen") && `<b>${esc(keyText("screen"))}</b> reads as chosen`].filter(Boolean).join(", ");
+    const any = keyText("g_area") ? `<br>From any other program: <b>${esc(keyText("g_area"))}</b> draws an area${keyText("g_screen") ? `, <b>${esc(keyText("g_screen"))}</b> reads the whole screen` : ""}.` : "";
+    box.innerHTML = S.running
+      ? `<div class="empty-card"><div class="empty-icon">${icon("crop")}</div><h3>Ready — read the first question</h3>
+         <p>Go to the question, then draw a box around it. Its answer comes on the right; every question is kept here with its number (Q1, Q2 …).</p>
+         <p class="help">${keys ? keys + "." : ""}${any}</p>
+         <div class="empty-actions"><button class="btn primary lg" id="bigArea">${icon("crop")}Draw an area${kbd("area")}</button><button class="btn soft lg" id="bigScreen">${icon("monitor")}Whole screen</button></div></div>`
+      : `<div class="empty-card"><div class="empty-icon">${icon("monitor")}</div><h3>Screen mode</h3>
+         <p>Nothing is listened to — no microphone, no computer sound. You take a picture of a question on your screen and get its answer, one after another.</p>
+         <p>1. Write what the questions are about in <b>Setup › Meeting</b> (and how the answers should be in <b>Setup › Answers</b>).<br>2. Press <b>Start reading</b>.<br>3. Draw a box around each question.</p>
+         <p class="help">${ok ? "Topic now: " + (c.context ? "“" + esc(c.context.trim().split("\n")[0].slice(0, 120)) + "”" : "not written yet") + "." : "A service that can read pictures is needed first (Setup › Services)."} To go back to meetings, choose <b>Meeting</b> at the top.</p>
+         <div class="empty-actions"><button class="btn ghost lg" id="bigTopic">${icon("edit")}${c.context ? "Change the topic" : "Write the topic"}</button><button class="btn primary lg" id="bigStart">${icon("play")}Start reading${kbd("start")}</button></div></div>`;
+    const bs = $("#bigStart"); if(bs) bs.onclick = () => toggleRun(false);
+    const bt = $("#bigTopic"); if(bt) bt.onclick = () => openDrawer(ok ? "meeting" : "connection");
+    const ba = $("#bigArea"); if(ba) ba.onclick = () => readScreen(true);
+    const bw = $("#bigScreen"); if(bw) bw.onclick = () => readScreen(false, "screen");
+    return;
+  }
   if(curMode() === "inperson"){
     const learned = !!(S.voice && S.voice.learned);
     box.innerHTML = S.running
@@ -3341,6 +3382,7 @@ function renderAnswer(){
       : thinking ? `<div class="answer-empty">${icon("sparkles")}<b>${thinkScr ? "Reading the screen…" : "Writing an answer…"}</b><div class="a-skel"><i></i><i></i><i></i></div></div>`
       : OVERLAY ? ovIdle()
       : hearing ? `<div class="answer-empty listening"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><b>Listening to the question…</b><span>The answer appears here as soon as they finish.</span></div>`
+      : curMode() === "screen" ? `<div class="answer-empty">${icon("monitor")}<b>No question yet</b><span>${S.running ? "Draw a box around a question on your screen" + (keyText("area") ? " (" + kbd("area") + ")" : "") + " — its answer appears here." : "Press <b>Start reading</b>, then draw a box around a question — its answer appears here."}</span></div>`
       : `<div class="answer-empty">${icon("sparkles")}<b>No question yet</b><span>When the other side asks something, the answer to say appears here.${keyText("answer") ? `<br>Press ${kbd("answer")} to answer the last thing they said.` : ""}</span></div>`;
     if(body._eh !== html){ body._eh = html; body.innerHTML = html; }     // (unchanged: nothing is rebuilt)
     return;
@@ -3413,11 +3455,17 @@ window.addEventListener("resize", updMore);
 function ovKeys(){                                 // the keys of the see-through window, only for the parts that are on
   if(S.cfg && S.cfg.hotkeys === "off") return "Keys from any program are off (Setup › Keys) · Ctrl+Alt+Shift+M move";
   const k = (id, what) => keyText(id) ? keyText(id) + " " + what : "";
-  return [featOn("answers") && k("g_answer", "answer now"), featOn("screen") && k("g_screen", "read the screen"),
+  return [featOn("answers") && curMode() !== "screen" && k("g_answer", "answer now"), featOn("screen") && k("g_screen", "read the screen"),
     featOn("screen") && k("g_area", "read an area"), featOn("coach") && k("g_coach", "coach"),
     k("g_prev", "earlier"), k("g_next", "newer"), k("g_move", "move"), k("g_overlay", "close")].filter(Boolean).join(" · ");
 }
 function ovIdle(){
+  if(curMode() === "screen"){                         // (6.42) nothing is listened to: only how to read a question
+    const how = [keyText("g_area") && esc(keyText("g_area")) + " draws an area", keyText("g_screen") && esc(keyText("g_screen")) + " reads the screen"].filter(Boolean).join(" · ");
+    return S.running
+      ? `<div class="ov-idle"><b>Screen mode</b><span>${how || "Read a question from the program's window"} — its answer appears here.</span><span class="ov-keys">${ovKeys()}</span></div>`
+      : `<div class="ov-idle"><b>Overlay is on</b><span>Screen mode: open Meeting Assistant from the taskbar and press Start reading${keyText("start") ? " (" + esc(keyText("start")) + ")" : ""}.${how ? " Until then: " + how + "." : ""}</span><span class="ov-keys">${ovKeys()}</span></div>`;
+  }
   if(!S.running && !recActive())
     return `<div class="ov-idle"><b>Overlay is on</b><span>Start the meeting: open Meeting Assistant from the taskbar and press Start${keyText("start") ? " (" + esc(keyText("start")) + ")" : ""}${keyText("g_overlay") ? " — or " + esc(keyText("g_overlay")) + " closes this and brings the window back" : ""}. Then what they say${featOn("translate") ? " and its translation" : ""}${featOn("answers") ? ", and the answer to say," : ""} appear here.</span><span class="ov-keys">${ovKeys()}</span></div>`;
   let live = null;
@@ -3462,7 +3510,7 @@ $("#ansNext").onclick = () => stepAnswer(1);
 
 /* ---------- title, pause ---------- */
 function renderTitle(){
-  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : ({video: "Subtitles", inperson: "Conversation"}[curMode()] || "Live transcript");
+  $("#feedTitle").textContent = S.recName && S.recName !== "saved" ? "Recording: " + S.recName : S.recName === "saved" ? "Recording" : ({video: "Subtitles", inperson: "Conversation", screen: "Questions from the screen"}[curMode()] || "Live transcript");
 }
 async function togglePause(){
   if(!S.running){ toast("info", withKeys("Pause works during a meeting — start it first ({start}).")); return; }

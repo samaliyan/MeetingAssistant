@@ -1,4 +1,20 @@
-# Meeting Assistant — User Guide (version 6.41)
+# Meeting Assistant — User Guide (version 6.42)
+
+## Version 6.42: Screen mode
+
+For when you only want answers to questions on your screen, and no meeting is listened to.
+
+1. Write what the questions are about in **Setup › Meeting › What is this meeting about?** (for example "CCNA practice exam, multiple choice"). How the answers should be goes in **Setup › Answers**.
+2. Choose **Screen** at the top (next to Meeting, In person, Video).
+3. Press **Start reading**. No microphone and no computer sound are used.
+4. Go to the question and draw a box around it: **Draw an area** (Shift+F3). **Whole screen** and F3 work too. From any other program: Ctrl+Alt+D draws an area, Ctrl+Alt+S reads the screen.
+5. The answer comes on the right (and in the overlay). Each question keeps its number (Q1, Q2 …); Ctrl+← and Ctrl+→ show earlier and newer answers.
+6. **Stop** saves the session like a meeting.
+
+- It needs a service that can read pictures (Setup › Services › Reading the screen). No speech-to-text service is needed.
+- Each picture is answered on its own: the model sees the topic you wrote and that picture, not the earlier questions.
+- To go back to meetings, choose **Meeting** at the top (after Stop).
+- Use it only where it is allowed (some interviews and tests forbid any help).
 
 ## Version 6.41
 

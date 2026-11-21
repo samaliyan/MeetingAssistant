@@ -2,6 +2,24 @@
 
 All notable changes. The full user guide is in [Guide-EN.md](Guide-EN.md) and [Guide-FA.md](Guide-FA.md).
 
+## [6.42]
+
+**Screen mode: only questions from your screen, nothing is listened to**
+- New mode next to Meeting / In person / Video: **Screen**. No microphone and no computer sound are opened, and
+  nothing is sent to a speech-to-text service. You take a picture of a question (draw a box around it, or the whole
+  screen) and get its answer — one question after another.
+- Press **Start reading**; then **Draw an area** (Shift+F3), **Whole screen**, or F3. From any other program:
+  Ctrl+Alt+D draws an area, Ctrl+Alt+S reads the screen — these keys work during the whole session, with or without
+  the overlay.
+- Every question is kept with its number (Q1, Q2 …): go back and forth with Ctrl+← / Ctrl+→, and the session is
+  saved like a meeting (summary, export, Continue).
+- What the questions are about is written once in **Setup › Meeting** (and how answers should be in **Setup ›
+  Answers**); it goes with every picture.
+- Only a service that can read pictures is needed (no speech-to-text service, no audio device). Screen reading and
+  its answers are always on in this mode; coach, "say it", meeting reminder, interview prep and files are paused
+  there, and your own on / off choices apply again in the other modes.
+- The mode cannot be changed to or from Screen while a session runs (Stop first).
+
 ## [6.41]
 
 Small fixes from an outside review of the code:

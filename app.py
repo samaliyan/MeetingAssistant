@@ -67,7 +67,7 @@ try:
 except Exception:  # missing or libsndfile problem -> plain WAV upload
     sf = None
 
-VERSION = "6.41"
+VERSION = "6.42"
 FROZEN = bool(getattr(sys, "frozen", False))          # running as MeetingAssistant.exe
 # files that ship with the program (read-only) ...
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -239,6 +239,7 @@ DEFAULTS = {
     "work_mode": "meeting",      # meeting: online call (computer sound = them, microphone = me)
                                  # inperson: someone in front of me / a phone on speaker (only the microphone; voices told apart)
                                  # video: a film / video on this computer (only its sound, only its translation)
+                                 # screen (6.42): nothing is listened to - only questions read from the screen
     "overlay_hide": True,        # hide the see-through window from screen sharing
     "overlay_pos": "top",        # top | bottom of the screen
     # other services (OpenAI-compatible) and which service does what
@@ -305,6 +306,14 @@ FEATURE_TASKS = {"translate": ("tr",), "answers": ("ans",), "coach": ("ans",), "
 
 
 SUBS_KEEP = ("translate", "overlay", "files")      # the parts that work in subtitle mode (translation is always on there)
+# 6.42 screen mode (nothing is listened to; every question comes from a picture of the screen): reading the screen and
+# its answers are always on there, and the parts that need speech or a meeting are paused
+SCREEN_ON = ("screen", "answers")
+SCREEN_OFF = ("coach", "say", "detect", "prep", "files")
+
+
+def screen_only(cfg):
+    return cfg.get("work_mode") == "screen"
 
 
 def feat(cfg, name):
@@ -319,6 +328,11 @@ def feat(cfg, name):
             return False
     if cfg.get("work_mode") == "inperson" and name == "say":
         return False
+    if cfg.get("work_mode") == "screen":
+        if name in SCREEN_ON:
+            return True
+        if name in SCREEN_OFF:
+            return False
     return bool((cfg.get("features") or {}).get(name, True))
 
 
@@ -326,14 +340,14 @@ def use_mic(cfg):
     """Is the microphone heard? Meeting: if 'Transcribe my voice' is on. In person: always (everyone is heard through
     it). Video: never (only the computer's sound)."""
     mode = cfg.get("work_mode") or ("video" if cfg.get("subtitles") else "meeting")
-    if mode == "video":
+    if mode in ("video", "screen"):
         return False
     return True if mode == "inperson" else bool(cfg.get("transcribe_me"))
 
 
 def use_loop(cfg):
     """Is the computer's sound heard? Not in person: there the other person is in the room or on a phone speaker."""
-    return (cfg.get("work_mode") or "meeting") != "inperson"
+    return (cfg.get("work_mode") or "meeting") not in ("inperson", "screen")
 
 
 def in_person(cfg):
@@ -407,7 +421,7 @@ MODES = {
 CHOICES = {"answer_mode": ("smart", "fast"),
            "theme": ("system", "light", "dark"), "local_device": ("auto", "cpu"),
            "about_source": ("text", "file"), "overlay_pos": ("top", "bottom"), "meeting_mode": tuple(MODES),
-           "work_mode": ("meeting", "inperson", "video"), "hotkeys": ("ctrl_alt", "ctrl_alt_shift", "off"),
+           "work_mode": ("meeting", "inperson", "video", "screen"), "hotkeys": ("ctrl_alt", "ctrl_alt_shift", "off"),
            "screen_delay": ("0", "2", "3", "5", "8"), "screen_area_mode": ("screen", "window", "area", "same"),
            "search_days": ("7", "30", "90", "180", "365", "0")}
 RANGES = {"sensitivity": (1, 10), "mic_gain": (25, 300), "text_size": (80, 170), "answer_size": (14, 48), "overlay_alpha": (30, 100), "overlay_text": (30, 100),
@@ -12685,6 +12699,11 @@ class App:
                 elif k in DEFAULTS and k not in INTERNAL_KEYS:
                     new[k] = self._real_proxy(v) if k == "proxy" else v
             new = sanitize(new)
+            if (self.running or self.stopping) and new["work_mode"] != self.cfg["work_mode"] \
+                    and "screen" in (new["work_mode"], self.cfg["work_mode"]):
+                # (6.42) a session that listens cannot turn into one that does not, or back: Stop first
+                new["work_mode"] = self.cfg["work_mode"]
+                new["subtitles"] = new["work_mode"] == "video"
             changed_sens = new["sensitivity"] != self.cfg["sensitivity"]
             changed_gain = new["mic_gain"] != self.cfg["mic_gain"]
             changed_subs = new["work_mode"] != self.cfg["work_mode"]
@@ -12719,6 +12738,7 @@ class App:
         if changed_subs:
             log({"video": "Subtitle mode on: only the computer's sound, only the translation",
                  "inperson": "In-person mode on: only the microphone; voices told apart",
+                 "screen": "Screen mode on: nothing is listened to; questions are read from the screen",
                  "meeting": "Meeting mode"}[self.cfg["work_mode"]])
             eng = self.engine
             if self.running and eng is not None and not self.recording:     # the microphone stops / starts being heard now
@@ -12891,6 +12911,8 @@ class App:
         at_start: only parts that work DURING the meeting decide whether it can start (prep, the review and full
         notes are pressed later and say themselves when no service is set)."""
         c = self.cfg
+        if screen_only(c) and not for_file:
+            return ("ans",)                            # (6.42: nothing is heard or translated - only pictures are read)
         need = ["stt"]
         if feat(c, "translate"):
             need.append("tr")
@@ -13054,7 +13076,13 @@ class App:
             missing = self.missing_tasks(self.needed_tasks(at_start=True))
             if missing:
                 return {"ok": False, "error": "setup", "missing": missing}
-            if pyaudio is None:
+            only_screen = screen_only(c)                 # (6.42) no sound at all: only questions read from the screen
+            if only_screen:
+                try:
+                    self.vision_target(quick=True)       # no service that reads pictures: said now, not at the first picture
+                except APIError as e:
+                    return {"ok": False, "error": str(e)}
+            elif pyaudio is None:
                 return {"ok": False, "error": "The audio library is missing: install the program again (MeetingAssistant-Setup.exe)."}
             if self.stopping:
                 return {"ok": False, "error": "Still finishing the previous meeting — try again in a moment."}
@@ -13118,16 +13146,20 @@ class App:
                 USAGE_ON[0] = True
                 self.engine = Engine(self, self.session)
                 self.reported.clear()
-                self.audio_rec = MeetingAudio(self.session.path) if self.cfg.get("save_audio") else None
-                problems, mic, spk = self._start_captures(self.engine.on_audio, use_mic(self.cfg), preview=True,
-                                                          want_loop=use_loop(self.cfg))
-                self.engine.start_live(self.captures)
+                self.audio_rec = MeetingAudio(self.session.path) if self.cfg.get("save_audio") and not only_screen else None
+                problems, mic, spk = [], "", ""
+                if not only_screen:
+                    problems, mic, spk = self._start_captures(self.engine.on_audio, use_mic(self.cfg), preview=True,
+                                                              want_loop=use_loop(self.cfg))
+                    self.engine.start_live(self.captures)
             except Exception as e:
                 log("start failed:", traceback.format_exc(), level="error")
                 return undo(friendly_audio_error(e))
-            if not self.captures:
+            if only_screen:
+                pass
+            elif not self.captures:
                 return undo(" ".join(problems) or "No audio device found.")
-            if in_person(self.cfg):
+            elif in_person(self.cfg):
                 if not any(c.source == "me" for c in self.captures):
                     return undo("The microphone cannot be heard, and in-person mode listens only to it. "
                                 "Choose it in Setup › Audio, then press Start.")
@@ -13148,7 +13180,14 @@ class App:
                              my_notes=self.session.my_notes if old is not None else "",
                              notes_full=self.session.notes_full if old is not None else "")
             threading.Thread(target=self.engine.warm, daemon=True).start()
-            threading.Thread(target=self.engine.coach_brief, daemon=True, name="coach-brief").start()
+            if not only_screen:
+                threading.Thread(target=self.engine.coach_brief, daemon=True, name="coach-brief").start()
+        if only_screen:
+            log("Screen mode started · nothing is listened to · questions are read from the screen")
+            self.publish_running()
+            self.hub.publish("devices_in_use", mic="", speaker="")
+            self.hub.publish("speech_mode", **self.engine.speech_mode())
+            return {"ok": True}
         log(f"{'Subtitles' if self.cfg['subtitles'] else 'Meeting'} started · microphone: {mic or '(off)'} · computer sound: {spk or '(none)'} · "
             f"languages {'+'.join(meeting_langs(self.cfg))} -> {self.cfg['my_language']} · answers {self.cfg['answer_mode']}")
         for p_ in problems:
@@ -13205,6 +13244,8 @@ class App:
             com_uninit(com)
 
     def _restart_captures(self, engine):
+        if screen_only(self.cfg):
+            return True                                      # (6.42: screen mode has no sound to open)
         with self.restart_lock:
             with self.lock:
                 if not self.running or self.engine is not engine:
